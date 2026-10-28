@@ -55,6 +55,15 @@ function optional(value: string | number | null | undefined) {
   return String(value);
 }
 
+function HistoryTimestamp({ value }: { value: string }) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return <span title={value}>{value.trim() || "时间未知"}</span>;
+  const label = new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false
+  }).format(date);
+  return <time dateTime={date.toISOString()} title={value}>{label}</time>;
+}
+
 function isDesktopViewport() {
   return typeof window === "undefined" || typeof window.matchMedia !== "function"
     ? true
@@ -422,7 +431,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
       : "选择结果后查看";
 
   return (
-    <div className={`ks-panel-layout${drawerOpen ? " is-drawer-open" : ""}`} style={{ "--ks-drawer-width": `${drawerWidth}px` } as CSSProperties}>
+    <div className={`ks-panel-layout ks-online-panel${drawerOpen ? " is-drawer-open" : ""}`} style={{ "--ks-drawer-width": `${drawerWidth}px` } as CSSProperties}>
       <div className="ks-panel-scroll">
         <div className="ks-workbench-column">
           <div className="ks-module-toolbar" data-recording-header>
@@ -460,7 +469,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
             <header className="ks-results-header">
               <div className="ks-results-summary"><h2>{data?.mode === "synthesis" ? "在线合成记录" : "在线性质关系"}</h2><p role="status" aria-live="polite" aria-atomic="true">{searchState.isLoading ? "异步任务运行中，切换知识模式后状态仍会保留" : data ? `${data.totalPapers} 篇处理论文 · ${resultCount} 条展示记录` : "外部文献聚合与模型结构化抽取"}</p></div>
               <div className="ks-results-actions">
-                <button className="ks-button" type="button" onClick={() => { setDrawerView("history"); setDrawerOpen(true); }}><History aria-hidden="true" />检索历史 <b>{searchState.history.length}</b></button>
+                <button className="ks-button" type="button" aria-expanded={drawerOpen && drawerView === "history"} aria-controls="online-knowledge-detail" onClick={() => { setDrawerView("history"); setDrawerOpen(true); }}><History aria-hidden="true" />检索历史 <b>{searchState.history.length}</b></button>
                 <button className="ks-button" type="button" disabled={!data?.dataframe.length} onClick={() => void handleExportCsv()}><Download aria-hidden="true" />导出 CSV</button>
               </div>
             </header>
@@ -524,6 +533,8 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
         tabs={drawerView === "detail" ? detailTabs : undefined}
         footer={drawerView === "detail" && data ? <><span>处理论文 {data.totalPapers} 篇</span><span>{data.exampleUsed ? "示例回退" : "在线抽取"}</span></> : undefined}
         reopenLabel={drawerView === "history" ? "查看检索历史" : "查看记录详情"}
+        compactReopen
+        reopenIcon={drawerView === "history" ? <History aria-hidden="true" /> : undefined}
         verticalReopen={drawerView === "detail"}
         showReopen={drawerView === "history" || detailTabs.length > 0}
         widthProfile={widthProfile}
@@ -533,19 +544,22 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
       >
         {drawerView === "history" ? (
           <div className="ks-drawer-stack">
-            <div className="ks-drawer-callout"><History aria-hidden="true" /><span>这里仅展示当前账号最近 100 条已完成记录。其他账号无法查看或清空这些记录。</span></div>
+            <div className="ks-drawer-callout"><History aria-hidden="true" /><span>最近100条已完成记录 · 仅本人可见</span></div>
             <div className="ks-history-toolbar">
               <button className="ks-button" type="button" onClick={() => void searchState.loadHistory()} disabled={searchState.isHistoryLoading}><RefreshCw className={searchState.isHistoryLoading ? "is-spinning" : ""} aria-hidden="true" />刷新</button>
               {!confirmClearHistory ? <button className="ks-button is-danger" type="button" disabled={!searchState.history.length} onClick={() => setConfirmClearHistory(true)}><Trash2 aria-hidden="true" />清空全部</button> : <div className="ks-confirm-row"><span>确认清空当前账号全部历史？</span><button type="button" onClick={() => void clearHistory()}>确认</button><button type="button" onClick={() => setConfirmClearHistory(false)}>取消</button></div>}
             </div>
             {searchState.historyError || historyActionError ? <div className="ks-inline-alert is-error" role="alert"><AlertTriangle aria-hidden="true" /><span>{historyActionError || searchState.historyError}</span></div> : null}
-            <div className="ks-history-list">
+            <div className="ks-history-list" aria-busy={searchState.isHistoryLoading}>
               {searchState.history.length ? searchState.history.map((item) => (
                 <article className="ks-history-item" key={item.history_id}>
-                  <div><strong>{item.material} · {item.mode === "property" ? "性质" : "合成"}</strong><span>{item.timestamp} · {item.papers_found} 篇 · {item.reactions_extracted} 条展示记录</span></div>
-                  <div><button type="button" onClick={() => restoreHistory(item)}>恢复</button><button type="button" disabled={!hasModelAccess || searchState.isLoading} onClick={() => void replayHistory(item)}>重新检索</button><button className="is-danger" type="button" onClick={() => void deleteHistory(item.history_id)} aria-label={`删除 ${item.material} 历史`}><Trash2 aria-hidden="true" /></button></div>
+                  <div className="ks-history-item-copy">
+                    <div className="ks-history-item-heading"><strong title={item.material}>{item.material}</strong><span className="ks-history-mode">{item.mode === "property" ? "性质" : "合成"}</span></div>
+                    <div className="ks-history-item-meta"><HistoryTimestamp value={item.timestamp} /><span>{item.papers_found} 篇 · {item.reactions_extracted} 条记录</span></div>
+                  </div>
+                  <div className="ks-history-item-actions"><button type="button" onClick={() => restoreHistory(item)}>恢复</button><button type="button" disabled={!hasModelAccess || searchState.isLoading} onClick={() => void replayHistory(item)}>重新检索</button><button className="is-danger" type="button" onClick={() => void deleteHistory(item.history_id)} aria-label={`删除 ${item.material} 历史`}><Trash2 aria-hidden="true" /></button></div>
                 </article>
-              )) : <div className="ks-state is-compact"><span><FileClock aria-hidden="true" /></span><h3>暂无已完成历史</h3><p>成功完成的在线任务会显示在这里。</p></div>}
+              )) : searchState.isHistoryLoading ? <div className="ks-state is-compact" role="status"><span><LoaderCircle className="is-spinning" aria-hidden="true" /></span><p>正在加载检索历史…</p></div> : <div className="ks-state is-compact"><span><FileClock aria-hidden="true" /></span><h3>暂无已完成历史</h3><p>成功完成的在线任务会显示在这里。</p></div>}
             </div>
           </div>
         ) : null}

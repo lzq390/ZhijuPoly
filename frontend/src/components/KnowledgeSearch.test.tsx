@@ -131,6 +131,14 @@ const onlineResult: OnlineKnowledgeSearchResponse = {
   dataframe: [{ material: "PLA", property: "tensile strength" }]
 };
 
+function onlineHistoryItem(overrides: Partial<OnlineKnowledgeHistoryItem> = {}): OnlineKnowledgeHistoryItem {
+  return {
+    history_id: 1, material: "PLA", mode: "property", max_papers: 7,
+    timestamp: "2026-10-28T08:09:10+08:00", papers_found: 8, reactions_extracted: 1,
+    result_data: { ...onlineResult, max_papers: 7 }, ...overrides
+  };
+}
+
 beforeEach(() => {
   Object.values(apiMocks).forEach((mock) => mock.mockReset());
   apiMocks.searchKnowledge.mockImplementation((payload: KnowledgeSearchRequest) => Promise.resolve(localResponse(payload)));
@@ -647,6 +655,102 @@ describe("KnowledgeSearch", () => {
     expect(screen.queryByText("New task failed")).toBeNull();
     expect(screen.queryByRole("button", { name: "重试本次任务" })).toBeNull();
     expect(screen.getAllByText("tensile strength · 62 MPa").length).toBeGreaterThan(0);
+  });
+
+  it("历史首次加载不闪现空态，刷新保留卡片并显示可读本地时间及安全日期回退", async () => {
+    const saved = onlineHistoryItem();
+    const history = [saved,
+      onlineHistoryItem({ history_id: 2, material: "Invalid date", timestamp: "invalid-date" }),
+      onlineHistoryItem({ history_id: 3, material: "Missing date", timestamp: "" })
+    ];
+    let resolveHistory!: (value: { history: OnlineKnowledgeHistoryItem[] }) => void;
+    apiMocks.fetchHistory.mockImplementationOnce(() => new Promise((resolve) => { resolveHistory = resolve; }));
+    render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /在线文献/ }));
+    await waitFor(() => expect(apiMocks.fetchHistory).toHaveBeenCalledOnce());
+    const historyButton = screen.getByRole("button", { name: /检索历史 0/ });
+    expect(historyButton.getAttribute("aria-controls")).toBe("online-knowledge-detail");
+    expect(historyButton.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(historyButton);
+    expect(historyButton.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("正在加载检索历史…")).not.toBeNull();
+    expect(screen.queryByText("暂无已完成历史")).toBeNull();
+    expect((screen.getByRole("button", { name: "刷新" }) as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => { resolveHistory({ history }); });
+    const drawer = screen.getByRole("dialog", { name: "在线检索历史" });
+    expect(drawer.closest(".ks-online-panel")).not.toBeNull();
+    expect(within(drawer).getByText("最近100条已完成记录 · 仅本人可见")).not.toBeNull();
+    expect(screen.queryByText("正在加载检索历史…")).toBeNull();
+    const time = drawer.querySelector("time")!;
+    const date = new Date(saved.timestamp);
+    expect(time.dateTime).toBe(date.toISOString());
+    expect(time.title).toBe(saved.timestamp);
+    expect(time.textContent).toContain(`${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`);
+    expect(time.textContent).not.toBe(saved.timestamp);
+    expect(within(drawer).getByText("invalid-date").tagName).toBe("SPAN");
+    expect(within(drawer).getByText("时间未知")).not.toBeNull();
+    expect(drawer.querySelectorAll(".ks-history-item")).toHaveLength(3);
+
+    let rejectRefresh!: (error: Error) => void;
+    apiMocks.fetchHistory.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRefresh = reject; }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "刷新" }));
+    expect(drawer.querySelectorAll(".ks-history-item")).toHaveLength(3);
+    expect(drawer.querySelector(".ks-history-list")?.getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByText("正在加载检索历史…")).toBeNull();
+    await act(async () => { rejectRefresh(new Error("History refresh failed")); });
+    expect(within(drawer).getByRole("alert").textContent).toContain("History refresh failed");
+    expect(drawer.querySelectorAll(".ks-history-item")).toHaveLength(3);
+    expect(drawer.querySelector(".ks-history-list")?.getAttribute("aria-busy")).toBe("false");
+    fireEvent.click(within(drawer).getByRole("button", { name: "关闭详情" }));
+    expect(screen.getByRole("button", { name: /检索历史 3/ }).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("历史卡片保留删除失败重试、清空确认取消与成功后的空态", async () => {
+    apiMocks.fetchHistory.mockResolvedValue({ history: [onlineHistoryItem(), onlineHistoryItem({ history_id: 2, material: "Other polymer", mode: "synthesis" })] });
+    apiMocks.deleteHistory.mockRejectedValueOnce(new Error("History delete failed"));
+    render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /在线文献/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /检索历史 2/ }));
+    const drawer = screen.getByRole("dialog", { name: "在线检索历史" });
+    expect(within(drawer).getByText("性质").classList.contains("ks-history-mode")).toBe(true);
+    expect(within(drawer).getByText("合成").classList.contains("ks-history-mode")).toBe(true);
+    const deleteButton = within(drawer).getByRole("button", { name: "删除 PLA 历史" });
+    fireEvent.click(deleteButton);
+    await screen.findByText("History delete failed");
+    expect(drawer.querySelectorAll(".ks-history-item")).toHaveLength(2);
+    fireEvent.click(deleteButton);
+    await waitFor(() => expect(drawer.querySelectorAll(".ks-history-item")).toHaveLength(1));
+    expect(apiMocks.deleteHistory).toHaveBeenLastCalledWith(1);
+    expect(screen.queryByText("History delete failed")).toBeNull();
+
+    fireEvent.click(within(drawer).getByRole("button", { name: "清空全部" }));
+    expect(within(drawer).getByText("确认清空当前账号全部历史？")).not.toBeNull();
+    fireEvent.click(within(drawer).getByRole("button", { name: "取消" }));
+    expect(apiMocks.clearHistory).not.toHaveBeenCalled();
+    expect(drawer.querySelectorAll(".ks-history-item")).toHaveLength(1);
+    fireEvent.click(within(drawer).getByRole("button", { name: "清空全部" }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "确认" }));
+    await within(drawer).findByText("暂无已完成历史");
+    expect(apiMocks.clearHistory).toHaveBeenCalledOnce();
+    expect(drawer.querySelectorAll(".ks-history-item")).toHaveLength(0);
+    expect((within(drawer).getByRole("button", { name: "清空全部" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("历史重新检索沿用原参数，仅提交一次并保留运行中禁用状态", async () => {
+    apiMocks.fetchHistory.mockResolvedValue({ history: [onlineHistoryItem({ material: "Saved synthesis", mode: "synthesis", max_papers: 11 })] });
+    apiMocks.createJob.mockReturnValue(new Promise(() => {}));
+    render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /在线文献/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /检索历史 1/ }));
+    fireEvent.click(screen.getByRole("button", { name: "重新检索" }));
+    expect(apiMocks.createJob).toHaveBeenCalledOnce();
+    expect(apiMocks.createJob).toHaveBeenCalledWith({ material: "Saved synthesis", mode: "synthesis", max_papers: 11, extraction_delay_seconds: 0.5 }, expect.any(AbortSignal));
+    expect((screen.getByRole("textbox", { name: "在线检索材料名称" }) as HTMLInputElement).value).toBe("Saved synthesis");
+    expect((screen.getByRole("combobox", { name: "在线检索抽取模式" }) as HTMLSelectElement).value).toBe("synthesis");
+    fireEvent.click(screen.getByRole("button", { name: /检索历史 1/ }));
+    expect((screen.getByRole("button", { name: "重新检索" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "恢复" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("PDF 只校验文件并在 950ms 后展示六篇固定结果", async () => {

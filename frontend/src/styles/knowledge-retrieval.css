@@ -4328,3 +4328,228 @@
   .ks-result-source-tabs { padding: 12px 12px 0; }
   .ks-result-source-tabs > button { flex: 1 1 130px; }
 }
+
+/* Online history and detail use the workbench type scale and surface tokens.
+   Scope these rules so the local-library and PDF drawers retain their layouts. */
+.ks-online-panel {
+  --ks-online-body: 13px;
+  --ks-online-label: 12px;
+  --ks-online-caption: 11px;
+  --ks-online-title: 16px;
+  --ks-online-control: 34px;
+  --ks-online-space: 14px;
+  --ks-online-handle: 44px;
+}
+
+.ks-online-panel :is(.ks-results-actions, .ks-history-toolbar) .ks-button,
+.ks-online-panel :is(.ks-history-item, .ks-confirm-row, .ks-drawer-tabs) button {
+  min-height: var(--ks-online-control);
+  font: 600 var(--ks-online-body)/1.5 var(--font-body);
+  letter-spacing: normal;
+  border-radius: 8px;
+}
+
+.ks-online-panel :is(.ks-results-actions, .ks-history-toolbar) .ks-button {
+  gap: 7px;
+  padding-inline: 12px;
+}
+
+.ks-online-panel :is(.ks-results-actions, .ks-history-toolbar) .ks-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.ks-online-panel .ks-results-actions .ks-button b {
+  min-width: 20px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  font: 600 var(--ks-online-caption)/1.5 var(--font-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.ks-online-panel .ks-results-actions .ks-button[aria-expanded="true"] {
+  color: var(--np-theme-blue-strong);
+  border-color: var(--np-theme-info-border);
+  background: var(--np-theme-info-soft);
+}
+
+.ks-online-panel .ks-detail-drawer {
+  border: 1px solid var(--np-theme-surface-border);
+  border-radius: var(--np-theme-surface-radius);
+  background: var(--np-theme-panel);
+  box-shadow: var(--np-theme-surface-shadow);
+  font: 400 var(--ks-online-body)/1.65 var(--font-body);
+  letter-spacing: normal;
+}
+
+.ks-online-panel .ks-drawer-header {
+  padding: var(--ks-online-space);
+  border-bottom-color: var(--np-theme-border-soft);
+  border-radius: var(--np-theme-surface-radius) var(--np-theme-surface-radius) 0 0;
+  background: linear-gradient(120deg, #f1f7ff, #f7fcff 70%, #fff);
+}
+
+.ks-online-panel .ks-drawer-heading h2 {
+  color: var(--np-theme-ink);
+  font: 700 var(--ks-online-title)/1.5 var(--font-heading);
+}
+
+.ks-online-panel .ks-drawer-heading :is(h2, p) { max-width: 100%; }
+
+.ks-online-panel :is(.ks-drawer-heading p, .ks-drawer-footer, .ks-secondary-copy, .ks-confirm-row) {
+  font: 400 var(--ks-online-label)/1.65 var(--font-body);
+  letter-spacing: normal;
+}
+
+.ks-online-panel .ks-drawer-heading p { color: var(--np-theme-muted); }
+.ks-online-panel .ks-drawer-mark { border-radius: 10px; }
+.ks-online-panel .ks-drawer-tabs { background: #f6f9fd; }
+.ks-online-panel .ks-drawer-body { padding: var(--ks-online-space); }
+.ks-online-panel .ks-drawer-stack { gap: var(--ks-online-space); }
+.ks-online-panel .ks-drawer-footer { border-radius: 0 0 var(--np-theme-surface-radius) var(--np-theme-surface-radius); }
+
+.ks-online-panel .ks-drawer-section {
+  border-color: var(--np-theme-border-soft);
+  border-radius: 10px;
+}
+
+.ks-online-panel .ks-drawer-section h3 {
+  color: var(--np-theme-ink);
+  font: 600 var(--ks-online-body)/1.65 var(--font-body);
+}
+
+.ks-online-panel :is(.ks-drawer-title-main, .ks-long-copy, .ks-drawer-callout) {
+  font: 400 var(--ks-online-body)/1.75 var(--font-body);
+}
+
+.ks-online-panel .ks-drawer-title-main { font-weight: 600; }
+.ks-online-panel .ks-drawer-callout { border-radius: 9px; }
+
+.ks-online-panel .ks-detail-grid dt {
+  color: var(--np-theme-muted);
+  font: 500 var(--ks-online-label)/1.65 var(--font-body);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.ks-online-panel .ks-detail-grid dd {
+  color: var(--np-theme-ink);
+  font: 400 var(--ks-online-body)/1.65 var(--font-body);
+}
+
+.ks-online-panel .ks-history-toolbar { flex-wrap: wrap; }
+.ks-online-panel .ks-history-list { gap: 12px; }
+
+.ks-online-panel .ks-history-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: var(--ks-online-space);
+  border-color: var(--np-theme-border-soft);
+  border-radius: 12px;
+  background: linear-gradient(130deg, #fff, #fbfdff);
+  box-shadow: 0 2px 6px rgba(30, 64, 175, 0.025);
+}
+
+.ks-online-panel .ks-history-item.is-pending {
+  border-color: var(--np-theme-info-border);
+  background: var(--np-theme-info-soft);
+}
+
+.ks-online-panel .ks-history-item .ks-history-item-copy { gap: 8px; }
+.ks-online-panel .ks-history-item-heading { display: flex; align-items: flex-start; gap: 8px; }
+
+.ks-online-panel .ks-history-item .ks-history-item-heading strong {
+  display: -webkit-box;
+  min-width: 0;
+  flex: 1;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  color: var(--np-theme-ink);
+  font: 600 var(--ks-online-body)/1.65 var(--font-body);
+}
+
+.ks-online-panel .ks-history-item .ks-history-mode {
+  flex: none;
+  padding: 2px 7px;
+  border: 1px solid var(--np-theme-info-border);
+  border-radius: 6px;
+  background: var(--np-theme-info-soft);
+  color: var(--np-theme-blue-strong);
+  font: 500 var(--ks-online-caption)/1.5 var(--font-body);
+}
+
+.ks-online-panel .ks-history-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ks-online-panel .ks-history-item .ks-history-item-meta > * {
+  color: var(--np-theme-muted);
+  font: 400 var(--ks-online-caption)/1.65 var(--font-body);
+  overflow-wrap: anywhere;
+}
+
+.ks-online-panel .ks-history-item .ks-history-item-actions {
+  justify-content: flex-start;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--np-theme-border-soft);
+}
+
+.ks-online-panel .ks-history-item button { padding-inline: 10px; font-size: var(--ks-online-label); }
+.ks-online-panel .ks-history-item button:first-child { color: var(--np-theme-blue-strong); border-color: var(--np-theme-info-border); background: var(--np-theme-info-soft); }
+.ks-online-panel .ks-history-item button.is-danger { width: var(--ks-online-control); margin-left: auto; padding: 0; }
+.ks-online-panel .ks-history-item button svg { width: 14px; height: 14px; }
+.ks-online-panel .ks-history-item button:hover:not(:disabled) { border-color: var(--np-theme-info-border); background: var(--np-theme-info-soft); }
+.ks-online-panel .ks-history-item button.is-danger:hover:not(:disabled) { background: var(--np-theme-danger-soft); border-color: rgba(185, 28, 28, 0.25); }
+
+.ks-online-panel :is(.ks-button, .ks-icon-button, .ks-drawer-reopen, .ks-history-item button, .ks-confirm-row button, .ks-drawer-tabs button):focus-visible {
+  outline: 2px solid var(--np-theme-blue);
+  outline-offset: 3px;
+}
+
+.ks-online-panel .ks-drawer-reopen.is-compact {
+  right: 12px;
+  width: var(--ks-online-handle);
+  height: var(--ks-online-handle);
+  min-height: var(--ks-online-handle);
+  flex-direction: row;
+  justify-content: center;
+  padding: 0;
+  gap: 0;
+  border: 1px solid var(--np-theme-info-border);
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fff, #eff7ff);
+  color: var(--np-theme-blue-strong);
+  box-shadow: 0 6px 20px rgba(30, 64, 175, 0.1), inset 0 1px 0 #fff;
+}
+
+.ks-online-panel .ks-drawer-reopen.is-compact span { display: none; }
+.ks-online-panel .ks-drawer-reopen.is-compact::before { content: none; }
+.ks-online-panel .ks-drawer-reopen.is-compact svg { width: 20px; height: 20px; }
+.ks-online-panel .ks-drawer-reopen.is-compact:hover { border-color: var(--np-theme-blue); background: var(--np-theme-info-soft); }
+
+.ks-online-panel:has(.ks-detail-drawer[data-drawer-mode="inline"]) .ks-drawer-reopen.is-compact {
+  right: max(12px, calc((100cqw - (var(--ks-pair-width) - var(--ks-drawer-width) - var(--ks-drawer-gap))) / 2 - var(--ks-online-handle) - 12px));
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .ks-online-panel {
+    --ks-online-body: 16px;
+    --ks-online-label: 15px;
+    --ks-online-caption: 14px;
+    --ks-online-title: 23px;
+    --ks-online-control: 42px;
+    --ks-online-space: 20px;
+    --ks-online-handle: 54px;
+  }
+  .ks-online-panel :is(.ks-results-actions, .ks-history-toolbar) .ks-button svg,
+  .ks-online-panel .ks-history-item button svg { width: 18px; height: 18px; }
+  .ks-online-panel .ks-drawer-reopen.is-compact svg { width: 24px; height: 24px; }
+}
