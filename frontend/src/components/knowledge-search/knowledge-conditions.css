@@ -71,8 +71,7 @@
 .ks-conditions-source.is-unavailable > svg,
 .ks-conditions-source.is-unavailable strong { color: #8b9aa9; }
 .ks-conditions-dialog input[type="checkbox"] { width: 15px; height: 15px; flex: 0 0 auto; margin: 0; accent-color: var(--ks-blue); }
-.ks-conditions-source-feedback { display: flex; align-items: baseline; justify-content: flex-end; gap: 8px; margin-top: 9px; }
-.ks-conditions-source-feedback p { flex: 1; margin: 0; color: #a43f39; font-size: 12px; }
+.ks-conditions-source-error { margin: 9px 0 0; color: #a43f39; font-size: 12px; }
 .ks-conditions-link { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 0; border: 0; color: var(--ks-blue-strong); background: none; font: inherit; font-size: 11px; cursor: pointer; }
 .ks-conditions-link svg { width: 12px; height: 12px; }
 .ks-conditions-link:hover { text-decoration: underline; text-underline-offset: 3px; }
@@ -80,15 +79,14 @@
 .ks-conditions-years { display: grid; grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr); align-items: end; gap: 8px; }
 .ks-conditions-field { display: grid; min-width: 0; gap: 6px; }
 .ks-conditions-field > span { color: #405b78; font-size: 12px; font-weight: 650; }
-.ks-conditions-field input,
 .ks-conditions-field select { width: 100%; height: 37px; min-width: 0; padding: 0 10px; border: 1px solid #cbdbea; border-radius: 7px; color: var(--ks-ink); background: #fbfdff; font: inherit; }
-.ks-conditions-field input::placeholder { color: #91a3b6; }
 .ks-conditions-year-separator { display: grid; height: 37px; place-items: center; color: #8096ab; }
+.ks-conditions-year-note { margin-bottom: 0; }
 .ks-conditions-checks { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 13px; }
 .ks-conditions-checks label { display: flex; align-items: center; gap: 6px; color: #405b78; font-size: 12px; }
 .ks-conditions-literature:disabled { opacity: 0.55; }
-.ks-conditions-dialog input:disabled { cursor: not-allowed; }
-.ks-conditions-field input:disabled { background: #f2f5f8; }
+.ks-conditions-dialog :is(input, select):disabled { cursor: not-allowed; }
+.ks-conditions-field select:disabled { background: #f2f5f8; }
 .ks-conditions-page-size { display: flex; align-items: flex-end; gap: 15px; padding-top: 16px; border-top: 1px solid #e5edf5; }
 .ks-conditions-page-size > label { width: 145px; flex: 0 0 auto; }
 .ks-conditions-page-size > p { margin: 0 0 9px; }
@@ -100,7 +98,7 @@
 .ks-conditions-button.is-primary:hover:not(:disabled) { background: #1d4ed8; }
 .ks-conditions-button:disabled { opacity: 0.5; cursor: not-allowed; }
 .ks-conditions-dialog :is(button, input, select):focus-visible { outline: 2px solid #3b82f6; outline-offset: 3px; }
-.ks-conditions-field input[aria-invalid="true"] { border-color: #d58b84; }
+.ks-conditions-field select[aria-invalid="true"] { border-color: #d58b84; }
 
 @media (max-width: 560px) {
   .ks-conditions-layer { padding: 12px; }

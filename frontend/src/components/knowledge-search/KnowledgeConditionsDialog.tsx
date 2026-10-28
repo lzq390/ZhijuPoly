@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { BookOpenText, Database, RefreshCw, RotateCcw, SlidersHorizontal, X } from "lucide-react";
+import { BookOpenText, Database, RotateCcw, SlidersHorizontal, X } from "lucide-react";
 import { ModalFocusSuspendedContext, useModalFocus } from "../../hooks/useModalFocus";
 import type { KnowledgeDataSource, KnowledgeSourcesResponse } from "../../types";
 import "./knowledge-conditions.css";
@@ -27,13 +27,16 @@ export const DEFAULT_KNOWLEDGE_CONDITIONS: KnowledgeConditionSettings = {
   sources: ["legacy"], pageSize: 20, filters: { ...EMPTY_FILTERS }
 };
 
+export const KNOWLEDGE_YEAR_MIN = 1900;
+export const KNOWLEDGE_YEAR_MAX = new Date().getUTCFullYear();
+const YEAR_OPTIONS = Array.from({ length: KNOWLEDGE_YEAR_MAX - KNOWLEDGE_YEAR_MIN + 1 }, (_, index) => KNOWLEDGE_YEAR_MAX - index);
+
 type KnowledgeConditionsDialogProps = {
   settings: KnowledgeConditionSettings;
   onApply: (settings: KnowledgeConditionSettings) => void;
   onClose: () => void;
   sources: KnowledgeSourcesResponse | null;
   sourceError: string | null;
-  onRetrySources: () => void;
 };
 
 const SOURCE_OPTIONS = [
@@ -54,21 +57,25 @@ function cloneSettings(settings: KnowledgeConditionSettings, status: KnowledgeSo
   };
 }
 
+function selectableYear(value: string) {
+  return /^\d{4}$/.test(value) && Number(value) >= KNOWLEDGE_YEAR_MIN && Number(value) <= KNOWLEDGE_YEAR_MAX;
+}
+
 function yearError(filters: FilterDraft) {
   const from = filters.year_from.trim(), to = filters.year_to.trim();
-  if ([from, to].some((value) => value && (!/^\d{4}$/.test(value) || Number(value) < 1000 || Number(value) > 3000))) {
-    return "年份须为 1000–3000 之间的四位数字。";
+  if ([from, to].some((value) => value && !selectableYear(value))) {
+    return `请选择 ${KNOWLEDGE_YEAR_MIN}–${KNOWLEDGE_YEAR_MAX} 范围内的年份，或选择不限。`;
   }
   return from && to && Number(from) > Number(to) ? "起始年份不能晚于结束年份。" : null;
 }
 
-export function KnowledgeConditionsDialog({ settings, onApply, onClose, sources, sourceError, onRetrySources }: KnowledgeConditionsDialogProps) {
+export function KnowledgeConditionsDialog({ settings, onApply, onClose, sources, sourceError }: KnowledgeConditionsDialogProps) {
   // The recording panel can suspend background drawers. This foreground dialog
   // owns focus even when that panel was already open.
-  return <ModalFocusSuspendedContext.Provider value={false}><KnowledgeConditionsDialogContent settings={settings} onApply={onApply} onClose={onClose} sources={sources} sourceError={sourceError} onRetrySources={onRetrySources} /></ModalFocusSuspendedContext.Provider>;
+  return <ModalFocusSuspendedContext.Provider value={false}><KnowledgeConditionsDialogContent settings={settings} onApply={onApply} onClose={onClose} sources={sources} sourceError={sourceError} /></ModalFocusSuspendedContext.Provider>;
 }
 
-function KnowledgeConditionsDialogContent({ settings, onApply, onClose, sources, sourceError, onRetrySources }: KnowledgeConditionsDialogProps) {
+function KnowledgeConditionsDialogContent({ settings, onApply, onClose, sources, sourceError }: KnowledgeConditionsDialogProps) {
   const [draft, setDraft] = useState<KnowledgeConditionSettings>(() => cloneSettings(settings, sources));
   const id = useId();
   const layerRef = useRef<HTMLDivElement>(null);
@@ -109,6 +116,27 @@ function KnowledgeConditionsDialogContent({ settings, onApply, onClose, sources,
     }));
   }
 
+  function changeYear(key: "year_from" | "year_to", selected: string) {
+    if (selected && !selectableYear(selected)) return;
+    setDraft((value) => {
+      const filters = { ...value.filters, [key]: selected };
+      const from = filters.year_from.trim(), to = filters.year_to.trim();
+      if (from && to && selectableYear(from) && selectableYear(to) && Number(from) > Number(to)) return value;
+      return { ...value, filters };
+    });
+  }
+
+  function yearOptions(key: "year_from" | "year_to") {
+    const current = draft.filters[key].trim();
+    const opposite = draft.filters[key === "year_from" ? "year_to" : "year_from"].trim();
+    const limit = selectableYear(opposite) ? Number(opposite) : null;
+    return <>
+      <option value="">不限</option>
+      {current && !selectableYear(current) ? <option value={current} disabled>{current}（超出可选范围）</option> : null}
+      {YEAR_OPTIONS.map((year) => <option key={year} value={year} disabled={limit !== null && (key === "year_from" ? year > limit : year < limit)}>{year}年</option>)}
+    </>;
+  }
+
   function apply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (validationError || draft.sources.some((source) => unavailable(source, sources))) return;
@@ -139,10 +167,7 @@ function KnowledgeConditionsDialogContent({ settings, onApply, onClose, sources,
                 </label>;
               })}
             </div>
-            <div className="ks-conditions-source-feedback">
-              {sourceError ? <p role="alert">{sourceError}</p> : null}
-              <button type="button" className="ks-conditions-link" onClick={onRetrySources}><RefreshCw aria-hidden="true" />重新检查来源</button>
-            </div>
+            {sourceError ? <p className="ks-conditions-source-error" role="alert">{sourceError}</p> : null}
           </fieldset>
 
           <section className="ks-conditions-section" aria-labelledby={`${id}-literature-title`}>
@@ -150,10 +175,11 @@ function KnowledgeConditionsDialogContent({ settings, onApply, onClose, sources,
             <p className="ks-conditions-note" id={`${id}-literature-note`}>以下条件仅对提取文献库生效；未勾选的条件不作限制。</p>
             <fieldset className="ks-conditions-literature" disabled={!literatureSelected} aria-label="文献筛选条件" aria-describedby={`${id}-literature-note`}>
               <div className="ks-conditions-years">
-                <label className="ks-conditions-field"><span>起始年份</span><input aria-label="文献起始年份" aria-invalid={Boolean(literatureSelected && yearError(draft.filters))} inputMode="numeric" maxLength={4} placeholder="不限" value={draft.filters.year_from} disabled={!literatureSelected} onChange={(event) => setDraft((value) => ({ ...value, filters: { ...value.filters, year_from: event.target.value } }))} /></label>
+                <label className="ks-conditions-field"><span>起始年份</span><select aria-label="文献起始年份" aria-describedby={`${id}-year-note`} aria-invalid={Boolean(literatureSelected && yearError(draft.filters))} value={draft.filters.year_from.trim()} disabled={!literatureSelected} onChange={(event) => changeYear("year_from", event.target.value)}>{yearOptions("year_from")}</select></label>
                 <span className="ks-conditions-year-separator" aria-hidden="true">—</span>
-                <label className="ks-conditions-field"><span>结束年份</span><input aria-label="文献结束年份" aria-invalid={Boolean(literatureSelected && yearError(draft.filters))} inputMode="numeric" maxLength={4} placeholder="不限" value={draft.filters.year_to} disabled={!literatureSelected} onChange={(event) => setDraft((value) => ({ ...value, filters: { ...value.filters, year_to: event.target.value } }))} /></label>
+                <label className="ks-conditions-field"><span>结束年份</span><select aria-label="文献结束年份" aria-describedby={`${id}-year-note`} aria-invalid={Boolean(literatureSelected && yearError(draft.filters))} value={draft.filters.year_to.trim()} disabled={!literatureSelected} onChange={(event) => changeYear("year_to", event.target.value)}>{yearOptions("year_to")}</select></label>
               </div>
+              <p className="ks-conditions-note ks-conditions-year-note" id={`${id}-year-note`}>可选年份：{KNOWLEDGE_YEAR_MIN}–{KNOWLEDGE_YEAR_MAX}年，起始年份不得晚于结束年份。起止均选“不限”时包含未标年份的文献。</p>
               <div className="ks-conditions-checks">
                 {([['has_properties', '有性质信息'], ['has_processes', '有工艺信息'], ['has_original', '有可用原文']] as const).map(([key, label]) => <label key={key}><input type="checkbox" checked={draft.filters[key]} disabled={!literatureSelected} onChange={(event) => setDraft((value) => ({ ...value, filters: { ...value.filters, [key]: event.target.checked } }))} />{label}</label>)}
               </div>

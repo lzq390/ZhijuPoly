@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { KnowledgeDocumentResult, KnowledgeSearchRequest, KnowledgeSearchResponse, LiteratureDetailResponse, LiteratureDocumentResult } from "../../types";
+import type { KnowledgeDocumentResult, KnowledgeSearchRequest, KnowledgeSearchResponse, KnowledgeSourcesResponse, LiteratureDetailResponse, LiteratureDocumentResult } from "../../types";
 import { LocalKnowledgePanel } from "./LocalKnowledgePanel";
 
 const mocks = vi.hoisted(() => ({ search: vi.fn(), sources: vi.fn(), detail: vi.fn(), fulltext: vi.fn(), observe: vi.fn() }));
@@ -124,7 +124,7 @@ describe("extracted literature in local knowledge", () => {
     const reopened = await openConditions();
     expect((within(reopened).getByRole("checkbox", { name: "现有专利知识库" }) as HTMLInputElement).checked).toBe(true);
     expect((within(reopened).getByRole("checkbox", { name: "提取文献库" }) as HTMLInputElement).checked).toBe(false);
-    expect((within(reopened).getByLabelText("文献起始年份") as HTMLInputElement).value).toBe("");
+    expect((within(reopened).getByLabelText("文献起始年份") as HTMLSelectElement).value).toBe("");
     expect((within(reopened).getByLabelText("每库每页数量") as HTMLSelectElement).value).toBe("20");
     setSources(reopened, ["extracted_literature"]);
     fireEvent.change(within(reopened).getByLabelText("文献起始年份"), { target: { value: "2020" } });
@@ -145,7 +145,7 @@ describe("extracted literature in local knowledge", () => {
     const reset = await openConditions();
     expect((within(reset).getByRole("checkbox", { name: "现有专利知识库" }) as HTMLInputElement).checked).toBe(true);
     expect((within(reset).getByRole("checkbox", { name: "提取文献库" }) as HTMLInputElement).checked).toBe(false);
-    expect((within(reset).getByLabelText("文献起始年份") as HTMLInputElement).value).toBe("");
+    expect((within(reset).getByLabelText("文献起始年份") as HTMLSelectElement).value).toBe("");
     expect((within(reset).getByLabelText("每库每页数量") as HTMLSelectElement).value).toBe("20");
   });
 
@@ -185,12 +185,15 @@ describe("extracted literature in local knowledge", () => {
     const dialog = await openConditions();
     setSources(dialog, ["extracted_literature"]);
     const doi = "https://doi.org/10.1002/(sici)1097-4628(19961024)62:4<687::aid-app12>3.0.co;2-t";
-    fireEvent.change(within(dialog).getByLabelText("文献起始年份"), { target: { value: "2025" } });
-    fireEvent.change(within(dialog).getByLabelText("文献结束年份"), { target: { value: "2020" } });
-    expect(screen.getByRole("alert").textContent).toContain("起始年份不能晚于结束年份");
-    expect((within(dialog).getByRole("button", { name: "应用条件" }) as HTMLButtonElement).disabled).toBe(true);
+    const yearFrom = within(dialog).getByRole("combobox", { name: "文献起始年份" }) as HTMLSelectElement;
+    const yearTo = within(dialog).getByRole("combobox", { name: "文献结束年份" }) as HTMLSelectElement;
+    fireEvent.change(yearFrom, { target: { value: "2025" } });
+    expect((within(yearTo).getByRole("option", { name: "2020年" }) as HTMLOptionElement).disabled).toBe(true);
+    // Even a synthetic change cannot bypass the disabled inverted-year option.
+    fireEvent.change(yearTo, { target: { value: "2020" } });
+    expect(yearTo.value).toBe("");
     expect(mocks.search).not.toHaveBeenCalled();
-    fireEvent.change(within(dialog).getByLabelText("文献结束年份"), { target: { value: "2026" } });
+    fireEvent.change(yearTo, { target: { value: "2026" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "应用条件" }));
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: doi } });
     fireEvent.click(screen.getByRole("button", { name: "运行检索" }));
@@ -469,11 +472,13 @@ describe("extracted literature in local knowledge", () => {
   });
 
   it("displays an offline literature source without treating it as an empty result", async () => {
+    const sourceStatus = deferred<KnowledgeSourcesResponse>();
+    mocks.sources.mockReturnValue(sourceStatus.promise);
     render(<LocalKnowledgePanel modeNavigation={null} />);
     await applyLiteratureConditions();
-    mocks.sources.mockResolvedValue({ sources: [{ data_source: "extracted_literature", enabled: true, ready: false, total: 0, reason: "文献服务离线" }] });
+    sourceStatus.resolve({ sources: [{ data_source: "extracted_literature", enabled: true, ready: false, total: 0, reason: "文献服务离线" }] });
     const dialog = await openConditions();
-    fireEvent.click(within(dialog).getByRole("button", { name: "重新检查来源" }));
+    expect(within(dialog).queryByRole("button", { name: /重新检查来源|刷新知识库状态/ })).toBeNull();
     await waitFor(() => expect((within(dialog).getByRole("checkbox", { name: "提取文献库" }) as HTMLInputElement).disabled).toBe(true));
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "polyimide" } });

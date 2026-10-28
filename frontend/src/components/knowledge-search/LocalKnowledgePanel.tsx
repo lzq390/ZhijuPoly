@@ -720,7 +720,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
         onObserve={(source) => observeKnowledge(selectedRecord, source)}
       /> : null}
       </ModalFocusSuspendedContext.Provider>
-      {conditionsOpen ? <KnowledgeConditionsDialog settings={settings} onApply={applyConditions} onClose={() => setConditionsOpen(false)} sources={sources} sourceError={sourceError} onRetrySources={() => setSourceRetry((value) => value + 1)} /> : null}
+      {conditionsOpen ? <KnowledgeConditionsDialog settings={settings} onApply={applyConditions} onClose={() => setConditionsOpen(false)} sources={sources} sourceError={sourceError} /> : null}
     </div>
   );
 }
