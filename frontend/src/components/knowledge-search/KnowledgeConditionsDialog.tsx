@@ -29,7 +29,7 @@ export const DEFAULT_KNOWLEDGE_CONDITIONS: KnowledgeConditionSettings = {
   sources: ["legacy"], pageSize: 20, filters: { ...EMPTY_FILTERS }
 };
 
-export const KNOWLEDGE_YEAR_MIN = 1900;
+export const KNOWLEDGE_YEAR_MIN = 1960;
 export const KNOWLEDGE_YEAR_MAX = new Date().getUTCFullYear();
 const YEAR_OPTIONS = Array.from({ length: KNOWLEDGE_YEAR_MAX - KNOWLEDGE_YEAR_MIN + 1 }, (_, index) => KNOWLEDGE_YEAR_MAX - index);
 
@@ -165,7 +165,7 @@ function KnowledgeConditionsDialogContent({ settings, onApply, onClose, sources,
                 const state = !entry ? (sourceError ? "状态未确认" : "正在检查可用性…") : !entry.enabled ? "未启用" : !entry.ready ? "暂不可用" : `可用 · ${entry.total.toLocaleString("zh-CN")} 条`;
                 return <label className={`ks-conditions-source${disabled ? " is-unavailable" : ""}`} key={value}>
                   <input type="checkbox" aria-label={label} aria-describedby={`${id}-${value}-status`} checked={draft.sources.includes(value)} disabled={disabled} onChange={(event) => toggleSource(value, event.target.checked)} />
-                  <Icon aria-hidden="true" /><span><strong>{label}</strong><small id={`${id}-${value}-status`} className={entry?.enabled && entry.ready ? "is-ready" : ""}>{state}</small></span>
+                  <span className="ks-conditions-source-icon"><Icon aria-hidden="true" /></span><span className="ks-conditions-source-copy"><strong>{label}</strong><small id={`${id}-${value}-status`} className={entry?.enabled && entry.ready ? "is-ready" : ""}>{state}</small></span>
                 </label>;
               })}
             </div>

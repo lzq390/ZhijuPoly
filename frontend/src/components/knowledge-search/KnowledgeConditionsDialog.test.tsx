@@ -127,9 +127,9 @@ describe("knowledge condition settings dialog", () => {
     expect(applyButton().disabled).toBe(false);
   });
 
-  it("offers themed year menus from 1900 through the current UTC year, with no-limit options", () => {
+  it("offers themed year menus from 1960 through the current UTC year, with no-limit options", () => {
     renderDialog({ settings: { ...defaults(), sources: ["extracted_literature"] } });
-    expect(KNOWLEDGE_YEAR_MIN).toBe(1900);
+    expect(KNOWLEDGE_YEAR_MIN).toBe(1960);
     expect(KNOWLEDGE_YEAR_MAX).toBe(new Date().getUTCFullYear());
     expect(screen.getByRole("dialog", { name: "条件设置" }).parentElement?.classList.contains("np-workbench-theme")).toBe(true);
     for (const name of ["文献起始年份", "文献结束年份"]) {
@@ -200,6 +200,7 @@ describe("knowledge condition settings dialog", () => {
   });
 
   it.each([
+    ["1900", ""], ["", "1900"],
     [String(KNOWLEDGE_YEAR_MIN - 1), ""], [String(KNOWLEDGE_YEAR_MAX + 1), ""],
     ["", String(KNOWLEDGE_YEAR_MIN - 1)], ["", String(KNOWLEDGE_YEAR_MAX + 1)],
     ["2025", "2020"], ["not-a-year", ""],
@@ -219,6 +220,37 @@ describe("knowledge condition settings dialog", () => {
     expect(props.onApply).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "清空文献筛选" }));
     expect(applyButton().disabled).toBe(false);
+  });
+
+  it.each([
+    ["文献起始年份", "year_from"], ["文献结束年份", "year_to"],
+  ] as const)("recovers the old 1900 setting in %s by choosing the new lower bound", (name, key) => {
+    const { props } = renderDialog({ settings: {
+      ...defaults(), sources: ["extracted_literature"],
+      filters: { ...defaults().filters, [key]: "1900" },
+    } });
+    expect(year(name).textContent).toBe("1900（超出可选范围）");
+    expect(applyButton().disabled).toBe(true);
+    selectYear(name, "1960");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(applyButton().disabled).toBe(false);
+    fireEvent.click(applyButton());
+    expect(props.onApply).toHaveBeenCalledExactlyOnceWith({
+      ...defaults(), sources: ["extracted_literature"],
+      filters: { ...defaults().filters, [key]: "1960" },
+    });
+  });
+
+  it("still accepts the earliest audited publication year, 1964, at both endpoints", () => {
+    const { props } = renderDialog({ settings: { ...defaults(), sources: ["extracted_literature"] } });
+    selectYear("文献起始年份", "1964");
+    selectYear("文献结束年份", "1964");
+    expect(applyButton().disabled).toBe(false);
+    fireEvent.click(applyButton());
+    expect(props.onApply).toHaveBeenCalledExactlyOnceWith({
+      ...defaults(), sources: ["extracted_literature"],
+      filters: { ...defaults().filters, year_from: "1964", year_to: "1964" },
+    });
   });
 
   it("disables all literature fields when its source is unselected and clears only those filters", () => {
