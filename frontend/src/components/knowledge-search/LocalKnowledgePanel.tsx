@@ -16,9 +16,12 @@ import {
   LoaderCircle,
   RefreshCw,
   Search,
-  SearchX
+  SearchX,
+  SlidersHorizontal
 } from "lucide-react";
 import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ModalFocusSuspendedContext } from "../../hooks/useModalFocus";
+import { DEFAULT_KNOWLEDGE_CONDITIONS, KnowledgeConditionsDialog, type KnowledgeConditionSettings } from "./KnowledgeConditionsDialog";
 import { useKnowledgeSearch } from "../../hooks/useKnowledgeSearch";
 import { useKnowledgeObservation } from "../../hooks/useKnowledgeObservation";
 import {
@@ -43,7 +46,7 @@ type LocalKnowledgePanelProps = {
   toolbarActions?: ReactNode;
 };
 
-const PAGE_SIZES = [20, 50, 100] as const;
+const SOURCE_LABELS: Record<KnowledgeDataSource, string> = { legacy: "现有专利知识库", extracted_literature: "提取文献库" };
 
 type SubmittedExpression = {
   query: string;
@@ -53,8 +56,19 @@ type SubmittedExpression = {
   generation_id?: string;
 };
 
-type FilterDraft = { year_from: string; year_to: string; has_properties: boolean; has_processes: boolean; has_original: boolean };
-const EMPTY_FILTERS: FilterDraft = { year_from: "", year_to: "", has_properties: false, has_processes: false, has_original: false };
+function literatureFilters(settings: KnowledgeConditionSettings): LiteratureFilters {
+  return {
+    ...(settings.filters.year_from ? { year_from: Number(settings.filters.year_from) } : {}),
+    ...(settings.filters.year_to ? { year_to: Number(settings.filters.year_to) } : {}),
+    ...(settings.filters.has_properties ? { has_properties: true } : {}),
+    ...(settings.filters.has_processes ? { has_processes: true } : {}),
+    ...(settings.filters.has_original ? { has_original: true } : {})
+  };
+}
+
+function initialConditions(): KnowledgeConditionSettings {
+  return { ...DEFAULT_KNOWLEDGE_CONDITIONS, sources: [...DEFAULT_KNOWLEDGE_CONDITIONS.sources], filters: { ...DEFAULT_KNOWLEDGE_CONDITIONS.filters } };
+}
 
 function recordKey(record: KnowledgeSearchResult) {
   return record.data_source === "extracted_literature" ? `literature:${record.document_uid}` : `legacy:${record.knowledge_id}`;
@@ -234,10 +248,13 @@ function ResultSkeletons() {
 
 export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], modeNavigation, toolbarActions }: LocalKnowledgePanelProps) {
   const guest = useAuth()?.status === "guest";
-  const searchState = useKnowledgeSearch();
-  const observeKnowledge = useKnowledgeObservation(searchState.data?.search_id);
+  const legacySearch = useKnowledgeSearch();
+  const literatureSearch = useKnowledgeSearch();
+  const [settings, setSettings] = useState<KnowledgeConditionSettings>(initialConditions);
+  const [conditionsOpen, setConditionsOpen] = useState(false);
   const [dataSource, setDataSource] = useState<KnowledgeDataSource>("legacy");
-  const [filters, setFilters] = useState<FilterDraft>({ ...EMPTY_FILTERS });
+  const searchState = dataSource === "legacy" ? legacySearch : literatureSearch;
+  const observeKnowledge = useKnowledgeObservation(searchState.data?.search_id);
   const [sources, setSources] = useState<KnowledgeSourcesResponse | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceRetry, setSourceRetry] = useState(0);
@@ -245,103 +262,111 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
     const groups = knowledgeSearchGroupsFromTerms(initialTerms);
     return groups.length ? serializeKnowledgeSearchGroups(groups) : initialQuery;
   });
-  const [submittedExpression, setSubmittedExpression] = useState<SubmittedExpression | null>(null);
-  const [pageSize, setPageSize] = useState<(typeof PAGE_SIZES)[number]>(20);
-  const [page, setPage] = useState(1);
+  const [submittedExpressions, setSubmittedExpressions] = useState<Partial<Record<KnowledgeDataSource, SubmittedExpression>>>({});
+  const submittedExpression = submittedExpressions[dataSource] ?? null;
+  const [pages, setPages] = useState<Record<KnowledgeDataSource, number>>({ legacy: 1, extracted_literature: 1 });
+  const page = pages[dataSource];
+  const pageSize = settings.pageSize;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const searchEpoch = useRef(0);
+  const selectionEpoch = useRef(0);
   const sizing = useKnowledgeDrawerSizing();
   const { drawerWidth, setDrawerWidth, widthProfile } = sizing;
   const selectedRecord = searchState.data?.results.find((record) => recordKey(record) === selectedId) ?? null;
-  const savedForms = useRef<Partial<Record<KnowledgeDataSource, { query: string; filters: FilterDraft; pageSize: typeof pageSize; submitted: SubmittedExpression | null }>>>({});
   const initialTermsKey = initialTerms.join("\u0000");
   const totalPages = Math.max(1, Math.ceil((searchState.data?.total ?? 0) / pageSize));
-  const parsedExpression = useMemo(() => parseExpression(query, dataSource), [query, dataSource]);
+  const includesLiterature = settings.sources.includes("extracted_literature");
+  const literatureOnly = includesLiterature && settings.sources.length === 1;
+  const parsedExpression = useMemo(() => parseExpression(query, includesLiterature ? "extracted_literature" : "legacy"), [query, includesLiterature]);
   const literature = dataSource === "extracted_literature";
   const sourceInfo = sources?.sources.find((source) => source.data_source === "extracted_literature");
-  const sourceUnavailable = literature && sourceInfo && (!sourceInfo.enabled || !sourceInfo.ready);
-  const yearError = literature && (
-    (filters.year_from && !/^\d{4}$/.test(filters.year_from)) ||
-    (filters.year_to && !/^\d{4}$/.test(filters.year_to))
-  ) ? "年份须为四位数字" : literature && filters.year_from && filters.year_to && Number(filters.year_from) > Number(filters.year_to) ? "起始年份不能晚于结束年份" : null;
-  const submittedFilters: LiteratureFilters = {
-    ...(filters.year_from ? { year_from: Number(filters.year_from) } : {}),
-    ...(filters.year_to ? { year_to: Number(filters.year_to) } : {}),
-    ...(filters.has_properties ? { has_properties: true } : {}),
-    ...(filters.has_processes ? { has_processes: true } : {}),
-    ...(filters.has_original ? { has_original: true } : {})
-  };
+  const unavailableSources = settings.sources.filter((source) => {
+    const info = sources?.sources.find((item) => item.data_source === source);
+    return info && (!info.enabled || !info.ready);
+  });
+  const allSourcesUnavailable = unavailableSources.length === settings.sources.length;
+  const searching = legacySearch.isLoading || literatureSearch.isLoading;
+  const hasSubmittedSearch = Object.keys(submittedExpressions).length > 0;
 
   useEffect(() => {
-    if (!literature || guest) return;
+    if (guest) return;
     const controller = new AbortController();
     setSourceError(null);
     void fetchKnowledgeSources(controller.signal).then((value) => {
       if (!controller.signal.aborted) setSources(value);
     }).catch((failure: unknown) => {
-      if (!controller.signal.aborted) setSourceError(failure instanceof Error ? failure.message : "无法读取文献服务状态");
+      if (!controller.signal.aborted) setSourceError(failure instanceof Error ? failure.message : "无法读取知识库状态");
     });
     return () => controller.abort();
-  }, [literature, guest, sourceRetry]);
+  }, [guest, sourceRetry]);
 
-  function changeSource(nextSource: KnowledgeDataSource) {
-    savedForms.current[dataSource] = { query, filters, pageSize, submitted: submittedExpression };
-    const saved = savedForms.current[nextSource];
-    searchState.reset();
-    setDataSource(nextSource);
-    setQuery(saved?.query ?? "");
-    setFilters(saved?.filters ?? { ...EMPTY_FILTERS });
-    setPageSize(saved?.pageSize ?? 20);
-    setSubmittedExpression(saved?.submitted ?? null);
-    setPage(1);
+  function applyConditions(next: KnowledgeConditionSettings) {
+    searchEpoch.current += 1;
+    selectionEpoch.current += 1;
+    legacySearch.reset();
+    literatureSearch.reset();
+    setSettings({ ...next, sources: [...next.sources], filters: { ...next.filters } });
+    setDataSource(next.sources.includes(dataSource) ? dataSource : next.sources[0]);
+    setSubmittedExpressions({});
+    setPages({ legacy: 1, extracted_literature: 1 });
     setSelectedId(null);
     setDrawerOpen(false);
+    setConditionsOpen(false);
   }
 
-  function resetConditions() {
-    searchState.reset();
-    setQuery("");
-    setFilters({ ...EMPTY_FILTERS });
-    setSubmittedExpression(null);
-    setPage(1);
-    setSelectedId(null);
+  function showSource(next: KnowledgeDataSource) {
+    selectionEpoch.current += 1;
+    setDataSource(next);
+    const state = next === "legacy" ? legacySearch : literatureSearch;
+    setSelectedId(state.data?.results[0] ? recordKey(state.data.results[0]) : null);
     setDrawerOpen(false);
   }
   const highlightTerms = searchState.data?.terms.length
     ? searchState.data.terms
     : submittedExpression?.groups.flatMap((group) => group.terms) ?? [searchState.data?.query || query];
 
-  async function executeSearch(
+  async function searchSource(
+    source: KnowledgeDataSource,
     nextQuery: string,
     nextPage: number,
     nextPageSize: number,
     suppliedGroups?: KnowledgeSearchGroup[],
     context?: SubmittedExpression
   ) {
-    const source = context?.data_source ?? dataSource;
+    const epoch = searchEpoch.current;
     const parsed = suppliedGroups
       ? { groups: normalizeKnowledgeSearchGroups(suppliedGroups), error: null }
       : parseExpression(nextQuery, source);
-    if (parsed.error || parsed.groups.length === 0) return;
+    if (parsed.error || parsed.groups.length === 0) return null;
     const normalizedQuery = nextQuery.trim() || serializeKnowledgeSearchGroups(parsed.groups);
     const expression: SubmittedExpression = {
       query: normalizedQuery, groups: parsed.groups, data_source: source,
-      ...(source === "extracted_literature" ? { filters: context?.filters ?? submittedFilters, generation_id: context?.generation_id } : {})
+      ...(source === "extracted_literature" ? { filters: context?.filters ?? literatureFilters(settings), generation_id: context?.generation_id } : {})
     };
-    setSubmittedExpression(expression);
-    setPage(nextPage);
-    setSelectedId(null);
-    setDrawerOpen(false);
-    const response = await searchState.submit(
-      normalizedQuery,
-      nextPageSize,
-      expression.groups,
-      nextPage,
-      nextPageSize,
+    setSubmittedExpressions((current) => ({ ...current, [source]: expression }));
+    setPages((current) => ({ ...current, [source]: nextPage }));
+    const state = source === "legacy" ? legacySearch : literatureSearch;
+    const response = await state.submit(
+      normalizedQuery, nextPageSize, expression.groups, nextPage, nextPageSize,
       source === "extracted_literature" ? { data_source: source, filters: expression.filters, ...(expression.generation_id ? { generation_id: expression.generation_id } : {}) } : undefined
     );
-    if (!response?.results.length) return;
-    setSubmittedExpression({ ...expression, ...(response.generation_id ? { generation_id: response.generation_id } : {}) });
+    if (!response || searchEpoch.current !== epoch) return null;
+    setSubmittedExpressions((current) => ({ ...current, [source]: { ...expression, ...(response.generation_id ? { generation_id: response.generation_id } : {}) } }));
+    return response;
+  }
+
+  async function executeSearch(
+    nextQuery: string, nextPage: number, nextPageSize: number,
+    suppliedGroups?: KnowledgeSearchGroup[], context?: SubmittedExpression
+  ) {
+    const source = context?.data_source ?? dataSource;
+    const selection = ++selectionEpoch.current;
+    setSelectedId(null);
+    setDrawerOpen(false);
+    const response = await searchSource(source, nextQuery, nextPage, nextPageSize, suppliedGroups, context);
+    if (!response?.results.length || selection !== selectionEpoch.current) return;
+    setDataSource(source);
     setSelectedId(recordKey(response.results[0]));
     if (isDesktopViewport()) setDrawerOpen(true);
   }
@@ -350,36 +375,41 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
     const groups = knowledgeSearchGroupsFromTerms(initialTerms);
     const nextQuery = groups.length ? serializeKnowledgeSearchGroups(groups) : initialQuery.trim();
     if (!nextQuery || guest) return;
-    searchState.reset();
+    searchEpoch.current += 1;
+    selectionEpoch.current += 1;
+    legacySearch.reset();
+    literatureSearch.reset();
+    setSettings(initialConditions());
+    setConditionsOpen(false);
     setDataSource("legacy");
-    setFilters({ ...EMPTY_FILTERS });
-    setPageSize(20);
+    setSubmittedExpressions({});
+    setPages({ legacy: 1, extracted_literature: 1 });
     setQuery(nextQuery);
     void executeSearch(nextQuery, 1, 20, groups.length ? groups : undefined, { query: nextQuery, groups, data_source: "legacy" });
-    // Initial route parameters are the trigger; executeSearch intentionally reads no mutable form state here.
+    // Route parameters deliberately reset conditions and always query patents.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialQuery, initialTermsKey]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!requestServiceAccess()) return;
-    if (!query.trim() || parsedExpression.error || yearError || sourceUnavailable || parsedExpression.groups.length === 0 || searchState.isLoading) return;
-    await executeSearch(query, 1, pageSize, parsedExpression.groups);
-  }
-
-  async function handlePageSizeChange(value: number) {
-    const nextPageSize = PAGE_SIZES.includes(value as (typeof PAGE_SIZES)[number])
-      ? (value as (typeof PAGE_SIZES)[number])
-      : 20;
-    setPageSize(nextPageSize);
-    setPage(1);
-    if (searchState.data || searchState.error) {
-      const expression = submittedExpression ?? {
-        query,
-        groups: parsedExpression.groups
-      };
-      await executeSearch(expression.query, 1, nextPageSize, expression.groups, expression);
-    }
+    if (!query.trim() || parsedExpression.error || allSourcesUnavailable || parsedExpression.groups.length === 0 || searching) return;
+    const epoch = ++searchEpoch.current;
+    const selection = ++selectionEpoch.current;
+    legacySearch.reset();
+    literatureSearch.reset();
+    setSubmittedExpressions({});
+    setSelectedId(null);
+    setDrawerOpen(false);
+    const responses = await Promise.all(settings.sources.map((source) => searchSource(source, query, 1, pageSize, parsedExpression.groups)));
+    if (searchEpoch.current !== epoch || selectionEpoch.current !== selection) return;
+    const preferred = settings.sources.indexOf(dataSource);
+    const nextIndex = preferred >= 0 && responses[preferred]?.results.length ? preferred : responses.findIndex((response) => response?.results.length);
+    const source = settings.sources[nextIndex >= 0 ? nextIndex : 0];
+    const record = nextIndex >= 0 ? responses[nextIndex]?.results[0] : null;
+    setDataSource(source);
+    setSelectedId(record ? recordKey(record) : null);
+    if (record && isDesktopViewport()) setDrawerOpen(true);
   }
 
   const resultCountLabel = searchState.data
@@ -406,41 +436,27 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
                 <span className="ks-surface-mark"><Database aria-hidden="true" /></span>
                 <div className="ks-surface-copy">
                   <h2>本地知识库检索</h2>
-                  <p>{literature ? "检索已提取文献的标题、摘要和 DOI，查看样品、性质与工艺" : "检索聚合物、配方、标题、权利要求与摘要中的知识记录"}</p>
+                  <p>{literatureOnly ? "检索提取文献的标题、摘要和 DOI，查看样品、性质与工艺" : "检索聚合物、配方、标题、权利要求与摘要中的知识记录"}</p>
                 </div>
               </div>
               {modeNavigation}
             </header>
 
             <div className="ks-form-zone">
-              <div className="ks-source-controls">
-                <label className="ks-field"><span>数据来源</span><select aria-label="知识库数据来源" value={dataSource} onChange={(event) => changeSource(event.target.value as KnowledgeDataSource)}>
-                  <option value="legacy">现有知识库</option><option value="extracted_literature">已提取文献</option>
-                </select></label>
-                <button className="ks-button" type="button" onClick={resetConditions}>重置条件</button>
-              </div>
-              {literature && (sourceUnavailable || sourceError) ? <div className="ks-inline-alert is-warning" role="status">
-                <span>{sourceError || sourceInfo?.reason || "已提取文献尚未就绪；现有知识库仍可使用。"}</span>
+              {includesLiterature && (unavailableSources.includes("extracted_literature") || sourceError) ? <div className="ks-inline-alert is-warning" role="status">
+                <span>{sourceError || sourceInfo?.reason || "提取文献库暂不可用；现有专利知识库仍可使用。"}</span>
                 <button type="button" onClick={() => setSourceRetry((value) => value + 1)}>重新检查</button>
-              </div> : null}
-              {literature ? <div className="ks-literature-filters">
-                <label className="ks-field"><span>起始年份</span><input aria-label="文献起始年份" inputMode="numeric" maxLength={4} value={filters.year_from} onChange={(event) => setFilters((value) => ({ ...value, year_from: event.target.value }))} /></label>
-                <label className="ks-field"><span>结束年份</span><input aria-label="文献结束年份" inputMode="numeric" maxLength={4} value={filters.year_to} onChange={(event) => setFilters((value) => ({ ...value, year_to: event.target.value }))} /></label>
-                <label className="ks-filter-check"><input type="checkbox" checked={filters.has_properties} onChange={(event) => setFilters((value) => ({ ...value, has_properties: event.target.checked }))} />有性质信息</label>
-                <label className="ks-filter-check"><input type="checkbox" checked={filters.has_processes} onChange={(event) => setFilters((value) => ({ ...value, has_processes: event.target.checked }))} />有工艺信息</label>
-                <label className="ks-filter-check"><input type="checkbox" checked={filters.has_original} onChange={(event) => setFilters((value) => ({ ...value, has_original: event.target.checked }))} />有可用原文</label>
-                {yearError ? <p className="ks-filter-error" role="alert">{yearError}</p> : null}
               </div> : null}
               <form className="ks-search-form ks-local-form" onSubmit={handleSubmit}>
                 <label className="ks-field">
-                  <span>检索词 <small>{literature ? "标题 / 摘要 / DOI" : "关键词 / IUPAC / 配方"}</small></span>
+                  <span>检索词 <small>{literatureOnly ? "标题 / 摘要 / DOI" : includesLiterature ? "关键词 / IUPAC / DOI" : "关键词 / IUPAC / 配方"}</small></span>
                   <span className="ks-input-with-icon">
                     <Search aria-hidden="true" />
                     <input
                       type="search"
                       value={query}
                       onChange={(event) => setQuery(event.target.value)}
-                      placeholder={literature ? "例如 polyimide；或粘贴完整 DOI" : "例如 polyimide；NMP | N-methyl-2-pyrrolidone"}
+                      placeholder={literatureOnly ? "例如 polyimide；或粘贴完整 DOI" : "例如 polyimide；NMP | N-methyl-2-pyrrolidone"}
                       aria-label="本地知识库检索词"
                       aria-describedby="local-knowledge-expression-help"
                       aria-invalid={Boolean(query.trim() && parsedExpression.error)}
@@ -448,32 +464,26 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
                     />
                   </span>
                 </label>
-                <label className="ks-field">
-                  <span>每页数量</span>
-                  <select
-                    value={pageSize}
-                    onChange={(event) => void handlePageSizeChange(Number(event.target.value))}
-                    aria-label="本地知识库每页数量"
-                    disabled={searchState.isLoading}
-                  >
-                    {PAGE_SIZES.map((size) => <option key={size} value={size}>{size} 条</option>)}
-                  </select>
-                </label>
+                <div className="ks-field ks-condition-field">
+                  <span>检索条件</span>
+                  <button className="ks-button ks-conditions-trigger" type="button" aria-label="条件设置" aria-haspopup="dialog" aria-expanded={conditionsOpen} onClick={() => setConditionsOpen(true)}>
+                    <SlidersHorizontal aria-hidden="true" />条件设置
+                  </button>
+                </div>
                 <button
                   className="ks-button is-primary"
                   type="submit"
-                  aria-busy={searchState.isLoading}
+                  aria-busy={searching}
                   disabled={
                     !query.trim() ||
                     Boolean(parsedExpression.error) ||
-                    Boolean(yearError) ||
-                    Boolean(sourceUnavailable) ||
+                    allSourcesUnavailable ||
                     parsedExpression.groups.length === 0 ||
-                    searchState.isLoading
+                    searching
                   }
                 >
-                  {searchState.isLoading ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <Search aria-hidden="true" />}
-                  {searchState.isLoading ? "检索中" : "运行检索"}
+                  {searching ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <Search aria-hidden="true" />}
+                  {searching ? "检索中" : "运行检索"}
                 </button>
               </form>
 
@@ -511,13 +521,23 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
               </div>
 
               <div className="ks-meta-row">
-                <span>{literature ? "范围：标题 / 摘要 / DOI；只查询已提取文献" : "范围：Polymer / Formulation / 中英文标题 / Claim / Abstract"}</span>
-                <span>{literature ? "排序：DOI 精确命中 → 字段相关性 → 文献 ID" : "排序：全部条件命中 → 字段相关性 → 记录 ID"}</span>
+                <span>{literatureOnly ? "范围：标题 / 摘要 / DOI" : "范围：Polymer / Formulation / 中英文标题 / Claim / Abstract"}</span>
+                <span>{settings.sources.length > 1 ? "两个知识库分别排序、分页" : literatureOnly ? "排序：DOI 精确命中 → 字段相关性 → 文献 ID" : "排序：全部条件命中 → 字段相关性 → 记录 ID"}</span>
+                {includesLiterature ? <span>来源：{settings.sources.map((source) => SOURCE_LABELS[source]).join(" + ")}</span> : null}
               </div>
             </div>
           </section>
 
           <section className="ks-surface ks-results-surface" aria-busy={searchState.isLoading}>
+            {settings.sources.length > 1 && hasSubmittedSearch ? <div className="ks-result-source-tabs" role="group" aria-label="检索结果知识库">
+              {settings.sources.map((source) => {
+                const state = source === "legacy" ? legacySearch : literatureSearch;
+                return <button type="button" key={source} aria-pressed={dataSource === source} className={dataSource === source ? "is-active" : ""} onClick={() => showSource(source)}>
+                  {source === "legacy" ? <Database aria-hidden="true" /> : <BookOpenText aria-hidden="true" />}
+                  {SOURCE_LABELS[source]}<span>{state.isLoading ? "检索中" : state.error ? "暂不可用" : state.data ? state.data.total.toLocaleString("zh-CN") : "未检索"}</span>
+                </button>;
+              })}
+            </div> : null}
             <header className="ks-results-header">
               <div className="ks-results-summary">
                 <h2>{searchState.data ? literature ? "文献检索结果" : "本地检索结果" : literature ? "准备检索已提取文献" : "准备检索本地知识库"}</h2>
@@ -580,6 +600,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
                           type="button"
                           aria-pressed={selected}
                           onClick={() => {
+                            selectionEpoch.current += 1;
                             setSelectedId(recordKey(record));
                             setDrawerOpen(true);
                             if (record.data_source === "extracted_literature") observeKnowledge(record, "literature_detail");
@@ -662,6 +683,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
         </div>
       </div>
 
+      <ModalFocusSuspendedContext.Provider value={conditionsOpen}>
       {legacyRecord ? <KnowledgeDetailDrawer
         id="local-knowledge-detail"
         open={drawerOpen && Boolean(legacyRecord)}
@@ -697,6 +719,8 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
         onOpen={() => { setDrawerOpen(true); observeKnowledge(selectedRecord, "drawer_reopen"); }}
         onObserve={(source) => observeKnowledge(selectedRecord, source)}
       /> : null}
+      </ModalFocusSuspendedContext.Provider>
+      {conditionsOpen ? <KnowledgeConditionsDialog settings={settings} onApply={applyConditions} onClose={() => setConditionsOpen(false)} sources={sources} sourceError={sourceError} onRetrySources={() => setSourceRetry((value) => value + 1)} /> : null}
     </div>
   );
 }

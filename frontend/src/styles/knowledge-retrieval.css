@@ -4259,3 +4259,72 @@
     width: 40px;
   }
 }
+
+/* Keep the compact query row; advanced conditions live in a modal. */
+.ks-local-form > .ks-button.is-primary {
+  min-inline-size: 0;
+  width: 100%;
+}
+
+.ks-condition-field > .ks-conditions-trigger {
+  width: 100%;
+  min-height: 44px;
+  height: 44px;
+  gap: 7px;
+  border: 1px solid rgba(71, 100, 143, 0.25);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #315b85;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.ks-condition-field > .ks-conditions-trigger:hover,
+.ks-condition-field > .ks-conditions-trigger[aria-expanded="true"] {
+  border-color: #81b5ed;
+  background: #eff7ff;
+  color: #1767a5;
+}
+
+.ks-condition-field > .ks-conditions-trigger svg { width: 15px; height: 15px; }
+
+.ks-result-source-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 18px 0;
+}
+
+.ks-result-source-tabs > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 7px 12px;
+  border: 1px solid #d8e5f4;
+  border-radius: 7px;
+  background: #f8fbff;
+  color: #627b96;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.ks-result-source-tabs > button.is-active {
+  border-color: #91c2ee;
+  background: #eaf5ff;
+  color: #1767a5;
+}
+
+.ks-result-source-tabs > button > svg { width: 15px; height: 15px; }
+.ks-result-source-tabs > button > span { padding: 2px 6px; border-radius: 4px; background: #fff; font-size: 11px; }
+.ks-result-source-tabs > button:focus-visible,
+.ks-conditions-trigger:focus-visible { outline: 2px solid #5299df; outline-offset: 3px; }
+
+@media (max-width: 599px) {
+  .ks-result-source-tabs { padding: 12px 12px 0; }
+  .ks-result-source-tabs > button { flex: 1 1 130px; }
+}
