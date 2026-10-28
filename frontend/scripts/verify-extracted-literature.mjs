@@ -4,6 +4,7 @@
 // With Node 22, first run: npm run dev -- --host 127.0.0.1 --port 5186 --strictPort
 // Then: node scripts/verify-extracted-literature.mjs
 // PAGE_BASE_URL and PAGE_ARTIFACT_DIR optionally override the local URL/output.
+// PAGE_REDUCED_MOTION accepts reduce (default) or no-preference.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -12,6 +13,8 @@ import { chromium } from "playwright";
 const base = process.env.PAGE_BASE_URL || "http://127.0.0.1:5186";
 assert.equal(new URL(base).hostname, "127.0.0.1");
 const output = resolve(process.env.PAGE_ARTIFACT_DIR || "/tmp/nexpoly-extracted-literature");
+const reducedMotion = process.env.PAGE_REDUCED_MOTION || "reduce";
+assert.ok(["reduce", "no-preference"].includes(reducedMotion), "PAGE_REDUCED_MOTION must be reduce or no-preference");
 await mkdir(output, { recursive: true });
 
 const paper = {
@@ -58,6 +61,46 @@ async function measureControls(scope) {
   });
 }
 
+async function waitForConditionEntrance(scope) {
+  await scope.evaluate(async (element) => {
+    const layer = element.closest(".ks-conditions-layer");
+    const entering = [element, layer].flatMap((node) => node.getAnimations())
+      .filter((animation) => animation.playState === "running" || animation.pending);
+    await Promise.all(entering.map((animation) => animation.finished.catch(() => {})));
+  });
+}
+
+async function measureConditionPresentation(scope) {
+  const presentation = await scope.evaluate((element) => {
+    const layer = element.closest(".ks-conditions-layer");
+    const headingStyle = getComputedStyle(element.querySelector("h2"));
+    const bodyStyle = getComputedStyle(element.querySelector(".ks-conditions-body"));
+    const familyProbe = document.createElement("span");
+    familyProbe.style.fontFamily = getComputedStyle(document.documentElement).getPropertyValue("--font-body").trim();
+    return {
+      expectedBodyFamily: familyProbe.style.fontFamily,
+      bodyFamily: bodyStyle.fontFamily,
+      headingFamily: headingStyle.fontFamily,
+      headingSize: headingStyle.fontSize,
+      buttonFamilies: [...new Set([...element.querySelectorAll("button")].map((button) => getComputedStyle(button).fontFamily))],
+      dialogAnimationName: getComputedStyle(element).animationName,
+      backdropAnimationName: getComputedStyle(layer).animationName,
+      runningEntranceAnimations: [element, layer].flatMap((node) => node.getAnimations())
+        .filter((animation) => animation.playState === "running" || animation.pending).length
+    };
+  });
+  assert.ok(presentation.headingFamily.includes("Exo"), "condition heading does not use the platform heading font");
+  assert.equal(presentation.headingSize, "18px", "condition heading has the wrong font size");
+  assert.equal(presentation.bodyFamily, presentation.expectedBodyFamily, "condition body does not use the platform body font");
+  assert.deepEqual(presentation.buttonFamilies, [presentation.expectedBodyFamily], "condition buttons do not inherit the platform body font");
+  assert.equal(presentation.runningEntranceAnimations, 0, "condition geometry was measured before its entrance finished");
+  if (reducedMotion === "reduce") {
+    assert.equal(presentation.dialogAnimationName, "none", "reduced motion still animates the condition dialog");
+    assert.equal(presentation.backdropAnimationName, "none", "reduced motion still animates the condition backdrop");
+  }
+  return { reducedMotion, ...presentation };
+}
+
 function isSearchResponse(response, source) {
   return new URL(response.url()).pathname.endsWith("/knowledge/search")
     && (response.request().postDataJSON()?.data_source ?? "legacy") === source;
@@ -68,7 +111,7 @@ const results = [];
 const failures = [];
 try {
   for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]]) {
-    const context = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce", serviceWorkers: "block" });
+    const context = await browser.newContext({ viewport: { width, height }, reducedMotion, serviceWorkers: "block" });
     const calls = [];
     const searchCalls = () => calls.filter((call) => call.path.endsWith("/knowledge/search"));
     const page = await context.newPage();
@@ -109,6 +152,7 @@ try {
       await page.getByRole("button", { name: "条件设置", exact: true }).click();
       const conditionsDialog = page.getByRole("dialog", { name: "条件设置", exact: true });
       await conditionsDialog.waitFor();
+      await waitForConditionEntrance(conditionsDialog);
       await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "关闭条件设置");
       await page.keyboard.press("Shift+Tab");
       const reverseWrap = await conditionsDialog.getByRole("button", { name: "应用条件", exact: true }).evaluate((element) => element === document.activeElement);
@@ -122,6 +166,8 @@ try {
       const keyboard = { reverseWrap, forwardWrap, escapeFocusRestored: true };
       await page.getByRole("button", { name: "条件设置", exact: true }).click();
       await conditionsDialog.waitFor();
+      await waitForConditionEntrance(conditionsDialog);
+      const presentation = await measureConditionPresentation(conditionsDialog);
       assert.equal(await conditionsDialog.getByRole("checkbox", { name: "现有专利知识库", exact: true }).isChecked(), true);
       await conditionsDialog.getByRole("checkbox", { name: "提取文献库", exact: true }).check();
       await conditionsDialog.getByRole("checkbox", { name: "现有专利知识库", exact: true }).uncheck();
@@ -143,8 +189,8 @@ try {
       const yearOptions = (await yearList.locator('[role="option"]').allTextContents()).map((label) => label.trim());
       assert.equal(yearOptions[0], "不限", "year dropdown lost its unlimited option");
       assert.equal(yearOptions[1], `${currentYear}年`, "year dropdown does not start at the current year");
-      assert.equal(yearOptions.at(-1), "1900年", "year dropdown has an incorrect historical lower bound");
-      assert.equal(yearOptions.length, currentYear - 1900 + 2);
+      assert.equal(yearOptions.at(-1), "1960年", "year dropdown has an incorrect historical lower bound");
+      assert.equal(yearOptions.length, currentYear - 1960 + 2);
       const yearMenuGeometry = await yearList.evaluate((element) => {
         const r = element.getBoundingClientRect(), body = element.closest(".ks-conditions-body").getBoundingClientRect();
         return { height:r.height, top:r.top, bottom:r.bottom, bodyTop:body.top, bodyBottom:body.bottom, scrollable:element.scrollHeight>element.clientHeight, themeBlue:getComputedStyle(element).getPropertyValue("--np-theme-blue").trim() };
@@ -154,6 +200,16 @@ try {
       assert.equal(yearMenuGeometry.themeBlue, "#2563eb", "dropdown lost shared theme tokens");
       assert.ok(yearMenuGeometry.top >= yearMenuGeometry.bodyTop - 1 && yearMenuGeometry.bottom <= yearMenuGeometry.bodyBottom + 1, "year menu is clipped by the modal body");
       await page.screenshot({ path: resolve(output, `literature-${width}x${height}-year-menu.png`) });
+      await yearFrom.focus();
+      await page.keyboard.press("End");
+      await page.waitForFunction((triggerId) => {
+        const trigger = document.getElementById(triggerId);
+        const active = document.getElementById(trigger?.getAttribute("aria-activedescendant") || "");
+        const list = document.getElementById(trigger?.getAttribute("aria-controls") || "");
+        return active?.textContent?.trim() === "1960年" && list.scrollTop > 0;
+      }, await yearFrom.getAttribute("id"));
+      const lowerBoundNavigation = { endKeyReaches1960: true, scrollTop: await yearList.evaluate((element) => element.scrollTop) };
+      await page.screenshot({ path: resolve(output, `literature-${width}x${height}-year-menu-oldest.png`) });
       await page.keyboard.press("Escape");
       await yearList.waitFor({ state: "hidden" });
       assert.equal(await conditionsDialog.isVisible(), true, "first Escape closed the parent modal");
@@ -266,6 +322,7 @@ try {
       const literatureCard = page.locator(".ks-result-list").getByRole("button", { name: /^聚酰亚胺样品的热性能/ });
       await page.getByRole("button", { name: "条件设置", exact: true }).click();
       await conditionsDialog.waitFor();
+      await waitForConditionEntrance(conditionsDialog);
       await conditionsDialog.getByRole("checkbox", { name: "现有专利知识库", exact: true }).check();
       await choose("文献起始年份", "2022年");
       await conditionsDialog.getByRole("checkbox", { name: "有工艺信息", exact: true }).check();
@@ -277,6 +334,7 @@ try {
       await page.getByRole("heading", { name: "文献检索结果", exact: true }).waitFor();
       await page.getByRole("button", { name: "条件设置", exact: true }).click();
       await conditionsDialog.waitFor();
+      await waitForConditionEntrance(conditionsDialog);
       assert.equal(await conditionsDialog.getByRole("checkbox", { name: "现有专利知识库", exact: true }).isChecked(), false, "cancelled source selection was applied");
       assert.equal(await conditionsDialog.getByRole("checkbox", { name: "提取文献库", exact: true }).isChecked(), true);
       assert.equal((await yearFrom.innerText()).trim(), "2020年", "cancelled year filter was applied");
@@ -326,7 +384,7 @@ try {
       assert.equal(searchCalls().length, beforeConditionChanges + 2, "switching result sources issued another search");
       await page.screenshot({ path: resolve(output, `literature-${width}x${height}-dual-source.png`) });
       assert.equal(errors.length,0,errors.join("\n"));
-      results.push({ viewport:[width,height], initialForm, conditions, keyboard, years:{ min:1900, max:currentYear, sharedThemeDropdown:true, menu:yearMenuGeometry, invertedOptionsDisabled:true, equalYearsAllowed:true, keyboardScrolling:true }, sourceRefreshActionRemoved:true, form, geometry, evidence, searchRequests:searchCalls().map((call) => ({ source:call.body.data_source ?? "legacy", pageSize:call.body.page_size, filters:call.body.filters })), observations:calls.filter(c=>c.path.endsWith("/observations")).map(c=>c.body.source), apiCalls:calls.length });
+      results.push({ viewport:[width,height], initialForm, conditions, presentation, keyboard, years:{ min:1960, max:currentYear, sharedThemeDropdown:true, menu:yearMenuGeometry, lowerBoundNavigation, invertedOptionsDisabled:true, equalYearsAllowed:true, keyboardScrolling:true }, sourceRefreshActionRemoved:true, form, geometry, evidence, searchRequests:searchCalls().map((call) => ({ source:call.body.data_source ?? "legacy", pageSize:call.body.page_size, filters:call.body.filters })), observations:calls.filter(c=>c.path.endsWith("/observations")).map(c=>c.body.source), apiCalls:calls.length });
     } catch(error) {
       failures.push({viewport:[width,height],message:error.message,errors});
       await page.screenshot({path:resolve(output,`failure-${width}.png`)});
@@ -336,6 +394,6 @@ try {
 } finally {
   await browser.close();
 }
-await writeFile(resolve(output,"verification.json"),JSON.stringify({results,failures},null,2));
-console.log(JSON.stringify({output,results,failures},null,2));
+await writeFile(resolve(output,"verification.json"),JSON.stringify({reducedMotion,results,failures},null,2));
+console.log(JSON.stringify({output,reducedMotion,results,failures},null,2));
 assert.equal(failures.length,0,"literature browser checks failed");
