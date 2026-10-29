@@ -212,9 +212,12 @@ own current validation; that historical record is not a live health check.
 
 All OpenAI-compatible clients use the optional `AI_PROXY_URL` setting: online
 knowledge extraction, the generic assistant, and the Tg reverse-design
-assistant. The clients disable inherited proxy variables, literature discovery
-remains direct, and the proxy URL is never returned by a frontend API. An empty
-value keeps direct access. The URL must be an absolute HTTP(S) URL without
+assistant. Online literature discovery (Semantic Scholar, PubMed, OpenAlex,
+arXiv) and Crossref enrichment use the same explicit proxy. Source HTTP
+requests use a separate session per invocation, ignore inherited proxy variables
+and netrc credentials, and never receive the model API key. The proxy URL is
+never returned by a frontend API. An empty value keeps direct access for both
+model calls and literature sources. The URL must be an absolute HTTP(S) URL without
 credentials, path, query, or fragment. `ONLINE_KNOWLEDGE_PROXY_URL` remains a
 fallback for one release when `AI_PROXY_URL` is empty and emits a deprecation
 warning; `AI_PROXY_URL` always wins when both are present.

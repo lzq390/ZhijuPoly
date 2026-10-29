@@ -292,7 +292,7 @@ def test_literature_threads_propagate_context_and_http_has_no_content(monkeypatc
     def get(*args, **kwargs):
         observed.append(owner.get())
         return NS(status_code=200, json=lambda: {"results": []})
-    monkeypatch.setattr(literature.requests, "get", get)
+    monkeypatch.setattr(literature.requests.Session, "get", get)
     token = owner.set("owner-A")
     try:
         assert literature.SimpleLiteratureSearcher().search_all("private query", ["openalex"], 1) == []

@@ -48,19 +48,28 @@ def _crossref_title_matches(record: dict[str, Any], title: str) -> bool:
 class SimpleLiteratureSearcher:
     DEFAULT_SOURCES = ["semantic_scholar", "pubmed", "openalex", "arxiv"]
 
-    def __init__(self, max_workers: int = 4) -> None:
+    def __init__(self, max_workers: int = 4, proxy_url: str = "") -> None:
         self.headers = {
             "User-Agent": "PolyProp/0.1 literature retrieval",
             "Accept": "application/json",
         }
         self.max_workers = max_workers
+        self.proxy_url = proxy_url
+
+    def _get(self, url: str, **kwargs: Any) -> requests.Response:
+        # One session per invocation: source/enrichment threads never share
+        # mutable HTTP state. Ignore ambient proxies and netrc credentials.
+        with requests.Session() as session:
+            session.trust_env = False
+            proxies = {"http": self.proxy_url, "https": self.proxy_url} if self.proxy_url else {}
+            return provider_http_request(session.get, url, proxies=proxies, **kwargs)
 
     def get_doi_from_crossref(self, title: str) -> str | None:
         normalized_title = _crossref_title(title)
         if not normalized_title:
             return None
         try:
-            response = provider_http_request(requests.get,
+            response = self._get(
                 "https://api.crossref.org/works",
                 params={"query.title": title, "rows": 5},
                 headers=self.headers,
@@ -98,7 +107,7 @@ class SimpleLiteratureSearcher:
             return paper
 
         try:
-            response = provider_http_request(requests.get,
+            response = self._get(
                 f"https://api.crossref.org/works/{quote(doi, safe='/')}",
                 headers=self.headers,
                 timeout=15,
@@ -131,7 +140,7 @@ class SimpleLiteratureSearcher:
                 "fields": "title,abstract,venue,externalIds,year,authors",
             }
             try:
-                response = provider_http_request(requests.get,
+                response = self._get(
                     "https://api.semanticscholar.org/graph/v1/paper/search",
                     params=params,
                     headers=self.headers,
@@ -179,8 +188,8 @@ class SimpleLiteratureSearcher:
                 "sortBy": "relevance",
             }
             try:
-                response = provider_http_request(requests.get,
-                    "http://export.arxiv.org/api/query",
+                response = self._get(
+                    "https://export.arxiv.org/api/query",
                     params=params,
                     headers=self.headers,
                     timeout=30,
@@ -244,7 +253,7 @@ class SimpleLiteratureSearcher:
                 "page": page,
             }
             try:
-                response = provider_http_request(requests.get,
+                response = self._get(
                     "https://api.openalex.org/works",
                     params=params,
                     headers=self.headers,
@@ -289,7 +298,7 @@ class SimpleLiteratureSearcher:
             "retmode": "json",
         }
         try:
-            search_response = provider_http_request(requests.get,
+            search_response = self._get(
                 "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
                 params=search_params,
                 headers=self.headers,
@@ -304,7 +313,7 @@ class SimpleLiteratureSearcher:
             all_papers: list[Paper] = []
             for index in range(0, len(id_list), 200):
                 batch_ids = id_list[index : index + 200]
-                fetch_response = provider_http_request(requests.get,
+                fetch_response = self._get(
                     "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
                     params={"db": "pubmed", "id": ",".join(batch_ids), "retmode": "xml"},
                     headers=self.headers,
