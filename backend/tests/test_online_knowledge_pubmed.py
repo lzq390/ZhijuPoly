@@ -42,9 +42,38 @@ modulus 4 × 10<sup>3</sup> MPa, and <b>late</b> evidence after every inline tag
     ))[0]
     assert paper["title"] == "Tg and aromatic polymers in H2O"
     assert paper["abstract"] == (
-        "A synthetic polymer has Tg = 275 °C, modulus 4 × 103 MPa, "
+        "A synthetic polymer has Tg = 275 °C, modulus 4 × 10^(3) MPa, "
         "and late evidence after every inline tag."
     )
+
+
+@pytest.mark.parametrize("xml, expected", [
+    ("10<sup>3</sup>", "10^(3)"),
+    ("10<sup>-3</sup>", "10^(-3)"),
+    ("10<sup>−3</sup>", "10^(−3)"),
+    ("10<sup>+3</sup>", "10^(+3)"),
+    ("m<sup>-2</sup>", "m^(-2)"),
+    ("cm<sup>-0.5</sup>", "cm^(-0.5)"),
+    ("a<sup>n±1</sup>", "a^(n±1)"),
+    ("a<sup><i>n</i> + 1</sup>", "a^(n + 1)"),
+    ("Fe<sup>3+</sup>", "Fe^(3+)"),
+    ("10<sup><b>-</b>3</sup>", "10^(-3)"),
+    ("10<sup>2<sup>3</sup></sup>", "10^(2^(3))"),
+    ("<i>10<sup>-3</sup> S</i> cm<sup>-1</sup>", "10^(-3) S cm^(-1)"),
+    ("H<sub>2</sub>O and T<sub>g</sub>", "H2O and Tg"),
+])
+@pytest.mark.parametrize("field", ["title", "abstract"])
+def test_superscripts_keep_grouped_scientific_meaning_and_inline_tails(xml, expected, field):
+    fragment = f"Before {xml} after."
+    paper = parse(record(
+        title=fragment if field == "title" else "Synthetic polymer",
+        abstract=f"<Abstract><AbstractText>{fragment}</AbstractText></Abstract>" if field == "abstract" else "",
+    ))[0]
+    assert paper[field] == f"Before {expected} after."
+
+
+def test_empty_superscript_does_not_create_an_exponent_or_abstract_evidence():
+    assert parse(record(abstract="<Abstract><AbstractText><sup> </sup></AbstractText></Abstract>"))[0]["abstract"] == ""
 
 
 def test_structured_abstract_keeps_all_sections_labels_and_paragraph_boundaries():
@@ -128,7 +157,7 @@ def test_complete_later_evidence_reaches_real_extractor_prompt_without_fallback(
     xml = "<PubmedArticleSet>" + record(
         title="T<sub>g</sub> of a <i>synthetic</i> polymer",
         abstract="""<Abstract><AbstractText Label="BACKGROUND">No measured properties in this introductory section.</AbstractText>
-<AbstractText Label="RESULTS">The polymer has T<sub>g</sub> = 275 °C after a 2 h treatment.</AbstractText></Abstract>""",
+<AbstractText Label="RESULTS">The polymer has T<sub>g</sub> = 275 °C after a 2 h treatment and conductivity = 4 × 10<sup>-3</sup> S cm<sup>-1</sup>.</AbstractText></Abstract>""",
     ) + "</PubmedArticleSet>"
     calls = []
     prompts = []
@@ -145,7 +174,8 @@ def test_complete_later_evidence_reaches_real_extractor_prompt_without_fallback(
         prompt = kwargs["messages"][1]["content"]
         prompts.append(prompt)
         assert "BACKGROUND: No measured properties in this introductory section." in prompt
-        assert "RESULTS: The polymer has Tg = 275 °C after a 2 h treatment." in prompt
+        assert "RESULTS: The polymer has Tg = 275 °C after a 2 h treatment and conductivity = 4 × 10^(-3) S cm^(-1)." in prompt
+        assert "4 × 10-3" not in prompt
         assert "Tg of a synthetic polymer" in prompt
         assert "Unrelated translated evidence" not in prompt
         payload = {"has_polymer": True, "total_data_points": 1, "data_points": [{

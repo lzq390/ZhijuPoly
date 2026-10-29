@@ -46,9 +46,24 @@ def _crossref_title_matches(record: dict[str, Any], title: str) -> bool:
 
 
 def _pubmed_text(element: ET.Element | None) -> str:
-    # Join XML text/tails before whitespace normalization so chemical notation
-    # such as H<sub>2</sub>O and T<sub>g</sub> remains contiguous.
-    return " ".join("".join(element.itertext()).split()) if element is not None else ""
+    if element is None:
+        return ""
+
+    def render(node: ET.Element) -> str:
+        parts = [node.text or ""]
+        for child in node:
+            text = render(child)
+            # Plain concatenation would change 10<sup>3</sup> into 103.
+            # Group the complete exponent/charge, including nested inline text.
+            if child.tag.rsplit("}", 1)[-1] == "sup" and text.strip():
+                parts.append(f"^({text.strip()})")
+            else:
+                # Keep subscripts contiguous for notation such as H2O and Tg.
+                parts.append(text)
+            parts.append(child.tail or "")
+        return "".join(parts)
+
+    return " ".join(render(element).split())
 
 
 class SimpleLiteratureSearcher:
