@@ -20,8 +20,8 @@ ABSTRACT = "A polymer exhibits a measured glass transition temperature of 120 de
 ARXIV_XML = f"""<feed xmlns="http://www.w3.org/2005/Atom"><entry>
 <title>{TITLE}</title><summary>{ABSTRACT}</summary><id>https://arxiv.org/abs/1234.56789</id>
 <published>2025-01-01</published></entry></feed>"""
-PUBMED_XML = f"""<PubmedArticleSet><PubmedArticle><Article><ArticleTitle>{TITLE}</ArticleTitle>
-<Abstract><AbstractText>{ABSTRACT}</AbstractText></Abstract></Article>
+PUBMED_XML = f"""<PubmedArticleSet><PubmedArticle><MedlineCitation><Article><ArticleTitle>{TITLE}</ArticleTitle>
+<Abstract><AbstractText>{ABSTRACT}</AbstractText></Abstract></Article></MedlineCitation>
 <PubmedData><ArticleIdList><ArticleId IdType="doi">{DOI}</ArticleId></ArticleIdList></PubmedData>
 </PubmedArticle></PubmedArticleSet>"""
 

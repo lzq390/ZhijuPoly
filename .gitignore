@@ -86,6 +86,7 @@ nexpoly-release-*.tar.gz
 !/backend/tests/test_literature_*.py
 !/backend/tests/test_online_knowledge_crossref.py
 !/backend/tests/test_online_knowledge_source_proxy.py
+!/backend/tests/test_online_knowledge_pubmed.py
 !/backend/tests/test_online_knowledge_extraction_validation.py
 !/backend/tests/test_online_knowledge_temperature.py
 !/backend/tests/test_multiuser_contract.py
