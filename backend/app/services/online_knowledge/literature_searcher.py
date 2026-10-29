@@ -45,6 +45,12 @@ def _crossref_title_matches(record: dict[str, Any], title: str) -> bool:
     )
 
 
+def _pubmed_text(element: ET.Element | None) -> str:
+    # Join XML text/tails before whitespace normalization so chemical notation
+    # such as H<sub>2</sub>O and T<sub>g</sub> remains contiguous.
+    return " ".join("".join(element.itertext()).split()) if element is not None else ""
+
+
 class SimpleLiteratureSearcher:
     DEFAULT_SOURCES = ["semantic_scholar", "pubmed", "openalex", "arxiv"]
 
@@ -333,22 +339,31 @@ class SimpleLiteratureSearcher:
             return []
 
         papers: list[Paper] = []
-        for article in root.findall(".//PubmedArticle"):
-            title_elem = article.find(".//ArticleTitle")
-            journal_elem = article.find(".//Journal/Title")
-            abstract_elem = article.find(".//AbstractText")
-            year_elem = article.find(".//PubDate/Year")
+        for record in root.findall("./PubmedArticle"):
+            article = record.find("MedlineCitation/Article")
+            if article is None:
+                continue
+            title = _pubmed_text(article.find("ArticleTitle"))
+            journal = _pubmed_text(article.find("Journal/Title"))
+            year = _pubmed_text(article.find("Journal/JournalIssue/PubDate/Year"))
+            abstract_sections = []
+            for section in article.findall("Abstract/AbstractText"):
+                text = _pubmed_text(section)
+                if not text:
+                    continue
+                label = " ".join((section.get("Label") or "").split())
+                abstract_sections.append(f"{label}: {text}" if label else text)
 
             doi = ""
-            for article_id in article.findall(".//ArticleId"):
+            for article_id in record.findall("PubmedData/ArticleIdList/ArticleId"):
                 if article_id.get("IdType") == "doi":
                     doi = article_id.text or ""
                     break
 
             authors = []
-            for author in article.findall(".//Author")[:3]:
-                last_name = author.find(".//LastName")
-                fore_name = author.find(".//ForeName")
+            for author in article.findall("AuthorList/Author")[:3]:
+                last_name = author.find("LastName")
+                fore_name = author.find("ForeName")
                 if last_name is not None and last_name.text:
                     name = last_name.text
                     if fore_name is not None and fore_name.text:
@@ -357,11 +372,11 @@ class SimpleLiteratureSearcher:
 
             papers.append(
                 {
-                    "title": title_elem.text if title_elem is not None and title_elem.text else "",
-                    "venue": journal_elem.text if journal_elem is not None and journal_elem.text else "",
-                    "abstract": abstract_elem.text if abstract_elem is not None and abstract_elem.text else "",
+                    "title": title,
+                    "venue": journal,
+                    "abstract": "\n\n".join(abstract_sections),
                     "doi": doi,
-                    "year": year_elem.text if year_elem is not None and year_elem.text else "",
+                    "year": year,
                     "authors": ", ".join(authors),
                     "source": "PubMed",
                 }
