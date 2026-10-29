@@ -94,6 +94,12 @@ describe("MD trajectory selection", () => {
     expect(screen.queryByText("距离 PBC 已启用")).toBeNull();
     expect(screen.queryByRole("heading", { name: "最终帧原子分布" })).toBeNull();
     expect(screen.queryByText(/EQ3/)).toBeNull();
+    const stopWaiting = vi.fn();
+    view.rerender(<MdTrajectoryExplorer {...props} distanceLoading distanceElapsedSeconds={7} onCancelDistance={stopWaiting} />);
+    expect(screen.getByText((_, element) => element?.tagName === "SPAN" && element.textContent === "正在读取轨迹中的采样帧 · 已等待 7 秒")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "停止等待分析" }));
+    expect(stopWaiting).toHaveBeenCalledOnce();
+    expect((screen.getByRole("button", { name: "计算中" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("keeps two unique atoms and replaces the oldest selection with a third atom", () => {

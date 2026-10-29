@@ -3,6 +3,7 @@ import { getSessionEpoch, onSessionRetired } from "../auth/session";
 import * as api from "../services/polymerMdApi";
 import { clearPolymerMdPending, createPolymerMdPending, readPolymerMdPending, writePolymerMdPending, type PolymerMdPendingSubmission } from "../services/polymerMdPending";
 import type { PolymerMdCapabilities, PolymerMdJob, PolymerMdJobPage, PolymerMdRequest, PolymerMdServiceStatus } from "../types/polymerMd";
+import type { PolymerMdServiceCheck } from "../components/polymer-md/serviceState";
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : "读取计算任务失败，请稍后重试。";
 }
@@ -25,6 +26,7 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [serviceError, setServiceError] = useState<string | null>(null);
+  const [serviceCheck, setServiceCheck] = useState<PolymerMdServiceCheck>("checking");
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -38,6 +40,7 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
   activeId.current = selectedId;
   const requestControllers = useRef(new Set<AbortController>());
   const serviceController = useRef<AbortController | null>(null);
+  const serviceConfirmed = useRef(false), serviceFailures = useRef(0), hasServiceSnapshot = useRef(false);
   const serviceRevision = useRef(0),
     historyRevision = useRef(0),
     jobRevision = useRef(0);
@@ -54,21 +57,37 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
     const revision = ++serviceRevision.current,
       c = controller();
     serviceController.current = c;
-    const timeout = setTimeout(() => {
-      c.abort();
-      if (valid() && revision === serviceRevision.current) {
-        setServiceError("计算服务状态读取失败或超时，请刷新重试。");
-      }
-    }, 10000);
+    let timedOut = false;
+    let onAbort!: () => void;
+    const interrupted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(new DOMException("Service check aborted", "AbortError"));
+      c.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    const timeout = setTimeout(() => { timedOut = true; c.abort(); }, 10000);
     try {
-      const values = await Promise.allSettled([api.fetchPolymerMdCapabilities(c.signal), api.fetchPolymerMdStatus(c.signal)]);
+      // /status and /capabilities share one backend handler and complete wire
+      // shape. One response gives admission and configuration one observation,
+      // without probing the Worker twice during every refresh.
+      const value = await Promise.race([api.fetchPolymerMdCapabilities(c.signal), interrupted]);
       if (!valid() || c.signal.aborted || revision !== serviceRevision.current) return;
-      if (values[0].status === "fulfilled") setCapabilities(values[0].value);
-      if (values[1].status === "fulfilled") setStatus(values[1].value);
-      const failures = values.filter(v => v.status === "rejected");
-      setServiceError(failures.length ? "计算服务状态读取失败或超时，请刷新重试。" : null);
+      setCapabilities(value);
+      setStatus(value);
+      hasServiceSnapshot.current = true;
+      serviceConfirmed.current = true;
+      serviceFailures.current = 0;
+      setServiceCheck("confirmed");
+      setServiceError(null);
+    } catch (e) {
+      if (!valid() || revision !== serviceRevision.current || c.signal.aborted && !timedOut) return;
+      serviceConfirmed.current = false;
+      serviceFailures.current += 1;
+      // Keep the last configuration available for reading, but never use it
+      // as current submission authority. Repeated failures remain explicit.
+      setServiceCheck(hasServiceSnapshot.current && serviceFailures.current === 1 ? "unconfirmed" : "unavailable");
+      setServiceError("计算服务状态读取失败或超时，暂不能提交新计算；已有任务仍可查看，请稍后刷新。");
     } finally {
       clearTimeout(timeout);
+      c.signal.removeEventListener("abort", onAbort);
       requestControllers.current.delete(c);
       if (serviceController.current === c) serviceController.current = null;
     }
@@ -123,7 +142,10 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
       submitLock.current = false;
       for (const c of requestControllers.current) c.abort();
       requestControllers.current.clear();
-    serviceController.current = null;
+      serviceController.current = null;
+      serviceConfirmed.current = false;
+      serviceFailures.current = 0;
+      hasServiceSnapshot.current = false;
       setPendingSubmission(null);
       setPendingIssue(null);
       setJob(null);
@@ -132,6 +154,7 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
       setStatus(null);
       setError(null);
       setServiceError(null);
+      setServiceCheck("checking");
       setHistoryError(null);
       setLoading(false);
       setPage(1);
@@ -142,7 +165,8 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
       retire();
       for (const c of requestControllers.current) c.abort();
       requestControllers.current.clear();
-    serviceController.current = null;
+      serviceController.current = null;
+      serviceConfirmed.current = false;
     };
   }, []);
   useEffect(() => {
@@ -156,6 +180,9 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
     for (const c of requestControllers.current) c.abort();
     requestControllers.current.clear();
     serviceController.current = null;
+    serviceConfirmed.current = false;
+    serviceFailures.current = 0;
+    setServiceCheck("checking");
     setLoading(false);
     setBusy(null);
   }, [enabled]);
@@ -172,9 +199,13 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
     // Keep the newer completion-based polling: slow responses must not be
     // superseded merely because an interval elapsed.
     const stopService = pollAfterCompletion(refreshService, 10000);
+    return stopService;
+  }, [enabled, refreshService]);
+  useEffect(() => {
+    if (!enabled) return;
     const stopHistory = pollAfterCompletion(refreshHistory, 10000);
-    return () => { stopService(); stopHistory(); };
-  }, [enabled, refreshHistory, refreshService]);
+    return stopHistory;
+  }, [enabled, refreshHistory]);
   useEffect(() => {
     ++jobRevision.current;
     setJob(null);
@@ -224,6 +255,7 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
   }, [controller, onSelect, refreshHistory, refreshService, valid]);
   const submit = useCallback(async (request: PolymerMdRequest) => {
     if (!enabled || !valid() || busy || submitLock.current) return;
+    if (!serviceConfirmed.current) { setError("计算服务状态尚未确认，请等待检查完成后提交。"); return; }
     const revision = ++submissionRevision.current;
     submitLock.current = true;
     try {
@@ -242,6 +274,7 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
   }, [busy, enabled, sendPending, valid]);
   const recoverSubmission = useCallback(async () => {
     if (!enabled || !valid() || busy || submitLock.current) return;
+    if (!serviceConfirmed.current) { setError("计算服务状态尚未确认，请等待检查完成后恢复提交。"); return; }
     const revision = ++submissionRevision.current;
     submitLock.current = true;
     try {
@@ -293,6 +326,7 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
     setPage,
     error,
     serviceError,
+    serviceCheck,
     historyError,
     busy,
     loading,

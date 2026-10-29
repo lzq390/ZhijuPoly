@@ -142,6 +142,7 @@ class Settings:
         polymer_md_dev_enabled: bool | None = None,
         polymer_md_submit_enabled: bool | None = None,
         polymer_md_worker_uds: str | None = None,
+        polymer_md_analysis_uds: str | None = None,
         polymer_md_start_authorization_token: str | None = None,
         polymer_md_environment: str | None = None,
         polymer_md_artifact_root: str | None = None,
@@ -1043,6 +1044,9 @@ class Settings:
         self.polymer_md_submit_enabled = _strict_bool("POLYMER_MD_SUBMIT_ENABLED", polymer_md_submit_enabled if polymer_md_submit_enabled is not None else os.getenv("POLYMER_MD_SUBMIT_ENABLED", "false"))
         self.polymer_md_environment = polymer_md_environment or os.getenv("POLYMER_MD_ENVIRONMENT", "disabled")
         self.polymer_md_worker_uds = polymer_md_worker_uds or os.getenv("POLYMER_MD_WORKER_UDS", "")
+        self.polymer_md_analysis_uds = polymer_md_analysis_uds or os.getenv("POLYMER_MD_ANALYSIS_UDS", "")
+        if self.polymer_md_analysis_uds and not os.path.isabs(self.polymer_md_analysis_uds):
+            raise ValueError("POLYMER_MD_ANALYSIS_UDS must be an absolute Unix socket path")
         self.polymer_md_download_spool_root = _absolute_from_root(os.getenv("POLYMER_MD_DOWNLOAD_SPOOL_ROOT", ".runtime/polymer-md-downloads"))
         raw_polymer_md_artifact_root = polymer_md_artifact_root if polymer_md_artifact_root is not None else os.getenv("POLYMER_MD_ARTIFACT_ROOT", "")
         self.polymer_md_artifact_root = _absolute_from_root(raw_polymer_md_artifact_root) if raw_polymer_md_artifact_root else ""

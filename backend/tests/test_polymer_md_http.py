@@ -1,5 +1,6 @@
 """Authenticated API acceptance on an isolated main22 -> 0023 PostgreSQL database."""
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -57,6 +58,22 @@ class Worker:
         return {**{key:getattr(request,key) for key in ('job_id','attempt_token','request_sha256','enqueue_sequence')},"deleted":True,"cleanup_confirmed":True}
 
 
+class Analysis:
+    ready = True
+
+    def __init__(self):
+        self.calls = []
+
+    async def health(self):
+        return {"protocol_version": 1, "service": "polymer-md-analysis", "ready": self.ready,
+                "active": 0, "queued": 0, "request_timeout_seconds": 90}
+
+    async def analyze(self, operation, payload, **kwargs):
+        self.calls.append((operation, payload))
+        return {"job_id": payload["job_id"], "stage_run_id": payload["stage_run_id"],
+                "frame_index": payload.get("frame_index", 0), "frame_count": 1, "points": []}
+
+
 @pytest.fixture
 def polymer_api(polymer_auth_database,monkeypatch,tmp_path):
     db=polymer_auth_database
@@ -67,6 +84,7 @@ def polymer_api(polymer_auth_database,monkeypatch,tmp_path):
     app.state.settings=SimpleNamespace(polymer_md_dev_enabled=True,polymer_md_submit_enabled=True,polymer_md_start_authorization_token="test-only-token",polymer_md_download_spool_root=str(tmp_path))
     app.state.polymer_md_repository=PolymerMdRepository(db["api"])
     app.state.polymer_md_worker_client=Worker()
+    app.state.polymer_md_analysis_client=Analysis()
     app.state.polymer_md_reconciler=None
     app.state.polymer_md_download_limiter=anyio.CapacityLimiter(2)
     app.include_router(router);app.include_router(internal_router)
@@ -220,6 +238,73 @@ def test_postequilibrium_targets_persist_exactly_with_owner_fenced_idempotent_re
     assert internal.scientific_request.native_configuration.properties == sorted(properties)
 
 
+def test_all_additional_targets_round_trip_through_completed_task_center_results(polymer_api):
+    """Exercise the full user selection with synthetic results, never MD/QM."""
+    app, alice, bob, db = polymer_api
+    basic = ["density", "Rg", "self-diffusion", "Cp", "Cv", "compressibility",
+             "isentropic_compressibility", "bulk_modulus", "isentropic_bulk_modulus",
+             "volume_expansion", "linear_expansion", "r2", "static_dielectric_const",
+             "nematic_order_parameter"]
+    additional = ["thermal_conductivity", "refractive_index", "thermal_diffusivity",
+                  "tg", "sp_total", "sp_ced"]
+    requested = sorted(basic + additional)
+    payload = {**model_payload("homopolymer"), "n_chain": 2, "calculation": "basic_tc",
+               "native_configuration": {"properties": requested}}
+    headers = {"Idempotency-Key": "polymer-all-additional-task-center"}
+    created = alice.post("/api/v1/polymer-md/jobs", json=payload, headers=headers)
+    assert created.status_code == 202, created.text
+    job_id = created.json()["job_id"]
+    repo = app.state.polymer_md_repository
+    internal = repo.get_service_job(job_id)
+    submit = submit_request(internal)
+    assert submit.scientific_request.native_configuration.properties == requested
+    assert repo.claim_dispatch(job_id, internal["attempt_token"])
+    repo.authorize_start(StartAuthorizationRequest(**submit.model_dump(), worker_instance_id="a" * 32))
+
+    groups = [("analyze_0", "eq3", basic + ["refractive_index"]),
+              ("sp_analyze", "sp", ["sp_total", "sp_ced"]),
+              ("tc_analyze", "tc", ["thermal_conductivity", "thermal_diffusivity"]),
+              ("tg_analyze", "tg", ["tg"])]
+    stages, properties = [], []
+    for stage, source, keys in groups:
+        records = [{"key": key, "value": float(index + 1), "unit": "synthetic-only",
+                    "source_stage": source, "quality_status": "passed",
+                    "conditions": {"synthetic_only": True}} for index, key in enumerate(keys)]
+        properties.extend(records)
+        stages.append({"stage_run_id": stage + "-1", "stage": stage, "status": "completed",
+                       "quality_status": "passed", "results": {"properties": records}})
+    result = {"properties": properties, "requested_properties": requested,
+              "quality_summary": {key: {"quality_status": "passed"}
+                                  for key in ("basic", "sp", "thermal", "glass_transition")}}
+    repo.apply_snapshot(WorkerSnapshot(
+        **{key: getattr(submit, key) for key in ("job_id", "attempt_token", "request_sha256", "enqueue_sequence")},
+        worker_instance_id="a" * 32, status="completed", quality_status="passed", stage="completed",
+        cleanup_confirmed=True, stage_runs=stages, results=result))
+
+    # Replace the repository instance to rule out an in-memory-only history.
+    app.state.polymer_md_repository = PolymerMdRepository(db["api"])
+    history = alice.get("/api/v1/polymer-md/jobs").json()
+    assert history["total"] == 1 and history["items"][0]["job_id"] == job_id
+    assert history["items"][0]["status"] == "completed"
+    assert history["items"][0]["scientific_request"]["native_configuration"]["properties"] == requested
+    assert history["items"][0]["results"] == result
+    for suffix in ("", "/results", "/stages"):
+        url = "/api/v1/polymer-md/jobs/" + job_id + suffix
+        response = alice.get(url)
+        assert response.status_code == 200, response.text
+        assert bob.get(url).status_code == 404
+        body = response.json()
+        assert body["snapshot_revision"] == 1
+        if suffix == "/stages":
+            assert {stage["stage"] for stage in body["stage_runs"]} == {stage for stage, _, _ in groups}
+        else:
+            assert body["results"] == result
+            assert {record["key"] for record in body["results"]["properties"]} == set(requested)
+    replay = alice.post("/api/v1/polymer-md/jobs", json=payload, headers=headers)
+    assert replay.status_code == 202 and replay.json()["job_id"] == job_id
+    assert not replay.json()["created"] and replay.json()["results"] == result
+
+
 @pytest.mark.parametrize("target", ["sp_total", "sp_ced"])
 def test_sp_rejects_a_one_chain_cell_before_persisting_a_task(polymer_api, target):
     app, alice, bob, db = polymer_api
@@ -320,6 +405,10 @@ def test_drain_keeps_completed_artifact_analysis_available_without_admitting_job
 
     app.state.polymer_md_worker_client.health=stopped_health
     capabilities=alice.get('/api/v1/polymer-md/capabilities').json()
+    # An unavailable MD Worker does not take down the independent reader.
+    assert capabilities['trajectory_available'] and capabilities['distance_available']
+    app.state.polymer_md_analysis_client.ready = False
+    capabilities=alice.get('/api/v1/polymer-md/capabilities').json()
     assert not capabilities['trajectory_available'] and not capabilities['distance_available']
 
 
@@ -334,13 +423,28 @@ def test_running_stage_logs_and_separate_results_stages_are_owner_scoped(polymer
     guest=TestClient(app)
     response=guest.post(f'/internal/polymer-md/jobs/{job_id}/authorize-start',json=StartAuthorizationRequest(**submit.model_dump(),worker_instance_id='a'*32).model_dump(mode='json'),headers={'Authorization':'Bearer test-only-token'})
     assert response.status_code==200
-    repo.apply_snapshot(WorkerSnapshot(**{key:getattr(submit,key) for key in ('job_id','attempt_token','request_sha256','enqueue_sequence')},worker_instance_id='a'*32,status='running',stage_runs=[{'stage_run_id':'monomer_qm-1','stage':'monomer_qm','status':'running'}]))
+    repo.apply_snapshot(WorkerSnapshot(**{key:getattr(submit,key) for key in ('job_id','attempt_token','request_sha256','enqueue_sequence')},worker_instance_id='a'*32,status='running',stage='monomer_qm',stage_runs=[{'stage_run_id':'monomer_qm-1','stage':'monomer_qm','status':'running','started_at':datetime.now(timezone.utc)}]))
+    # Use a real, bounded local tail. No Worker log proxy is involved.
+    job = repo.get_service_job(job_id)
+    root = Path(app.state.settings.polymer_md_download_spool_root) / 'logs'
+    attempt = root / job_id / job['attempt_token']
+    run = job['stage_runs'][0]
+    journal = {'request': {key: job[key] for key in ('job_id', 'attempt_token', 'owner_user_id', 'request_sha256', 'enqueue_sequence')},
+               'snapshot': {**{key: job[key] for key in ('job_id', 'attempt_token', 'worker_instance_id', 'status', 'stage')},
+                            'stage_runs': job['stage_runs']}, 'running_scope': {'stage_run_id': 'monomer_qm-1'}}
+    log = attempt / 'stages/monomer_qm-1/runner.log'
+    log.parent.mkdir(parents=True)
+    log.write_text('real mounted log tail\n')
+    (attempt / 'journal.json').write_text(json.dumps(journal, default=str))
+    app.state.settings.polymer_md_artifact_root = str(root)
     for path in ('results','stages','stages/monomer_qm-1/logs'):
         url=f'/api/v1/polymer-md/jobs/{job_id}/'+path
         assert bob.get(url).status_code==404
         assert alice.get(url).status_code==200
     logs=alice.get(f'/api/v1/polymer-md/jobs/{job_id}/stages/monomer_qm-1/logs?tail_lines=7')
-    assert logs.json()['stage_run_id']=='monomer_qm-1' and app.state.polymer_md_worker_client.calls[-1][2]['tail_lines']==7
+    assert logs.json()['stage_run_id']=='monomer_qm-1' and logs.json()['tail_lines']==7
+    assert logs.json()['job_id'] == job_id and logs.json()['lines'] == ['real mounted log tail']
+    assert logs.json()['resolved_source'] == 'runner' and app.state.polymer_md_worker_client.calls == []
     assert alice.get(f'/api/v1/polymer-md/jobs/{job_id}/stages/monomer_qm-1/logs?tail_lines=1001').status_code==422
     assert alice.get(f'/api/v1/polymer-md/jobs/{job_id}/stages/other/logs').status_code==404
 
@@ -354,7 +458,8 @@ def test_stage_scoped_artifacts_and_verified_download(polymer_api):
     submit=submit_request(internal)
     repo.authorize_start(StartAuthorizationRequest(**submit.model_dump(),worker_instance_id="a"*32))
     stage={"stage_run_id":"eq-1","stage":"eq","status":"completed","quality_status":"passed"}
-    artifact={"artifact_id":"eq-json","stage_run_id":"eq-1","kind":"json","filename":"eq.json","media_type":"application/json","size_bytes":2,"sha256":hashlib.sha256(b"{}").hexdigest()}
+    artifact={"artifact_id":"eq-json","stage_run_id":"eq-1","kind":"json","filename":"eq.json","media_type":"application/json","size_bytes":2,"sha256":hashlib.sha256(b"{}").hexdigest(),
+              "storage_ref":f'{job_id}/{submit.attempt_token}/science/eq/eq.json'}
     snapshot=WorkerSnapshot(**{k:getattr(submit,k) for k in ("job_id","attempt_token","request_sha256","enqueue_sequence")},worker_instance_id="a"*32,status="completed",cleanup_confirmed=True,stage_runs=[stage],artifacts=[artifact])
     repo.apply_snapshot(snapshot)
     assert bob.get(f"/api/v1/polymer-md/jobs/{job_id}/artifacts/eq-json").status_code==404
@@ -364,6 +469,8 @@ def test_stage_scoped_artifacts_and_verified_download(polymer_api):
     assert alice.get(f"/api/v1/polymer-md/jobs/{job_id}/stages/other/trajectory").status_code==404
     frame=alice.get(f"/api/v1/polymer-md/jobs/{job_id}/stages/eq-1/trajectory")
     assert frame.status_code==200 and frame.json()['job_id']==job_id
+    assert app.state.polymer_md_analysis_client.calls[-1][0] == 'trajectory'
+    assert app.state.polymer_md_worker_client.calls == []
     assert alice.delete(f"/api/v1/polymer-md/jobs/{job_id}/artifacts").status_code==200
     assert alice.get(f"/api/v1/polymer-md/jobs/{job_id}/artifacts/eq-json").status_code==404
     assert alice.get(f"/api/v1/polymer-md/jobs/{job_id}").status_code==200

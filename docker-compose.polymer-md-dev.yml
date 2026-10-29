@@ -12,6 +12,7 @@ services:
       OPENBLAS_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       POLYMER_MD_WORKER_UDS: /app/polymer-md-socket/worker.sock
+      POLYMER_MD_ANALYSIS_UDS: /app/polymer-md-socket/analysis.sock
       POLYMER_MD_ARTIFACT_ROOT: /app/polymer-md-artifacts
       POLYMER_MD_START_AUTHORIZATION_TOKEN: "${POLYMER_MD_START_AUTHORIZATION_TOKEN:?source the private polymer MD dev.env}"
     volumes:

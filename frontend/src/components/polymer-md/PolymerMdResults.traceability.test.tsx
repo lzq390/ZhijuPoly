@@ -5,13 +5,16 @@ import type { PolymerMdCapabilities, PolymerMdJob, PolymerMdStage } from "../../
 import { defaultPolymerMdUserConfiguration, mapPolymerMdUserConfiguration } from "./userConfiguration";
 import { POLYMER_MD_DEFAULTS } from "./config";
 import { PolymerMdResults } from "./PolymerMdResults";
+import { retireSession } from "../../auth/session";
 
-const api = vi.hoisted(() => ({ trajectory: vi.fn(), distance: vi.fn(), logs: vi.fn(), download: vi.fn() }));
+const api = vi.hoisted(() => ({ trajectory: vi.fn(), distance: vi.fn(), logs: vi.fn(), download: vi.fn(), bundle: vi.fn() }));
 vi.mock("../../services/polymerMdApi", () => ({ fetchPolymerMdTrajectory: api.trajectory, calculatePolymerMdDistance: api.distance, fetchPolymerMdStageLogs: api.logs, downloadPolymerMdArtifact: api.download }));
+vi.mock("../../services/polymerMdArtifactBundle", () => ({ downloadPolymerMdArtifacts: api.bundle }));
 vi.mock("../md-simulation/MdSeriesChart", () => ({ MdSeriesChart: ({ xAxisLabel }: { xAxisLabel?: string }) => <div>科学曲线{xAxisLabel ? `：${xAxisLabel}` : ""}</div> }));
-vi.mock("../md-simulation/MdTrajectoryExplorer", () => ({ MdTrajectoryExplorer: ({ onSelectionChange, onCalculate, distance }: {
-  onSelectionChange: (value: unknown) => void; onCalculate: () => void; distance: unknown;
-}) => <div><button onClick={() => onSelectionChange([{ atom_id: 1 }, { atom_id: 2 }])}>选取原子对</button><button onClick={onCalculate}>读取距离</button>{distance ? <p>距离分析已返回</p> : null}</div> }));
+vi.mock("../md-simulation/MdTrajectoryExplorer", () => ({ MdTrajectoryExplorer: ({ onSelectionChange, onCalculate, distance, selections, distanceLoading, distanceEnabled, distanceError, distanceNotice, distanceElapsedSeconds, onCancelDistance }: {
+  onSelectionChange: (value: unknown) => void; onCalculate: () => void; distance: unknown; selections: Array<{ atom_id: number } | null>;
+  distanceLoading: boolean; distanceEnabled: boolean; distanceError: string | null; distanceNotice?: string; distanceElapsedSeconds?: number; onCancelDistance?: () => void;
+}) => <div><button onClick={() => onSelectionChange([{ atom_id: 1 }, { atom_id: 2 }])}>选取原子对</button><button onClick={() => onSelectionChange([{ atom_id: 320 }, { atom_id: 1253 }])}>选择320与1253</button><p aria-label="已选原子">{selections.map(atom => atom?.atom_id ?? "未选").join("/")}</p><button disabled={!distanceEnabled || distanceLoading} onClick={onCalculate}>读取距离</button>{distanceLoading ? <><p role="status">已等待 {distanceElapsedSeconds} 秒</p><button onClick={onCancelDistance}>停止等待分析</button></> : null}{distanceError ? <p role="alert">{distanceError}</p> : null}{distanceNotice ? <p role="status">{distanceNotice}</p> : null}{distance ? <p>距离分析已返回</p> : null}</div> }));
 
 const windowData = { start_ps: 2100, stop_ps: 5000, requested_start_ps: 2000, observed_start_ps: 0, observed_stop_ps: 5000, sample_count: 2901 };
 const fingerprint = "a".repeat(64), currentFingerprint = "b".repeat(64);
@@ -33,7 +36,7 @@ function expandEvidence(container: HTMLElement) {
   return within(root);
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => { vi.clearAllMocks(); api.bundle.mockReset(); api.download.mockReset(); });
 afterEach(cleanup);
 
 describe("polymer MD result provenance", () => {
@@ -250,11 +253,17 @@ describe("polymer MD result provenance", () => {
     const view = page(job({ scientific_request: { ...POLYMER_MD_DEFAULTS, n_chain: 4,
       model_configuration: { version: 1, mode: "blend", components: [
         { id: "A", smiles: "*CC*", n_chain: 2, chain_length: { mode: "dp", value: 20 } },
-        { id: "B", smiles: "*CCO*", n_chain: 2, chain_length: { mode: "dp", value: 20 } }
+        { id: "B", smiles: "*CCO*", n_chain: 2, chain_length: { mode: "molecular_weight", value: 6400 } }
       ] } }, stage_runs: [stage("build", { results: { chain_species: [
         { n_chain: 2, actual_dp: 20, sequence: ["A"], actual_tacticity: "isotactic" },
         { n_chain: 2, actual_dp: 20, sequence: ["B"], actual_tacticity: "none" }
       ] } })] }));
+    const requestSummary = screen.getByRole("region", { name: "任务请求摘要" });
+    expect(within(requestSummary).getByLabelText("组分 A SMILES").textContent).toBe("*CC*");
+    expect(within(requestSummary).getByLabelText("组分 B SMILES").textContent).toBe("*CCO*");
+    expect(requestSummary.textContent).toContain("请求 2 条链 · 每链目标聚合度 DP 20");
+    expect(requestSummary.textContent).toContain("请求 2 条链 · 每链目标分子量 6,400 g/mol");
+    expect(requestSummary.textContent).not.toContain("每链目标 1,000 个原子");
     const evidence = expandEvidence(view.container);
     const composition = within(evidence.getByRole("region", { name: "实际组成与分子量统计" }));
     expect(within(composition.getByText("链种 1 的实际构建").closest("details")!).getByText("全同")).toBeTruthy();
@@ -452,6 +461,84 @@ describe("polymer MD result provenance", () => {
     expect(api.logs).not.toHaveBeenCalled();
   });
 
+  it("keeps loaded coordinates, atoms and a successful distance through analysis unavailability and freshness recovery", async () => {
+    api.trajectory.mockImplementation(async (id, stageId, offset) => ({ job_id: id, stage_run_id: stageId, total_frames: 20001, frames: [{ frame_index: offset, time_ps: 0,
+      points: [{ atom_id: 320, chain_id: 1, atom_type: "C", x: 0, y: 0, z: 0 }, { atom_id: 1253, chain_id: 2, atom_type: "C", x: 1, y: 0, z: 0 }] }] }));
+    api.distance.mockImplementation(async (id, stageId) => ({ job_id: id, stage_run_id: stageId, frames: [0], time_ps: [0], distance: [1] }));
+    const value = job({ stage_runs: [stage("eq3")] });
+    const ready = { ...capabilities, trajectory_available: true, distance_available: true, analysis: { status: "ready" as const, timeout_seconds: 90 } };
+    const props = { job: value, busy: null, onCancel: vi.fn(), onClear: vi.fn(), onDelete: vi.fn() };
+    const view = render(<PolymerMdResults {...props} capabilities={ready} serviceCheck="confirmed" />);
+    fireEvent.click(screen.getByRole("tab", { name: "构象" })); await screen.findByRole("button", { name: "选择320与1253" });
+    fireEvent.click(screen.getByRole("button", { name: "选择320与1253" })); fireEvent.click(screen.getByRole("button", { name: "读取距离" }));
+    await screen.findByText("距离分析已返回");
+    expect(api.distance.mock.calls[0][2]).toEqual({ atom_id_1: 320, atom_id_2: 1253, frame_count: 20001, use_pbc: true });
+    view.rerender(<PolymerMdResults {...props} capabilities={{ ...ready, trajectory_available: false, distance_available: false, analysis: { status: "unavailable", timeout_seconds: 90 } }} serviceCheck="confirmed" />);
+    expect(screen.getByLabelText("已选原子").textContent).toBe("320/1253");
+    expect(screen.getByText("距离分析已返回")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "读取距离" }) as HTMLButtonElement).disabled).toBe(true);
+    view.rerender(<PolymerMdResults {...props} capabilities={ready} serviceCheck="unconfirmed" />);
+    expect(screen.getByText(/服务状态待确认，已保留/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "读取距离" }) as HTMLButtonElement).disabled).toBe(true);
+    view.rerender(<PolymerMdResults {...props} capabilities={{ ...ready, analysis: { status: "busy", timeout_seconds: 90 } }} serviceCheck="confirmed" />);
+    expect((screen.getByRole("button", { name: "读取距离" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(api.trajectory).toHaveBeenCalledOnce(); expect(api.distance).toHaveBeenCalledOnce();
+    api.distance.mockRejectedValueOnce(Object.assign(new Error("worker wording"), { code: "analysis_timeout" }));
+    fireEvent.click(screen.getByRole("button", { name: "读取距离" })); await screen.findByRole("alert");
+    expect(screen.getByRole("alert").textContent).toContain("距离分析超过服务处理时限");
+    expect(screen.getByText("距离分析已返回")).toBeTruthy();
+    expect(screen.getByLabelText("已选原子").textContent).toBe("320/1253");
+  });
+
+  it("locks distance submissions, stops only waiting and bounds hung analysis to 100 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      api.trajectory.mockImplementation(async (id, stageId) => ({ job_id: id, stage_run_id: stageId, total_frames: 1, frames: [{ frame_index: 0, time_ps: 0,
+        points: [{ atom_id: 1, chain_id: 1, atom_type: "C", x: 0, y: 0, z: 0 }] }] }));
+      let resolveOld!: (value: unknown) => void;
+      api.distance.mockImplementationOnce(() => new Promise(done => { resolveOld = done; })).mockImplementationOnce(() => new Promise(() => {}));
+      const cancel = vi.fn();
+      const value = job({ stage_runs: [stage("eq3")] });
+      render(<PolymerMdResults job={value} capabilities={{ ...capabilities, trajectory_available: true, distance_available: true }} busy={null} onCancel={cancel} onClear={vi.fn()} onDelete={vi.fn()} />);
+      fireEvent.click(screen.getByRole("tab", { name: "构象" })); await act(async () => {});
+      fireEvent.click(screen.getByRole("button", { name: "选取原子对" }));
+      act(() => { fireEvent.click(screen.getByRole("button", { name: "读取距离" })); fireEvent.click(screen.getByRole("button", { name: "读取距离" })); });
+      expect(api.distance).toHaveBeenCalledOnce();
+      await act(() => vi.advanceTimersByTimeAsync(3000));
+      expect(screen.getByText("已等待 3 秒")).toBeTruthy();
+      const oldSignal = api.distance.mock.calls[0][3] as AbortSignal;
+      fireEvent.click(screen.getByRole("button", { name: "停止等待分析" }));
+      expect(oldSignal.aborted).toBe(true); expect(cancel).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("已选原子").textContent).toBe("1/2");
+      expect(screen.getByText(/后台可能仍在处理/)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "读取距离" }));
+      await act(async () => resolveOld({ job_id: value.job_id, stage_run_id: "eq3-1", frames: [0], time_ps: [0], distance: [1] }));
+      expect(screen.queryByText("距离分析已返回")).toBeNull();
+      await act(() => vi.advanceTimersByTimeAsync(100000));
+      expect((api.distance.mock.calls[1][3] as AbortSignal).aborted).toBe(true);
+      expect(screen.getByRole("alert").textContent).toContain("距离分析等待已超时");
+      expect((screen.getByRole("button", { name: "读取距离" }) as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.getByLabelText("已选原子").textContent).toBe("1/2");
+      expect(api.distance).toHaveBeenCalledTimes(2);
+    } finally { cleanup(); vi.useRealTimers(); api.distance.mockReset(); }
+  });
+
+  it("clears an earlier trajectory read error when independent analysis readiness recovers", async () => {
+    const value = job({ stage_runs: [stage("eq3")] });
+    api.trajectory.mockRejectedValueOnce(new Error("初次轨迹读取失败")).mockResolvedValueOnce({ job_id: value.job_id, stage_run_id: "eq3-1", total_frames: 1,
+      frames: [{ frame_index: 0, time_ps: 0, points: [{ atom_id: 1, chain_id: 1, atom_type: "C", x: 0, y: 0, z: 0 }] }] });
+    const ready = { ...capabilities, trajectory_available: true, distance_available: true };
+    const props = { job: value, busy: null, onCancel: vi.fn(), onClear: vi.fn(), onDelete: vi.fn() };
+    const view = render(<PolymerMdResults {...props} capabilities={ready} serviceCheck="confirmed" />);
+    fireEvent.click(screen.getByRole("tab", { name: "构象" }));
+    await screen.findByText("初次轨迹读取失败");
+    view.rerender(<PolymerMdResults {...props} capabilities={{ ...ready, analysis: { status: "unavailable", timeout_seconds: 90 } }} serviceCheck="confirmed" />);
+    view.rerender(<PolymerMdResults {...props} capabilities={ready} serviceCheck="confirmed" />);
+    await screen.findByRole("button", { name: "选取原子对" });
+    expect(screen.queryByText("初次轨迹读取失败")).toBeNull();
+    expect(api.trajectory).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps output actions bound to the selected job and retains scientific properties after file cleanup", async () => {
     const value = job({ results: { density: .923 }, artifacts: [{ artifact_id: "density", stage_run_id: "eq3-1", filename: "density.csv", kind: "results", media_type: "text/csv", size_bytes: 200, sha256: "a".repeat(64) }] });
     const cancel = vi.fn(), clear = vi.fn(), remove = vi.fn();
@@ -459,7 +546,7 @@ describe("polymer MD result provenance", () => {
     expect(screen.queryByRole("button", { name: "下载 density.csv" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "输出文件" }));
     fireEvent.click(screen.getByRole("button", { name: "下载 density.csv" }));
-    await waitFor(() => expect(api.download).toHaveBeenCalledWith(value.job_id, "density", "density.csv", 200));
+    await waitFor(() => expect(api.download).toHaveBeenCalledWith(value.job_id, "density", "density.csv", 200, expect.any(AbortSignal)));
     expect(clear).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "清理输出文件" }));
     expect(clear).toHaveBeenCalledOnce();
@@ -468,6 +555,7 @@ describe("polymer MD result provenance", () => {
     view.rerender(<PolymerMdResults job={{ ...value, artifact_state: "deleted" }} capabilities={capabilities} busy={null} onCancel={cancel} onClear={clear} onDelete={remove} />);
     expect(screen.queryByRole("button", { name: "下载 density.csv" })).toBeNull();
     expect((screen.getByRole("button", { name: "清理输出文件" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "下载所有产物" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("tab", { name: "构象" }));
     expect(screen.getByText(/当前服务尚未提供轨迹浏览/)).toBeTruthy();
     expect(api.trajectory).not.toHaveBeenCalled();
@@ -475,5 +563,115 @@ describe("polymer MD result provenance", () => {
     expect(screen.getByText("0.923")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "删除任务记录" }));
     expect(remove).toHaveBeenCalledOnce();
+  });
+
+  it("distinguishes same-named artifacts by saved stages while preserving every ID in individual and bundle downloads", async () => {
+    const stages = [stage("eq1"), stage("eq3", { stage_run_id: "eq3-2", attempt: 2 })];
+    const files = ["eq1-1", "eq3-2", "unknown-stage"].map((stageId, index) => ({ artifact_id: `trajectory-${index}`, stage_run_id: stageId,
+      filename: "trajectory.xtc", kind: "trajectory", media_type: "application/octet-stream", size_bytes: 100 + index, sha256: "a".repeat(64) }));
+    const value = job({ stage_runs: stages, artifacts: files });
+    page(value);
+    fireEvent.click(screen.getByRole("tab", { name: "输出文件" }));
+    const buttons = screen.getAllByRole("button", { name: "下载 trajectory.xtc" });
+    expect(buttons).toHaveLength(3);
+    const origins = buttons.map(button => document.getElementById(button.getAttribute("aria-describedby")!)?.textContent);
+    expect(origins).toEqual(["来源：EQ1 松弛与装填 · 第 1 次", "来源：EQ3 平衡采样 · 第 2 次", "来源：阶段来源未记录"]);
+    for (const [index, button] of buttons.entries()) {
+      fireEvent.click(button);
+      await waitFor(() => expect(api.download).toHaveBeenLastCalledWith(value.job_id, files[index].artifact_id, "trajectory.xtc", files[index].size_bytes, expect.any(AbortSignal)));
+      await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    }
+    expect(api.download).toHaveBeenCalledTimes(3);
+    api.bundle.mockResolvedValueOnce(undefined);
+    fireEvent.click(screen.getByRole("button", { name: "下载所有产物" }));
+    await waitFor(() => expect(api.bundle).toHaveBeenCalledWith(value.job_id, files, expect.any(Function), expect.any(AbortSignal)));
+    expect(api.bundle.mock.calls[0][1].map((file: { artifact_id: string }) => file.artifact_id)).toEqual(files.map(file => file.artifact_id));
+  });
+
+  it("shows loading inside the trajectory region until the requested frame is ready", async () => {
+    let resolve!: (value: unknown) => void;
+    api.trajectory.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const value = job({ stage_runs: [stage("eq3")] });
+    page(value, { ...capabilities, trajectory_available: true });
+    expect(api.trajectory).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "构象" }));
+    const trajectory = within(screen.getByRole("region", { name: "正式任务轨迹" }));
+    expect(trajectory.getByRole("status").textContent).toContain("正在读取当前任务的轨迹…");
+    expect((trajectory.getByRole("button", { name: "下一帧" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "选取原子对" })).toBeNull();
+    await act(async () => resolve({ job_id: value.job_id, stage_run_id: "eq3-1", total_frames: 1,
+      frames: [{ frame_index: 0, time_ps: 2, points: [{ atom_id: 1, chain_id: 1, atom_type: "C", x: 0, y: 0, z: 0 }] }] }));
+    expect(trajectory.queryByText("正在读取当前任务的轨迹…")).toBeNull();
+    expect(trajectory.getByRole("button", { name: "选取原子对" })).toBeTruthy();
+    expect(trajectory.getByText((_, element) => element?.tagName === "P" && element.textContent === "采样坐标：1 个原子 · 2 ps")).toBeTruthy();
+  });
+
+  it("saves a fixed current-artifact batch, locks competing actions and cancels only the download", async () => {
+    const files = ["density.csv", "equilibrium.log"].map((filename, index) => ({ artifact_id: `file-${index}`, stage_run_id: "eq3-1", filename, kind: "results", media_type: "text/plain", size_bytes: 200, sha256: "a".repeat(64) }));
+    const value = job({ artifacts: files });
+    let progress!: (done: number, total: number) => void, reject!: (error: Error) => void;
+    api.bundle.mockImplementation((_id, _files, update) => { progress = update; return new Promise((_done, fail) => { reject = fail; }); });
+    const cancel = vi.fn(), clear = vi.fn(), remove = vi.fn();
+    const view = render(<PolymerMdResults job={value} capabilities={capabilities} busy={null} onCancel={cancel} onClear={clear} onDelete={remove} />);
+    fireEvent.click(screen.getByRole("tab", { name: "输出文件" }));
+    const all = screen.getByRole("button", { name: "下载所有产物" });
+    fireEvent.click(all); fireEvent.click(all);
+    expect(api.bundle).toHaveBeenCalledOnce();
+    const [id, snapshot, , signal] = api.bundle.mock.calls[0];
+    expect(id).toBe(value.job_id);
+    expect(snapshot).toEqual(files);
+    expect(snapshot).not.toBe(files);
+    expect(snapshot[0]).not.toBe(files[0]);
+    for (const name of ["下载 density.csv", "清理输出文件", "删除任务记录"]) {
+      const button = screen.getByRole("button", { name }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true); fireEvent.click(button);
+    }
+    expect(api.download).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled();
+    view.rerender(<PolymerMdResults job={{ ...value, artifacts: [...files, { ...files[0], artifact_id: "new-file", filename: "later.csv" }] }} capabilities={capabilities} busy={null} onCancel={cancel} onClear={clear} onDelete={remove} />);
+    expect(snapshot).toHaveLength(2);
+    await act(async () => progress(1, 2));
+    expect(screen.getByRole("status", { name: "产物下载进度" }).textContent).toContain("已接收 1 / 2 个产物");
+    fireEvent.click(screen.getByRole("button", { name: "取消下载" }));
+    expect((signal as AbortSignal).aborted).toBe(true);
+    await act(async () => { progress(2, 2); reject(new Error("迟到下载错误")); });
+    expect(screen.queryByRole("status", { name: "产物下载进度" })).toBeNull();
+    expect(screen.queryByText("迟到下载错误")).toBeNull();
+    expect((all as HTMLButtonElement).disabled).toBe(false);
+    let finishSingle!: () => void;
+    api.download.mockImplementationOnce(() => new Promise<void>(done => { finishSingle = done; }));
+    fireEvent.click(screen.getByRole("button", { name: "下载 density.csv" }));
+    expect((all as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(all);
+    expect(api.bundle).toHaveBeenCalledOnce();
+    const singleSignal = api.download.mock.calls[0][4] as AbortSignal;
+    fireEvent.click(screen.getByRole("button", { name: "取消下载" }));
+    expect(singleSignal.aborted).toBe(true);
+    await act(async () => finishSingle());
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it.each(["job", "session", "unmount"] as const)("aborts bundle downloads on %s changes and rejects late state writes", async change => {
+    const artifact = { artifact_id: "file", stage_run_id: "eq3-1", filename: "density.csv", kind: "results", media_type: "text/csv", size_bytes: 200, sha256: "a".repeat(64) };
+    const value = job({ artifacts: [artifact], status: "running" });
+    let progress!: (done: number, total: number) => void, reject!: (error: Error) => void;
+    api.bundle.mockImplementation((_id, _files, update) => { progress = update; return new Promise((_done, fail) => { reject = fail; }); });
+    const view = page(value);
+    fireEvent.click(screen.getByRole("tab", { name: "输出文件" }));
+    expect(screen.getByText(/任务仍在运行，本次下载/).textContent).toContain("当前已生成的 1 个产物");
+    fireEvent.click(screen.getByRole("button", { name: "下载所有产物" }));
+    const signal = api.bundle.mock.calls[0][3] as AbortSignal;
+    if (change === "job") view.rerender(<PolymerMdResults job={{ ...value, job_id: "another-job" }} capabilities={capabilities} busy={null} onCancel={vi.fn()} onClear={vi.fn()} onDelete={vi.fn()} />);
+    else if (change === "session") act(() => retireSession());
+    else view.unmount();
+    expect(signal.aborted).toBe(true);
+    await act(async () => { progress(1, 1); reject(new Error("旧任务下载错误")); });
+    expect(screen.queryByRole("status", { name: "产物下载进度" })).toBeNull();
+    expect(screen.queryByText("旧任务下载错误")).toBeNull();
+    if (change === "job") {
+      api.bundle.mockResolvedValueOnce(undefined);
+      fireEvent.click(screen.getByRole("button", { name: "下载所有产物" }));
+      await waitFor(() => expect(api.bundle).toHaveBeenLastCalledWith("another-job", [artifact], expect.any(Function), expect.any(AbortSignal)));
+    }
   });
 });

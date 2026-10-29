@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import math
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ import secrets
 import stat
 import tempfile
 from uuid import UUID
-from typing import get_args
+from typing import Literal, get_args
 
 import anyio
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -23,8 +24,10 @@ from task_usage import entitlements
 from app.postgres_database import PostgresUnavailableError
 from app.services.polymer_md_repository import PolymerMdError, public_job, submit_request
 from app.services.polymer_md_acceptance_registry import acceptance_summary
+from app.services.polymer_md_analysis_client import ANALYSIS_TIMEOUT_SECONDS
+from app.services.polymer_md_logs import read_stage_logs
 from polymer_md.capabilities import get_capability_catalog, get_user_configuration_spec, get_model_configuration_spec, get_post_equilibrium_protocols
-from polymer_md.contracts import Forcefield, NativeConfiguration, ScientificRequest, StartAuthorizationRequest, StartAuthorizationResponse, DistanceRequest
+from polymer_md.contracts import Artifact, Forcefield, NativeConfiguration, ScientificRequest, StartAuthorizationRequest, StartAuthorizationResponse, DistanceRequest
 
 
 class DomainRoute(APIRoute):
@@ -196,17 +199,31 @@ async def capabilities(request: Request):
     settings = request.app.state.settings
     enabled = settings.polymer_md_dev_enabled
     schema_ready = enabled and await asyncio.to_thread(_repository(request).schema_ready)
-    health = None
-    if enabled and request.app.state.polymer_md_worker_client:
+    async def execution_health():
+        if not enabled or not request.app.state.polymer_md_worker_client:
+            return None
         try:
-            health = await _worker(request).health()
-        except PolymerMdError:
-            pass
+            return await asyncio.wait_for(_worker(request).health(), timeout=6)
+        except (PolymerMdError, asyncio.TimeoutError):
+            return None
+
+    async def analysis_health():
+        client = getattr(request.app.state, "polymer_md_analysis_client", None)
+        if not enabled or client is None:
+            return None
+        try:
+            return await asyncio.wait_for(client.health(), timeout=1.5)
+        except (PolymerMdError, asyncio.TimeoutError):
+            return None
+
+    health, analysis_health_value = await asyncio.gather(execution_health(), analysis_health())
     worker_ready = bool(health and (health.get("ready") is True or health.get("status") == "ready"))
-    # Draining closes execution admission while completed artifacts remain
-    # readable. Older workers expose only the combined readiness flag.
-    analysis_ready = bool(health and (health.get("analysis_ready") is True
-        if "analysis_ready" in health else worker_ready))
+    # Analysis has its own process and health. Its failure cannot close MD
+    # execution admission, and an unavailable reader never falls back to MD.
+    analysis_ready = bool(analysis_health_value and analysis_health_value.get("ready") is True)
+    analysis = {"status": "unavailable", "timeout_seconds": ANALYSIS_TIMEOUT_SECONDS}
+    if analysis_ready:
+        analysis["status"] = "busy" if analysis_health_value.get("active", 0) else "ready"
     runtime = _public_runtime(health)
     protocol = _scientific_protocol()
     acceptance = await asyncio.to_thread(acceptance_summary,
@@ -232,6 +249,7 @@ async def capabilities(request: Request):
             "capability_catalog":get_capability_catalog(),
             "limits":{"per_owner_active":1,"global_active":3,"execution":1,"max_total_atoms":20000,"max_rnemd_atoms":60000},
             "trajectory_available":analysis_ready, "distance_available":analysis_ready,
+            "analysis":analysis,
             "worker": {"ready":worker_ready,"protocol_version":1} if health else None}
 
 
@@ -280,11 +298,16 @@ async def get_stages(request: Request, job_id: str):
 
 
 @router.get("/jobs/{job_id}/stages/{stage_run_id}/logs")
-async def stage_logs(request: Request, job_id: str, stage_run_id: str, tail_lines: int = Query(100,ge=1,le=1000)):
+async def stage_logs(request: Request, job_id: str, stage_run_id: str, tail_lines: int = Query(200,ge=1,le=1000),
+                     source: Literal["auto", "engine", "stdout", "runner"] = Query("auto")):
     job=await _owned(request,job_id)
     if job["artifact_state"]!="available" or not any(stage["stage_run_id"]==stage_run_id for stage in job["stage_runs"]):
         raise PolymerMdError("stage_not_found", "该任务的阶段日志不存在。", 404)
-    return await _worker(request).stage_logs(submit_request(job),stage_run_id,tail_lines=tail_lines)
+    root = getattr(request.app.state.settings, "polymer_md_artifact_root", "")
+    if not root:
+        raise PolymerMdError("stage_logs_unavailable", "阶段日志只读存储尚未配置。", 503)
+    value = await asyncio.to_thread(read_stage_logs, root, job, stage_run_id, tail_lines=tail_lines, source=source)
+    return {**value, "job_id": job["job_id"]}
 
 
 @router.post("/jobs/{job_id}/cancel", status_code=202)
@@ -438,21 +461,73 @@ async def download_artifact(request: Request, job_id: str, artifact_id: str):
 
 async def _stage_job(request, job_id, stage_run_id):
     job = await _owned(request, job_id)
-    if job["artifact_state"] != "available" or not any(s["stage_run_id"] == stage_run_id for s in job["stage_runs"]) or not any(a["stage_run_id"] == stage_run_id for a in job["artifacts"]):
+    if job["artifact_state"] != "available" or not any(s["stage_run_id"] == stage_run_id and s["status"] == "completed" for s in job["stage_runs"]) or not any(a["stage_run_id"] == stage_run_id for a in job["artifacts"]):
         raise PolymerMdError("stage_not_found", "该任务的阶段轨迹不存在。", 404)
     return job
+
+
+def _analysis_artifacts(job, stage_run_id):
+    values = []
+    for item in job["artifacts"]:
+        if item["stage_run_id"] != stage_run_id:
+            continue
+        if item.get("attempt_token", job["attempt_token"]) != job["attempt_token"]:
+            raise PolymerMdError("artifact_integrity_mismatch", "轨迹产物执行身份不匹配。", 409)
+        try:
+            descriptor = Artifact.model_validate({key: item[key] for key in Artifact.model_fields if key in item})
+        except ValueError as exc:
+            raise PolymerMdError("artifact_integrity_mismatch", "轨迹产物清单无效。", 409) from exc
+        if not descriptor.storage_ref or not descriptor.storage_ref.startswith(f'{job["job_id"]}/{job["attempt_token"]}/'):
+            raise PolymerMdError("artifact_integrity_mismatch", "轨迹产物存储身份不匹配。", 409)
+        values.append(descriptor.model_dump(mode="json"))
+    return sorted(values, key=lambda item: item["artifact_id"])
+
+
+async def _analyze_stage(request, job, stage_run_id, operation, **options):
+    client = getattr(request.app.state, "polymer_md_analysis_client", None)
+    if client is None:
+        raise PolymerMdError("analysis_service_unavailable", "轨迹分析服务暂不可用，已有模拟任务不受影响。", 503)
+    stage = next(item for item in job["stage_runs"] if item["stage_run_id"] == stage_run_id)
+    artifacts = _analysis_artifacts(job, stage_run_id)
+    payload = {"job_id": job["job_id"], "attempt_token": job["attempt_token"],
+               "stage_run_id": stage_run_id, "stage": stage["stage"], "artifacts": artifacts, **options}
+    async def wait_disconnected():
+        # Body validation has completed. Wait for the ASGI disconnect directly;
+        # polling Request.is_disconnected can swallow task cancellation inside
+        # its AnyIO CancelScope and leave a successful response waiting forever.
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+    value = await client.analyze(operation, payload, wait_disconnected=wait_disconnected)
+    if value.get("job_id") != job["job_id"] or value.get("stage_run_id") != stage_run_id:
+        raise PolymerMdError("invalid_stage_response", "轨迹分析返回了其他任务或阶段。", 502)
+    try:
+        json.dumps(value, allow_nan=False)
+    except (ValueError, TypeError) as exc:
+        raise PolymerMdError("invalid_stage_response", "轨迹分析返回了无效数值。", 502) from exc
+    if operation == "distance":
+        expected = options["distance"]
+        if any(value.get(key) != expected[key] for key in ("atom_id_1", "atom_id_2", "use_pbc")) or value.get("unit") != "A":
+            raise PolymerMdError("invalid_stage_response", "距离结果与当前原子选择不匹配。", 502)
+    elif value.get("frame_index") != options["frame_index"]:
+        raise PolymerMdError("invalid_stage_response", "轨迹结果与当前帧不匹配。", 502)
+    # The service uses private immutable copies. Recheck current access and
+    # deletion/attempt fencing before publishing a completed calculation.
+    current = await _stage_job(request, job["job_id"], stage_run_id)
+    if current["attempt_token"] != job["attempt_token"] or _analysis_artifacts(current, stage_run_id) != artifacts:
+        raise PolymerMdError("artifact_integrity_mismatch", "轨迹执行身份或产物已变化，请刷新任务。", 409)
+    return value
 
 
 @router.get("/jobs/{job_id}/stages/{stage_run_id}/trajectory")
 async def trajectory(request: Request, job_id: str, stage_run_id: str, frame_index: int = Query(0, ge=0), offset: int | None = Query(None, ge=0), limit: int = Query(10000, ge=1, le=10000)):
     job = await _stage_job(request, job_id, stage_run_id)
-    return await _worker(request).stage_json(submit_request(job), stage_run_id, frame_index=frame_index if offset is None else offset,limit=limit)
+    return await _analyze_stage(request, job, stage_run_id, "trajectory", frame_index=frame_index if offset is None else offset, limit=limit)
 
 
 @router.post("/jobs/{job_id}/stages/{stage_run_id}/distance")
 async def distance(request: Request, job_id: str, stage_run_id: str, payload: DistanceRequest):
     job = await _stage_job(request, job_id, stage_run_id)
-    return await _worker(request).stage_json(submit_request(job), stage_run_id, distance=payload)
+    return await _analyze_stage(request, job, stage_run_id, "distance", distance=payload.model_dump(mode="json"))
 
 
 @internal_router.post("/jobs/{job_id}/authorize-start", response_model=StartAuthorizationResponse)

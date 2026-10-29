@@ -128,7 +128,7 @@ describe("polymer scientific configuration controls", () => {
     expect(optimizationField.querySelector(".np-polymer-md-field-help")?.getAttribute("title")).toContain("Br → 6-31G(d,p)");
   });
 
-  it("compiles all fourteen shared analyses while their descriptions remain optional reading", () => {
+  it("keeps the fourteen included analyses collapsed by default and opens their groups without per-property dropdowns", () => {
     const changed = vi.fn();
     render(<Form changed={changed} />);
     expect(payload()?.calculation).toBe("basic");
@@ -142,14 +142,26 @@ describe("polymer scientific configuration controls", () => {
     }
     expect(screen.queryByRole("button", { name: "全部选择" })).toBeNull();
     expect(screen.queryByRole("button", { name: "清空选择" })).toBeNull();
-    const disclosure = screen.getByText("查看 14 项基础物性及说明").closest("details")!;
+    const disclosure = screen.getByText("平衡后自动分析", { exact: false }).closest("details")!;
+    const summary = disclosure.querySelector("summary")!;
     expect(disclosure.open).toBe(false);
-    fireEvent.click(screen.getByText("查看 14 项基础物性及说明"));
+    expect(summary.textContent).toContain("14 项默认包含");
+    fireEvent.click(summary);
     expect(disclosure.open).toBe(true);
-    const density = field.options.find(option => option.value === "density")!;
-    const help = screen.getByLabelText(`${density.label}说明`).closest("details")!;
-    fireEvent.click(screen.getByLabelText(`${density.label}说明`));
-    expect(within(help).getByText(density.description)).toBeTruthy();
+    const base = disclosure.closest("section")!;
+    expect(within(base).getAllByRole("listitem")).toHaveLength(14);
+    for (const category of ["热力学", "结构", "输运", "介电"]) {
+      expect(within(base).getByRole("region", { name: category })).toBeTruthy();
+    }
+    expect(within(base).getByText("平衡态质量密度")).toBeTruthy();
+    expect(disclosure.querySelector("details")).toBeNull();
+    fireEvent.click(summary);
+    expect(disclosure.open).toBe(false);
+    expect(selected()).toEqual([...POLYMER_MD_BASE_PROPERTIES].sort());
+    const additions = screen.getByRole("heading", { name: "追加计算" }).closest("section")!;
+    expect(additions.querySelector("details")).toBeNull();
+    expect(within(additions).queryByText("说明")).toBeNull();
+    expect(within(additions).getByText(/至少需要两条链/)).toBeTruthy();
     expect(changed).not.toHaveBeenCalled();
   });
 
@@ -193,6 +205,16 @@ describe("polymer scientific configuration controls", () => {
     expect(selected()).toEqual([...POLYMER_MD_BASE_PROPERTIES, "tg"].sort());
     fireEvent.click(checkbox("玻璃化转变温度 Tg"));
     expect(selected()).toEqual([...POLYMER_MD_BASE_PROPERTIES].sort());
+  });
+
+  it("preserves every base analysis and all additional outputs when all five options are selected", () => {
+    render(<Form />);
+    for (const label of ["MP/RNEMD总热导率", "静态近似折射率", "热扩散率", "玻璃化转变温度 Tg", "溶解度参数 SP / 内聚能密度 CED"]) {
+      fireEvent.click(checkbox(label));
+    }
+    expect(screen.getAllByRole("checkbox").every(item => (item as HTMLInputElement).checked)).toBe(true);
+    expect(payload()?.calculation).toBe("basic_tc");
+    expect(selected()).toEqual([...POLYMER_MD_BASE_PROPERTIES, "thermal_conductivity", "thermal_diffusivity", "refractive_index", "tg", "sp_total", "sp_ced"].sort());
   });
 
   it("requires explicit removal of molecular targets and separately repairs unknown choices", () => {

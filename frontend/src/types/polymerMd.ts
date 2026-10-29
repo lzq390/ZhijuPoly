@@ -136,6 +136,7 @@ export type PolymerMdCapabilities = {
   supported_tacticities: string[];
   trajectory_available: boolean;
   distance_available: boolean;
+  analysis?: { status: "ready" | "busy" | "unavailable"; timeout_seconds: number };
   parameter_schema?: Record<string, unknown>;
   parameter_defaults?: Partial<PolymerMdRequest>;
   scientific_protocol?: Record<string, unknown>;

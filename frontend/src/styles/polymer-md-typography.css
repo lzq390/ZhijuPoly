@@ -9,6 +9,9 @@
   --np-pmd-type-label: 12px;
   --np-pmd-type-caption: 11px;
   --np-pmd-type-tab: 13px;
+  --np-pmd-type-tab-caption: 10.5px;
+  --np-pmd-type-mode-title: 13px;
+  --np-pmd-type-header-description: 13px;
   --np-pmd-type-code: 12px;
   --np-pmd-type-metric: 17px;
 }
@@ -47,6 +50,12 @@
   font-size: var(--np-pmd-type-title);
 }
 
+.np-polymer-md-page.np-md-simulation .np-pmd-view-heading h2 {
+  font-weight: 750;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
 .np-polymer-md-page.np-md-simulation :is(button, select),
 .np-polymer-md-dialog-layer button {
   font-family: var(--font-body);
@@ -81,6 +90,11 @@
   line-height: 1.65;
 }
 
+.np-polymer-md-page.np-md-simulation .np-pmd-view-heading p {
+  font-size: var(--np-pmd-type-header-description);
+  line-height: 1.55;
+}
+
 .np-polymer-md-page.np-md-simulation :is(label, legend, summary, .np-polymer-md-field, .np-polymer-md-automatic-property > span) {
   font-family: var(--font-body);
   font-size: var(--np-pmd-type-label);
@@ -88,13 +102,13 @@
   letter-spacing: normal;
 }
 
-.np-polymer-md-page.np-md-simulation :is(legend, .np-polymer-md-field > span, .np-polymer-md-base-disclosure > summary, .np-polymer-md-disclosure > summary strong, .np-polymer-md-evidence > summary) {
+.np-polymer-md-page.np-md-simulation :is(legend, .np-polymer-md-field > span, .np-polymer-md-disclosure > summary strong, .np-polymer-md-evidence > summary) {
   font-weight: 600;
 }
 
 .np-polymer-md-page.np-md-simulation :is(small, .np-polymer-md-muted, .np-polymer-md-system-limits, .np-polymer-md-applicability, .np-polymer-md-method, .np-polymer-md-tag, .np-polymer-md-protocol-list dt),
 .np-polymer-md-page.np-md-simulation .np-polymer-md-field :is(small, em),
-.np-polymer-md-page.np-md-simulation .np-polymer-md-choice-help :is(summary, p, small),
+.np-polymer-md-page.np-md-simulation .np-polymer-md-base-groups header > span,
 .np-polymer-md-page.np-md-simulation .np-polymer-md-property-selection-groups .np-polymer-md-flow-description,
 .np-polymer-md-page.np-md-simulation :is(.np-polymer-md-platform-note, .np-polymer-md-readonly) > p {
   font-family: var(--font-body);
@@ -112,11 +126,19 @@
   letter-spacing: normal;
 }
 
-.np-polymer-md-page.np-md-simulation :is(.np-pmd-main-tabs, .np-pmd-mode-switch, .np-pmd-result-tabs) strong {
+.np-polymer-md-page.np-md-simulation :is(.np-pmd-main-tabs, .np-pmd-result-tabs) strong {
   font: 700 var(--np-pmd-type-tab)/1.5 var(--font-heading);
 }
 
-.np-polymer-md-page.np-md-simulation :is(.np-pmd-main-tabs, .np-pmd-mode-switch, .np-pmd-result-tabs) small {
+.np-polymer-md-page.np-md-simulation .np-pmd-mode-switch strong {
+  font: 700 var(--np-pmd-type-mode-title)/1.5 var(--font-heading);
+}
+
+.np-polymer-md-page.np-md-simulation :is(.np-pmd-main-tabs, .np-pmd-mode-switch) small {
+  font: 500 var(--np-pmd-type-tab-caption)/1.5 var(--font-body);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-result-tabs small {
   font: 400 var(--np-pmd-type-caption)/1.5 var(--font-body);
 }
 
@@ -139,6 +161,46 @@
 .np-polymer-md-page.np-md-simulation :is(.np-pmd-submit-summary > span, .np-pmd-submit-summary > small, .np-pmd-pagination, .np-pmd-task-identity > small, .np-pmd-task-identity > span) {
   font-size: var(--np-pmd-type-caption);
   line-height: 1.65;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-task-center :is(.np-pmd-task-stage, .np-pmd-task-components, .np-pmd-task-count, .np-pmd-job-timing) {
+  font-size: var(--np-pmd-type-label);
+  line-height: 1.55;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-task-center .np-pmd-task-row-header h4 {
+  font-size: var(--np-pmd-type-title);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-task-center :is(.np-pmd-task-id, .np-pmd-task-id code, .np-pmd-task-conditions small, .np-pmd-task-calculations > span:first-child, .np-pmd-task-components > div > span, .np-pmd-job-timing dt) {
+  font-size: var(--np-pmd-type-caption);
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-task-center :is(.np-pmd-task-conditions strong, .np-pmd-task-calculations > span:last-child, .np-pmd-task-actions > button) {
+  font-size: var(--np-pmd-type-body);
+  line-height: 1.55;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-task-center .np-pmd-task-conditions strong {
+  font-family: var(--font-body);
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-task-center .np-pmd-task-technical {
+  font-family: var(--font-mono);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-task-center .np-pmd-task-components > div > span { font-weight: 600; }
+.np-polymer-md-page.np-md-simulation .np-pmd-task-center .np-pmd-task-time-panel .np-pmd-job-timing dd {
+  font-size: var(--np-pmd-type-subsection);
+  font-weight: 600;
+  line-height: 1.5;
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-task-center .np-pmd-task-time-panel .np-pmd-job-timing > div:last-child dd {
+  font-size: var(--np-pmd-type-metric);
+  font-weight: 700;
 }
 
 .np-polymer-md-page.np-md-simulation .np-pmd-submit-summary > strong {
@@ -168,6 +230,63 @@
   font-size: var(--np-pmd-type-metric);
   font-weight: 600;
   line-height: 1.5;
+}
+
+/* Formal results keep the same title, data and supporting-text roles as tasks. */
+.np-polymer-md-page.np-md-simulation .np-pmd-results .np-pmd-job-header h2 {
+  font-size: var(--np-pmd-type-title);
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results .np-pmd-result-section-heading h3 {
+  font-size: var(--np-pmd-type-section);
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results :is(.np-pmd-result-id, .np-pmd-result-id code, .np-pmd-job-header p, .np-pmd-result-section-heading > span, .np-pmd-result-section-heading p, .np-pmd-request-facts dt, .np-pmd-request-components > div > span, .np-pmd-request-targets > span:first-child, .np-pmd-stage-state, .np-pmd-stage-quality, .np-pmd-stage-progress, .np-pmd-result-time-panel dt) {
+  font-size: var(--np-pmd-type-caption);
+  font-weight: 400;
+  line-height: 1.6;
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results :is(.np-pmd-request-facts dd, .np-pmd-request-facts code) {
+  font-size: var(--np-pmd-type-body);
+  font-weight: 600;
+  line-height: 1.6;
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results .np-pmd-request-components > div > span {
+  font-weight: 600;
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results :is(.np-pmd-request-components code, .np-polymer-md-artifacts li code) {
+  font-size: var(--np-pmd-type-code);
+  font-weight: 400;
+  line-height: 1.65;
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results :is(.np-pmd-stage-heading strong, .np-pmd-result-time-panel dd) {
+  font-size: var(--np-pmd-type-subsection);
+  font-weight: 600;
+  line-height: 1.5;
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results .np-pmd-result-stage-chip {
+  font-size: var(--np-pmd-type-label);
+  font-weight: 600;
+  line-height: 1.5;
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results :is(.np-pmd-property-value, .np-pmd-result-time-panel .np-pmd-job-timing > div:last-child dd) {
+  font-size: var(--np-pmd-type-metric);
+  font-weight: 600;
+  line-height: 1.5;
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results .np-pmd-property-value.is-unavailable {
+  font-size: var(--np-pmd-type-body);
+  font-weight: 400;
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results .np-pmd-property-table thead th {
+  font-size: var(--np-pmd-type-label);
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results .np-pmd-trajectory-loading strong {
+  font: 600 18px/1.5 var(--font-body);
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results .np-pmd-artifact-current {
+  font-size: var(--np-pmd-type-caption);
+}
+.np-polymer-md-page.np-md-simulation .np-pmd-results .np-pmd-log-provenance {
+  font-size: var(--np-pmd-type-caption);
 }
 
 /* Scientific strings and numeric values share the same monospace family. */
@@ -393,12 +512,18 @@
     --np-pmd-type-label: 15px;
     --np-pmd-type-caption: 14px;
     --np-pmd-type-tab: 18px;
+    --np-pmd-type-tab-caption: 14px;
+    --np-pmd-type-mode-title: 17px;
+    --np-pmd-type-header-description: 17px;
     --np-pmd-type-code: 15px;
     --np-pmd-type-metric: 21px;
   }
 
   .np-polymer-md-page.np-md-simulation .np-md-series-chart svg text {
     font-size: 11px;
+  }
+  .np-polymer-md-page.np-md-simulation .np-pmd-results .np-pmd-trajectory-loading strong {
+    font-size: 22px;
   }
 }
 
@@ -408,6 +533,6 @@
   }
 
   .np-polymer-md-page.np-md-simulation .np-pmd-view-heading h2 {
-    font-size: var(--np-pmd-type-section);
+    font-size: 15px;
   }
 }

@@ -70,4 +70,14 @@ describe("formal polymer MD transport", () => {
     expect(fetch.mock.calls[0][0]).toBe("/api/v1/polymer-md/jobs/j/stages/eq3-1/logs?tail_lines=200");
     expect(fetch.mock.calls[0][1].headers.get("X-Session-Context")).toBe("test-session"); expect(data.lines).toEqual(["running"]);
   });
+  it("requests a selected log source without changing the legacy signature or losing provenance", async () => {
+    const value = { job_id: "j", stage_run_id: "eq3-1", lines: ["LAMMPS output"], truncated: false, available: true,
+      resolved_source: "stdout", source_label: "engine.stdout", read_at: "2026-10-29T00:00:00Z", available_sources: [{ source: "stdout", label: "engine.stdout" }] };
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(value))); vi.stubGlobal("fetch", fetch);
+    const controller = new AbortController();
+    const response = await fetchPolymerMdStageLogs("j", "eq3-1", controller.signal, { source: "stdout" });
+    expect(fetch.mock.calls[0][0]).toBe("/api/v1/polymer-md/jobs/j/stages/eq3-1/logs?tail_lines=200&source=stdout");
+    expect(fetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    expect(response).toEqual(value);
+  });
 });

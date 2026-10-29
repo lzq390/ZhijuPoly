@@ -95,6 +95,7 @@ from app.services.monomer_dft_worker_client import MonomerDftWorkerClient
 from app.routers.polymer_md import router as polymer_md_router, internal_router as polymer_md_internal_router
 from app.services.polymer_md_repository import PolymerMdRepository
 from app.services.polymer_md_worker_client import PolymerMdWorkerClient
+from app.services.polymer_md_analysis_client import PolymerMdAnalysisClient
 from app.services.polymer_md_reconciler import PolymerMdReconciler
 from app.services.monomer_job_retention import (
     MonomerDftJobDeletionService,
@@ -202,6 +203,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await api_app.state.polymer_md_reconciler.stop()
             if api_app.state.polymer_md_worker_client is not None:
                 await api_app.state.polymer_md_worker_client.close()
+            if api_app.state.polymer_md_analysis_client is not None:
+                await api_app.state.polymer_md_analysis_client.close()
             await api_app.state.monomer_md_retention_reaper.stop()
             await api_app.state.monomer_dft_retention_reaper.stop()
             if api_app.state.monomer_dft_readiness_controller is not None:
@@ -345,6 +348,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.polymer_md_worker_client = (
         PolymerMdWorkerClient(app_settings.polymer_md_worker_uds)
         if app_settings.polymer_md_dev_enabled and app_settings.polymer_md_worker_uds else None
+    )
+    app.state.polymer_md_analysis_client = (
+        PolymerMdAnalysisClient(app_settings.polymer_md_analysis_uds)
+        if app_settings.polymer_md_dev_enabled and app_settings.polymer_md_analysis_uds else None
     )
     app.state.polymer_md_reconciler = (
         PolymerMdReconciler(app.state.polymer_md_repository, app.state.polymer_md_worker_client)

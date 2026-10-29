@@ -1,10 +1,17 @@
 import { PolymerMdSelect } from "./PolymerMdSelect";
-import { Activity, Atom, Ban, BarChart3, Download, Files, Gauge, Trash2 } from "lucide-react";
+import { PolymerMdJobTiming, polymerMdTimingIsLive, usePolymerMdClock } from "./PolymerMdJobTiming";
+import { PolymerMdRequestSummary } from "./PolymerMdRequestSummary";
+import { PolymerMdNumericText } from "./PolymerMdNumericText";
+import { PolymerMdStageLogs as StageLogs } from "./PolymerMdStageLogs";
+import type { PolymerMdServiceCheck } from "./serviceState";
+import { boundedPolymerMdRead, POLYMER_MD_ANALYSIS_TIMEOUT_MS, PolymerMdAnalysisTimeout, polymerMdReadError } from "../../services/polymerMdAnalysisRequest";
+import { Activity, Atom, Ban, BarChart3, Download, Files, Gauge, LoaderCircle, Trash2 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { getSessionEpoch } from "../../auth/session";
+import { getSessionEpoch, onSessionRetired } from "../../auth/session";
 import type { MdDemoAtomDistanceResponse, MdDemoSeries } from "../../types";
 import type { PolymerMdCapabilities, PolymerMdDistance, PolymerMdJob, PolymerMdRequest, PolymerMdStage, PolymerMdTrajectory } from "../../types/polymerMd";
-import { calculatePolymerMdDistance, downloadPolymerMdArtifact, fetchPolymerMdStageLogs, fetchPolymerMdTrajectory } from "../../services/polymerMdApi";
+import { calculatePolymerMdDistance, downloadPolymerMdArtifact, fetchPolymerMdTrajectory } from "../../services/polymerMdApi";
+import { downloadPolymerMdArtifacts } from "../../services/polymerMdArtifactBundle";
 import { MdSeriesChart } from "../md-simulation/MdSeriesChart";
 import { MdTrajectoryExplorer, type MdAtomSelectionSlots } from "../md-simulation/MdTrajectoryExplorer";
 import { QUALITY_LABELS, stageLabel, STATUS_LABELS, terminalJob } from "./config";
@@ -363,42 +370,7 @@ function StageProgress({
   const progress = record(stage.results.progress) ? stage.results.progress : {};
   const current = progress.current_step ?? stage.results.current_step ?? stage.results.step ?? stage.quality.current_step;
   const total = progress.total_steps ?? stage.results.total_steps ?? stage.quality.total_steps;
-  return typeof current === "number" && Number.isFinite(current) ? <span>已完成 {current.toLocaleString()} 步{typeof total === "number" && Number.isFinite(total) ? ` / ${total.toLocaleString()} 步` : ""}</span> : null;
-}
-function StageLogs({ jobId, stage, available }: { jobId: string; stage: PolymerMdStage; available: boolean }) {
-  const [open, setOpen] = useState(false), [refresh, setRefresh] = useState(0);
-  const [lines, setLines] = useState<string[]>([]), [truncated, setTruncated] = useState(false);
-  const [error, setError] = useState<string | null>(null), [loading, setLoading] = useState(false);
-  useEffect(() => {
-    if (!open || !available) return;
-    let disposed = false, controller: AbortController | null = null;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const epoch = getSessionEpoch();
-    async function load() {
-      const active = new AbortController();
-      controller = active;
-      setLoading(true);
-      try {
-        const value = await fetchPolymerMdStageLogs(jobId, stage.stage_run_id, active.signal);
-        if (disposed || active.signal.aborted || epoch !== getSessionEpoch()) return;
-        if (value.job_id !== jobId || value.stage_run_id !== stage.stage_run_id || !Array.isArray(value.lines) || !value.lines.every(line => typeof line === "string")) throw new Error("日志与当前任务阶段不匹配。");
-        setLines(value.lines);
-        setTruncated(value.truncated);
-        setError(null);
-      } catch (e) {
-        if (!disposed && !active.signal.aborted && epoch === getSessionEpoch()) setError(e instanceof Error ? e.message : "读取阶段日志失败。");
-      } finally {
-        if (!disposed && !active.signal.aborted && epoch === getSessionEpoch()) {
-          setLoading(false);
-          if (stage.status === "running") timer = setTimeout(() => void load(), 5000);
-        }
-      }
-    }
-    void load();
-    return () => { disposed = true; controller?.abort(); if (timer) clearTimeout(timer); };
-  }, [jobId, stage.stage_run_id, stage.status, open, refresh, available]);
-  if (!available) return <p className="np-polymer-md-muted">阶段日志已清理。</p>;
-  return <details className="np-polymer-md-logs" onToggle={event => setOpen(event.currentTarget.open)}><summary>查看{stageLabel(stage.stage)}日志</summary>{open ? <><div className="np-polymer-md-actions"><button type="button" disabled={loading} onClick={() => setRefresh(value => value + 1)}>刷新阶段日志</button><small>最多显示末尾 200 行{truncated ? " · 更早内容已截断" : ""}</small></div>{error ? <p role="alert">{error}</p> : null}{lines.length ? <pre tabIndex={0}>{lines.join("\n")}</pre> : <p role="status">{loading ? "正在读取阶段日志…" : "当前阶段暂未产生可读日志。"}</p>}</> : null}</details>;
+  return typeof current === "number" && Number.isFinite(current) ? <span className="np-pmd-stage-progress"><PolymerMdNumericText>{`已完成 ${current.toLocaleString()} 步${typeof total === "number" && Number.isFinite(total) ? ` / ${total.toLocaleString()} 步` : ""}`}</PolymerMdNumericText></span> : null;
 }
 function DistanceSampling({ value }: { value: unknown }) {
   const sampling = record(value) ? value : {};
@@ -408,10 +380,12 @@ function DistanceSampling({ value }: { value: unknown }) {
 }
 function Trajectory({
   job,
-  capabilities
+  capabilities,
+  serviceConfirmed
 }: {
   job: PolymerMdJob;
   capabilities: PolymerMdCapabilities;
+  serviceConfirmed: boolean;
 }) {
   const stages = job.stage_runs.filter(s => s.status === "completed" && (/^eq[123]$/.test(s.stage) || /^additional_\d+$/.test(s.stage) || s.stage === "tc"));
   const [stageId, setStageId] = useState(() => stages.find(s => /^eq\d+$/.test(s.stage))?.stage_run_id ?? stages[0]?.stage_run_id ?? "");
@@ -424,17 +398,30 @@ function Trajectory({
     [distanceError, setDistanceError] = useState<string | null>(null),
     [distanceLoading, setDistanceLoading] = useState(false);
   const [distanceSampling, setDistanceSampling] = useState<unknown>(null);
+  const [distanceNotice, setDistanceNotice] = useState<string | null>(null), [distanceStarted, setDistanceStarted] = useState(0);
+  const distanceNow = usePolymerMdClock(distanceLoading);
   const [pbc, setPbc] = useState(true);
+  const identity = useRef(getSessionEpoch()), trajectoryAbort = useRef<AbortController | null>(null);
+  const analysisHealthy = !capabilities.analysis || ["ready", "busy"].includes(capabilities.analysis.status);
+  const trajectoryReady = identity.current === getSessionEpoch() && serviceConfirmed && analysisHealthy && capabilities.trajectory_available;
+  const distanceReady = identity.current === getSessionEpoch() && serviceConfirmed && analysisHealthy && capabilities.distance_available;
   const distanceAbort = useRef<AbortController | null>(null),
     generation = useRef(0);
   const clearDistance = () => {
     ++generation.current;
     distanceAbort.current?.abort();
+    distanceAbort.current = null;
     setDistance(null);
     setDistanceSampling(null);
     setDistanceError(null);
+    setDistanceNotice(null);
     setDistanceLoading(false);
   };
+  useEffect(() => onSessionRetired(() => {
+    trajectoryAbort.current?.abort();
+    clearDistance();
+    setTrajectory(null); setSelections([null, null]); setError(null); setLoading(false);
+  }), []);
   useEffect(() => {
     if (!stages.some(s => s.stage_run_id === stageId)) {
       setStageId(stages[0]?.stage_run_id ?? "");
@@ -446,53 +433,70 @@ function Trajectory({
     setError(null);
     setSelections([null, null]);
     clearDistance();
-    if (!stageId || !capabilities.trajectory_available) return;
+    return () => { ++generation.current; distanceAbort.current?.abort(); distanceAbort.current = null; };
+    // Scientific identity changes retire selections; service observations do not.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job.job_id, stageId, offset]);
+  useEffect(() => {
+    if (!stageId || !trajectoryReady) { setLoading(false); return; }
+    if (trajectory?.job_id === job.job_id && trajectory.stage_run_id === stageId && trajectory.frames[0]?.frame_index === offset) return;
     const c = new AbortController(),
       epoch = getSessionEpoch();
+    let disposed = false;
+    trajectoryAbort.current = c;
     setLoading(true);
-    void fetchPolymerMdTrajectory(job.job_id, stageId, offset, c.signal).then(value => {
+    setError(null);
+    void boundedPolymerMdRead(c, POLYMER_MD_ANALYSIS_TIMEOUT_MS, signal => fetchPolymerMdTrajectory(job.job_id, stageId, offset, signal)).then(value => {
       if (c.signal.aborted || epoch !== getSessionEpoch()) return;
       if (value.job_id !== job.job_id || value.stage_run_id !== stageId) throw new Error("轨迹与当前任务阶段不匹配，请刷新。");
       setTrajectory(value);
+      setError(null);
     }).catch(e => {
-      if (!c.signal.aborted && epoch === getSessionEpoch()) setError(e instanceof Error ? e.message : "读取轨迹失败。");
+      if (!disposed && epoch === getSessionEpoch() && (!c.signal.aborted || e instanceof PolymerMdAnalysisTimeout)) setError(polymerMdReadError(e, "轨迹读取"));
     }).finally(() => {
-      if (!c.signal.aborted && epoch === getSessionEpoch()) setLoading(false);
+      if (!disposed && epoch === getSessionEpoch()) setLoading(false);
     });
     return () => {
+      disposed = true;
       c.abort();
-      ++generation.current;
-      distanceAbort.current?.abort();
+      if (trajectoryAbort.current === c) trajectoryAbort.current = null;
     };
     // Only a selected scientific identity or frame change retires its coordinates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job.job_id, stageId, offset, capabilities.trajectory_available]);
+  }, [job.job_id, stageId, offset, trajectoryReady]);
   const frame = trajectory?.frames[0];
-  async function calculate() {
-    if (!frame || !trajectory || !selections[0] || !selections[1] || !capabilities.distance_available) return;
-    const c = new AbortController();
+  function stopWaiting() {
+    ++generation.current;
     distanceAbort.current?.abort();
+    distanceAbort.current = null;
+    setDistanceLoading(false);
+    setDistanceNotice("已停止等待本次分析；后台可能仍在处理，请稍后再试。");
+  }
+  async function calculate() {
+    const [firstAtom, secondAtom] = selections;
+    if (!frame || !trajectory || !firstAtom || !secondAtom || !distanceReady || distanceAbort.current) return;
+    const c = new AbortController();
     distanceAbort.current = c;
     const revision = ++generation.current,
       epoch = getSessionEpoch();
     setDistanceLoading(true);
+    setDistanceStarted(Date.now());
     setDistanceError(null);
-    setDistance(null);
-    setDistanceSampling(null);
+    setDistanceNotice(null);
     try {
-      const d: PolymerMdDistance = await calculatePolymerMdDistance(job.job_id, stageId, {
-        atom_id_1: selections[0].atom_id,
-        atom_id_2: selections[1].atom_id,
+      const d: PolymerMdDistance = await boundedPolymerMdRead(c, POLYMER_MD_ANALYSIS_TIMEOUT_MS, signal => calculatePolymerMdDistance(job.job_id, stageId, {
+        atom_id_1: firstAtom.atom_id,
+        atom_id_2: secondAtom.atom_id,
         frame_count: trajectory.total_frames,
         use_pbc: pbc
-      }, c.signal);
+      }, signal));
       if (c.signal.aborted || revision !== generation.current || epoch !== getSessionEpoch()) return;
       if (d.job_id !== job.job_id || d.stage_run_id !== stageId || d.distance.length !== d.time_ps.length || d.distance.some(v => !Number.isFinite(v))) throw new Error("距离结果与当前阶段不匹配或数据不完整。");
       if (!d.distance.length) throw new Error("当前阶段没有可分析的距离样本。");
       setDistanceSampling(d.sampling ?? null);
       setDistance({
-        atom_1: d.atom_1 ?? selections[0],
-        atom_2: d.atom_2 ?? selections[1],
+        atom_1: d.atom_1 ?? firstAtom,
+        atom_2: d.atom_2 ?? secondAtom,
         frames: d.frames,
         time_ps: d.time_ps,
         distance: d.distance,
@@ -517,25 +521,28 @@ function Trajectory({
         }
       });
     } catch (e) {
-      if (!c.signal.aborted && revision === generation.current && epoch === getSessionEpoch()) setDistanceError(e instanceof Error ? e.message : "距离分析失败。");
+      if (revision === generation.current && epoch === getSessionEpoch() && (!c.signal.aborted || e instanceof PolymerMdAnalysisTimeout)) setDistanceError(polymerMdReadError(e, "距离分析"));
     } finally {
-      if (!c.signal.aborted && revision === generation.current && epoch === getSessionEpoch()) setDistanceLoading(false);
+      if (distanceAbort.current === c && revision === generation.current && epoch === getSessionEpoch()) {
+        distanceAbort.current = null;
+        setDistanceLoading(false);
+      }
     }
   }
-  if (!capabilities.trajectory_available) return <p className="np-polymer-md-muted">当前服务尚未提供轨迹浏览；已有产物可在下方下载。</p>;
-  if (!stages.length) return <p>平衡阶段完成后可浏览轨迹。</p>;
-  return <section aria-label="正式任务轨迹"><div className="np-polymer-md-actions"><PolymerMdSelect label="轨迹阶段" value={stageId} options={stages.map(s => ({ value: s.stage_run_id, label: `${stageLabel(s.stage)} · 第 ${s.attempt} 次` }))} onChange={stageRunId => {
+  if (!frame && !trajectoryReady) return <div className="np-pmd-result-empty"><Atom aria-hidden="true" /><h3>轨迹暂不可浏览</h3><p className="np-polymer-md-muted">当前服务尚未提供轨迹浏览；已有产物可在下方下载。</p></div>;
+  if (!stages.length) return <div className="np-pmd-result-empty"><Atom aria-hidden="true" /><h3>等待已完成的平衡轨迹</h3><p>平衡阶段完成后可浏览轨迹。</p></div>;
+  return <section aria-label="正式任务轨迹"><div className="np-polymer-md-actions np-pmd-trajectory-controls"><PolymerMdSelect label="轨迹阶段" value={stageId} options={stages.map(s => ({ value: s.stage_run_id, label: `${stageLabel(s.stage)} · 第 ${s.attempt} 次` }))} onChange={stageRunId => {
           clearDistance();
           setStageId(stageRunId);
           setOffset(0);
-        }} /><button disabled={loading || offset <= 0} onClick={() => setOffset(v => v - 1)}>上一帧</button><span>第 {offset + 1} 帧{trajectory ? ` / ${trajectory.total_frames} 帧` : ""}</span><button disabled={loading || !trajectory || offset + 1 >= trajectory.total_frames} onClick={() => setOffset(v => v + 1)}>下一帧</button></div>{loading ? <p role="status">正在读取当前任务的轨迹…</p> : null}{error ? <p role="alert">{error}</p> : null}{frame ? <><p>采样坐标：{frame.points.length.toLocaleString()} 个原子 · {frame.time_ps} ps</p>{capabilities.distance_available ? <label><input type="checkbox" checked={pbc} onChange={e => {
+        }} /><button disabled={loading || !trajectoryReady || offset <= 0} onClick={() => setOffset(v => v - 1)}>上一帧</button><span><PolymerMdNumericText>{`第 ${offset + 1} 帧${trajectory ? ` / ${trajectory.total_frames} 帧` : ""}`}</PolymerMdNumericText></span><button disabled={loading || !trajectoryReady || !trajectory || offset + 1 >= trajectory.total_frames} onClick={() => setOffset(v => v + 1)}>下一帧</button></div>{loading ? <div className="np-pmd-trajectory-loading" role="status"><LoaderCircle className="np-sw-spin" aria-hidden="true" /><strong>正在读取当前任务的轨迹…</strong><p>轨迹较大时，请稍候。</p></div> : null}{error ? <p role="alert">{error}</p> : null}{frame ? <><p className="np-pmd-trajectory-caption"><PolymerMdNumericText>{`采样坐标：${frame.points.length.toLocaleString()} 个原子 · ${frame.time_ps} ps`}</PolymerMdNumericText></p>{!distanceReady ? <p className="np-pmd-analysis-availability" role="status">{!serviceConfirmed ? "服务状态待确认，已保留当前轨迹与原子选择；确认后可继续分析。" : "分析服务暂不可用，已保留当前轨迹与原子选择。"}</p> : capabilities.analysis?.status === "busy" ? <p className="np-pmd-analysis-availability" role="status">分析服务繁忙，新请求按可用名额受理。</p> : null}<label><input type="checkbox" checked={pbc} onChange={e => {
           setPbc(e.target.checked);
           clearDistance();
-        }} /> 距离使用周期边界</label> : <p>当前服务未提供原子距离分析。</p>}{distance ? <DistanceSampling value={distanceSampling} /> : null}<MdTrajectoryExplorer key={`${job.job_id}:${stageId}`} points={frame.points} timePs={frame.time_ps} stageLabel={stageLabel(stages.find(s => s.stage_run_id === stageId)?.stage ?? "")} frameLabel={`第 ${frame.frame_index + 1} 帧`} distanceUsePbc={pbc} selections={selections} distance={distance} distanceLoading={distanceLoading} distanceError={distanceError} onSelectionChange={s => {
+        }} /> 距离使用周期边界</label>{distance ? <DistanceSampling value={distanceSampling} /> : null}<MdTrajectoryExplorer key={`${job.job_id}:${stageId}`} points={frame.points} timePs={frame.time_ps} stageLabel={stageLabel(stages.find(s => s.stage_run_id === stageId)?.stage ?? "")} frameLabel={`第 ${frame.frame_index + 1} 帧`} distanceUsePbc={pbc} selections={selections} distance={distance} distanceLoading={distanceLoading} distanceError={distanceError} distanceNotice={distanceNotice} distanceElapsedSeconds={Math.max(0, Math.floor((distanceNow - distanceStarted) / 1000))} onCancelDistance={stopWaiting} onSelectionChange={s => {
         setSelections(s);
         clearDistance();
-      }} distanceEnabled={capabilities.distance_available} onCalculate={() => {
-        if (capabilities.distance_available) void calculate();
+      }} distanceEnabled={distanceReady} onCalculate={() => {
+        if (distanceReady) void calculate();
       }} onClear={() => {
         setSelections([null, null]);
         clearDistance();
@@ -552,6 +559,7 @@ const RESULT_TABS = [
 export function PolymerMdResults({
   job,
   capabilities,
+  serviceCheck,
   busy,
   onCancel,
   onClear,
@@ -559,40 +567,79 @@ export function PolymerMdResults({
 }: {
   job: PolymerMdJob;
   capabilities: PolymerMdCapabilities | null;
+  serviceCheck?: PolymerMdServiceCheck;
   busy: string | null;
   onCancel: () => void;
   onClear: () => void;
   onDelete: () => void;
 }) {
-  const [downloadError, setDownloadError] = useState<string | null>(null),
-    [downloading, setDownloading] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<{ kind: "single" | "all"; artifactId?: string; done: number; total: number } | null>(null);
+  const downloadOperation = useRef<{ controller: AbortController; jobId: string; epoch: number } | null>(null);
+  const currentJobId = useRef(job.job_id);
+  currentJobId.current = job.job_id;
   const [tab, setTab] = useState<ResultTab>("overview");
+  const now = usePolymerMdClock(tab === "overview" && polymerMdTimingIsLive(job));
   const resultId = useId();
   const tabId = (id: ResultTab) => `${resultId}-tab-${id}`;
   const panelId = `${resultId}-panel`;
   const identity = useRef(getSessionEpoch());
   const isTerminal = terminalJob(job.status);
-  const artifacts = job.artifact_state === "deleted" || job.artifact_state === "delete_requested" ? [] : job.artifacts;
+  const artifactsAvailable = job.artifact_state !== "deleted" && job.artifact_state !== "delete_requested";
+  const artifacts = artifactsAvailable ? job.artifacts : [];
+  const artifactStages = useMemo(() => new Map(job.stage_runs.map(stage => [stage.stage_run_id, stage])), [job.stage_runs]);
   const rows = useMemo(() => properties(job.results), [job.results]);
   const series = useMemo(() => [...seriesFrom(job.results), ...job.stage_runs.flatMap(s => seriesFrom(s.results))], [job.results, job.stage_runs]);
-  async function download(id: string, filename: string, size: number) {
-    const epoch = getSessionEpoch();
-    setDownloading(id);
+  useEffect(() => {
+    const stop = () => {
+      downloadOperation.current?.controller.abort();
+      downloadOperation.current = null;
+      setDownloading(null);
+      setDownloadError(null);
+    };
+    stop();
+    const unsubscribe = onSessionRetired(stop);
+    return () => {
+      unsubscribe();
+      downloadOperation.current?.controller.abort();
+      downloadOperation.current = null;
+    };
+  }, [job.job_id, artifactsAvailable]);
+  function cancelDownload() {
+    downloadOperation.current?.controller.abort();
+    downloadOperation.current = null;
+    setDownloading(null);
+  }
+  async function download(artifact?: PolymerMdJob["artifacts"][number]) {
+    if (downloadOperation.current || busy || !artifacts.length || identity.current !== getSessionEpoch()) return;
+    // A running job can publish further files while this fixed batch is saved.
+    const snapshot = artifacts.map(item => ({ ...item }));
+    const operation = { controller: new AbortController(), jobId: job.job_id, epoch: getSessionEpoch() };
+    downloadOperation.current = operation;
+    const current = () => downloadOperation.current === operation && !operation.controller.signal.aborted
+      && operation.jobId === currentJobId.current && operation.epoch === getSessionEpoch();
+    setDownloading({ kind: artifact ? "single" : "all", artifactId: artifact?.artifact_id, done: 0, total: artifact ? 1 : snapshot.length });
     setDownloadError(null);
     try {
-      await downloadPolymerMdArtifact(job.job_id, id, filename, size);
+      if (artifact) await downloadPolymerMdArtifact(operation.jobId, artifact.artifact_id, artifact.filename, artifact.size_bytes, operation.controller.signal);
+      else await downloadPolymerMdArtifacts(operation.jobId, snapshot, (done, total) => {
+        if (current()) setDownloading({ kind: "all", done, total });
+      }, operation.controller.signal);
     } catch (e) {
-      if (epoch === getSessionEpoch() && !(e instanceof DOMException && e.name === "AbortError")) setDownloadError(e instanceof Error ? e.message : "下载失败。");
+      if (current() && !(e instanceof DOMException && e.name === "AbortError")) setDownloadError(e instanceof Error ? e.message : "下载失败。");
     } finally {
-      if (epoch === getSessionEpoch()) setDownloading(null);
+      if (current()) {
+        downloadOperation.current = null;
+        setDownloading(null);
+      }
     }
   }
   return <section className="np-polymer-md-card np-pmd-results" aria-label="正式任务详情">
     <header className="np-pmd-job-header">
-      <div className="np-pmd-job-header__identity"><h2>任务详情</h2><code className="np-polymer-md-id">{job.job_id}</code><p>结果对应当前任务的提交参数；修改配置不会改变这份结果。</p></div>
+      <div className="np-pmd-job-header__identity"><span className="np-pmd-result-mark"><Gauge aria-hidden="true" /></span><div><h2>任务详情</h2><div className="np-pmd-result-id"><span>任务 ID</span><code className="np-polymer-md-id">{job.job_id}</code></div><p>结果对应当前任务的提交参数；修改配置不会改变这份结果。</p></div></div>
       <div className="np-polymer-md-actions np-pmd-job-header__actions">{!isTerminal
         ? <button type="button" disabled={Boolean(busy) || job.status === "cancel_requested"} onClick={onCancel}><Ban aria-hidden="true" />{job.status === "cancel_requested" ? "正在取消，等待进程退出" : "取消任务"}</button>
-        : <button type="button" disabled={Boolean(busy)} onClick={onDelete}><Trash2 aria-hidden="true" />删除任务记录</button>}
+        : <button type="button" disabled={Boolean(busy) || Boolean(downloading)} onClick={onDelete}><Trash2 aria-hidden="true" />删除任务记录</button>}
       </div>
     </header>
     <div className="np-pmd-result-tabs" role="tablist" aria-label="聚合物 MD 结果视图" onKeyDown={event => {
@@ -611,32 +658,36 @@ export function PolymerMdResults({
     </div>
     <section id={panelId} role="tabpanel" aria-labelledby={tabId(tab)} className="np-pmd-result-panel">
       {tab === "overview" ? <>
-        <dl className="np-polymer-md-summary"><div><dt>执行状态</dt><dd>{STATUS_LABELS[job.status]}</dd></div><div><dt>科学质量</dt><dd>{QUALITY_LABELS[job.quality_status]}</dd></div><div><dt>当前阶段</dt><dd>{stageLabel(job.stage)}</dd></div><div><dt>实际随机种子</dt><dd className={typeof job.scientific_request.seed === "number" ? "np-pmd-numeric-value" : undefined}>{job.scientific_request.seed ?? "待分配"}</dd></div></dl>
-        <p className="np-pmd-job-conditions">本任务：{requestedModelDescription(job.scientific_request)} · {job.scientific_request.temp} K · {job.scientific_request.pressure} atm · 共 {job.scientific_request.n_chain} 条链</p>
+        <dl className="np-polymer-md-summary"><div className="np-pmd-summary-status" data-status={job.status}><dt>执行状态</dt><dd>{STATUS_LABELS[job.status]}</dd></div><div className={`np-pmd-summary-quality is-${job.quality_status}`}><dt>科学质量</dt><dd>{QUALITY_LABELS[job.quality_status]}</dd></div><div><dt>当前阶段</dt><dd><span className="np-pmd-result-stage-chip">{stageLabel(job.stage)}</span></dd></div><div><dt>实际随机种子</dt><dd className={typeof job.scientific_request.seed === "number" ? "np-pmd-numeric-value" : undefined}>{job.scientific_request.seed ?? "待分配"}</dd></div></dl>
+        <div className="np-pmd-result-time-panel"><PolymerMdJobTiming job={job} now={now} /></div>
+        <PolymerMdRequestSummary request={job.scientific_request} />
         <FailureDiagnostic message={job.error_message} code={job.error_code} />
         {job.status === "completed" && job.quality_status !== "passed" ? <p className="np-polymer-md-notice">计算流程已结束，部分科学判据尚未通过。请按各项质量说明使用结果。</p> : null}
         <section className="np-pmd-overview-section" aria-label="阶段记录"><h3><Activity aria-hidden="true" />阶段记录</h3>
-          {job.stage_runs.length ? <ol className="np-polymer-md-stages">{job.stage_runs.map(s => <li key={s.stage_run_id}><strong>{stageLabel(s.stage)} · 第 {s.attempt} 次</strong><span>{({
+          {job.stage_runs.length ? <ol className="np-polymer-md-stages">{job.stage_runs.map(s => <li key={s.stage_run_id} data-status={s.status}><div className="np-pmd-stage-heading"><strong>{stageLabel(s.stage)} · 第 <span className="np-pmd-numeric-value">{s.attempt}</span> 次</strong><span className="np-pmd-stage-state">{({
             completed: "阶段完成", running: "运行中", pending: "待执行", failed: "失败", cancelled: "已取消"
-          } as Record<string, string>)[s.status] ?? s.status} · {QUALITY_LABELS[s.quality_status]}</span><StageProgress stage={s} /><StageLogs jobId={job.job_id} stage={s} available={job.artifact_state !== "deleted" && job.artifact_state !== "delete_requested"} />{s.errors.map((e, i) => <FailureDiagnostic key={i} message={e.message} code={e.code} />)}</li>)}</ol> : <p className="np-polymer-md-muted">尚无阶段执行记录。</p>}
+          } as Record<string, string>)[s.status] ?? s.status}</span></div><span className={`np-pmd-stage-quality is-${s.quality_status}`}>阶段质量 · {QUALITY_LABELS[s.quality_status]}</span><StageProgress stage={s} /><StageLogs jobId={job.job_id} stage={s} available={job.artifact_state !== "deleted" && job.artifact_state !== "delete_requested"} />{s.errors.map((e, i) => <FailureDiagnostic key={i} message={e.message} code={e.code} />)}</li>)}</ol> : <p className="np-polymer-md-muted">尚无阶段执行记录。</p>}
         </section>
         <section className="np-pmd-overview-section" aria-label="汇总物性"><h3><Gauge aria-hidden="true" />科学指标</h3>
-          {rows.length ? <div className="np-polymer-md-table-wrap"><table><thead><tr><th>性质</th><th>数值</th><th>单位</th><th>质量说明</th></tr></thead><tbody>{rows.map(p => <tr key={p.key}><th scope="row">{p.label}</th><td className={p.value !== null ? "np-pmd-numeric-value" : undefined}>{p.value === null ? "不可用" : `${numberText(p.value)}${p.uncertainty !== undefined ? ` ± ${numberText(p.uncertainty)}` : ""}`}</td><td>{p.unit}</td><td>{p.reason ?? (p.quality ? QUALITY_LABELS[p.quality as keyof typeof QUALITY_LABELS] ?? p.quality : "见阶段质量判据")}{p.method ? <small className="np-polymer-md-method">{p.method}</small> : null}{p.source || p.range ? <small className="np-polymer-md-method">{[p.source, p.range ? `分析区间 ${p.range}` : undefined].filter(Boolean).join(" · ")}</small> : null}</td></tr>)}</tbody></table></div>
+          {rows.length ? <div className="np-polymer-md-table-wrap np-pmd-property-table"><table><thead><tr><th>性质</th><th>数值</th><th>单位</th><th>质量说明</th></tr></thead><tbody>{rows.map(p => <tr key={p.key}><th scope="row">{p.label}</th><td className={`np-pmd-property-value${p.value !== null ? " np-pmd-numeric-value" : " is-unavailable"}`}>{p.value === null ? "不可用" : `${numberText(p.value)}${p.uncertainty !== undefined ? ` ± ${numberText(p.uncertainty)}` : ""}`}</td><td className="np-pmd-property-unit">{p.unit}</td><td className="np-pmd-property-quality"><span className={`np-pmd-property-quality-label is-${p.quality ?? "not_evaluated"}`}>{p.reason ?? (p.quality ? QUALITY_LABELS[p.quality as keyof typeof QUALITY_LABELS] ?? p.quality : "见阶段质量判据")}</span>{p.method ? <small className="np-polymer-md-method">{p.method}</small> : null}{p.source || p.range ? <small className="np-polymer-md-method">{[p.source, p.range ? `分析区间 ${p.range}` : undefined].filter(Boolean).join(" · ")}</small> : null}</td></tr>)}</tbody></table></div>
             : <div className="np-pmd-result-empty"><Gauge aria-hidden="true" /><h3>物性结果尚未发布</h3><p>当前尚无已发布的基础物性结果。</p></div>}
-          {job.stage_runs.filter(s => properties(s.results).length > 0).map(s => <details key={s.stage_run_id}><summary>{stageLabel(s.stage)}的阶段物性</summary><dl>{properties(s.results).map(p => <div key={p.key}><dt>{p.label}</dt><dd>{p.value === null ? "不可用" : numberText(p.value)} {p.unit}{p.reason ? ` · ${p.reason}` : ""}</dd></div>)}</dl></details>)}
+          {job.stage_runs.filter(s => properties(s.results).length > 0).map(s => <details className="np-pmd-stage-properties" key={s.stage_run_id}><summary>{stageLabel(s.stage)}的阶段物性</summary><dl>{properties(s.results).map(p => <div key={p.key}><dt>{p.label}</dt><dd><span className={p.value !== null ? "np-pmd-numeric-value" : undefined}>{p.value === null ? "不可用" : numberText(p.value)}</span> <span>{p.unit}</span>{p.reason ? <small> · {p.reason}</small> : null}</dd></div>)}</dl></details>)}
         </section>
         <RunEvidence job={job} rows={rows} />
       </> : null}
-      {tab === "curves" ? series.length ? <div className="np-pmd-curves">{series.map((s, i) => <div className="np-polymer-md-chart" key={`${s.key}:${i}`}><h3>{s.label}</h3><MdSeriesChart series={s} xAxisLabel={s.spatial ? "位置 (Å)" : s.temperature ? "温度 (K)" : undefined} xVariable={s.spatial ? "位置" : s.temperature ? "温度" : undefined} /></div>)}</div>
-        : <div className="np-pmd-result-empty"><BarChart3 aria-hidden="true" /><h3>尚无可用曲线</h3><p>当前任务尚未发布真实采样曲线；已有数值与质量说明可在概览中查看。</p></div> : null}
-      {tab === "conformation" ? capabilities ? <Trajectory key={`${job.job_id}:${job.artifact_state ?? "available"}:${artifacts.map(a => a.artifact_id).join(",")}`} job={job} capabilities={job.artifact_state === "deleted" || job.artifact_state === "delete_requested" ? {
+      {tab === "curves" ? <section className="np-pmd-curves-section"><header className="np-pmd-result-section-heading"><div><h3><BarChart3 aria-hidden="true" />采样与分析曲线</h3><p>按各曲线实际返回的时间、位置或温度坐标展示。</p></div></header>{series.length ? <div className="np-pmd-curves">{series.map((s, i) => <div className="np-polymer-md-chart" key={`${s.key}:${i}`}><h3>{s.label}</h3><MdSeriesChart series={s} xAxisLabel={s.spatial ? "位置 (Å)" : s.temperature ? "温度 (K)" : undefined} xVariable={s.spatial ? "位置" : s.temperature ? "温度" : undefined} /></div>)}</div>
+        : <div className="np-pmd-result-empty"><BarChart3 aria-hidden="true" /><h3>尚无可用曲线</h3><p>当前任务尚未发布真实采样曲线；已有数值与质量说明可在概览中查看。</p></div>}</section> : null}
+      {tab === "conformation" ? <section className="np-pmd-conformation-section"><header className="np-pmd-result-section-heading"><div><h3><Atom aria-hidden="true" />阶段构象与原子距离</h3><p>选择已完成阶段的真实轨迹，按帧查看构象与周期边界下的距离。</p></div></header>{capabilities ? <Trajectory key={`${job.job_id}:${artifactsAvailable ? "available" : "deleted"}`} job={job} serviceConfirmed={serviceCheck === undefined || serviceCheck === "confirmed"} capabilities={job.artifact_state === "deleted" || job.artifact_state === "delete_requested" ? {
         ...capabilities, trajectory_available: false, distance_available: false
-      } : capabilities} /> : <div className="np-pmd-result-empty"><Atom aria-hidden="true" /><h3>正在读取轨迹服务能力</h3><p>服务能力确认后可查看已完成阶段的真实轨迹。</p></div> : null}
-      {tab === "files" ? <section className="np-polymer-md-artifacts"><header><div><h3>计算产物</h3><p className="np-polymer-md-muted">清理只移除输出文件，保留任务记录与已汇总物性。下载和轨迹浏览需对应文件仍保留。</p></div><button type="button" disabled={!isTerminal || Boolean(busy) || !artifacts.length} onClick={onClear}><Trash2 aria-hidden="true" />清理输出文件</button></header>
+      } : capabilities} /> : <div className="np-pmd-result-empty"><Atom aria-hidden="true" /><h3>正在读取轨迹服务能力</h3><p>服务能力确认后可查看已完成阶段的真实轨迹。</p></div>}</section> : null}
+      {tab === "files" ? <section className="np-polymer-md-artifacts"><header className="np-pmd-result-section-heading"><div><h3><Files aria-hidden="true" />计算产物</h3><p className="np-polymer-md-muted">清理只移除输出文件，保留任务记录与已汇总物性。下载和轨迹浏览需对应文件仍保留。</p></div><div className="np-polymer-md-actions np-pmd-artifact-actions"><button type="button" className="is-primary" disabled={Boolean(busy) || Boolean(downloading) || !artifacts.length} onClick={() => void download()}><Download aria-hidden="true" />下载所有产物</button><button type="button" className="np-pmd-artifact-clear" disabled={!isTerminal || Boolean(busy) || Boolean(downloading) || !artifacts.length} onClick={onClear}><Trash2 aria-hidden="true" />清理输出文件</button></div></header>
+        {!isTerminal && artifacts.length ? <p className="np-pmd-artifact-current">任务仍在运行，本次下载仅包含当前已生成的 <span className="np-pmd-numeric-value">{artifacts.length}</span> 个产物。</p> : null}
+        {downloading ? <div className="np-pmd-artifact-progress"><p role="status" aria-label="产物下载进度">{downloading.kind === "all" ? <><PolymerMdNumericText>{`已接收 ${downloading.done} / ${downloading.total} 个产物`}</PolymerMdNumericText><span> · 正在保存 ZIP…</span></> : "正在下载所选文件…"}</p><button type="button" onClick={cancelDownload}>取消下载</button></div> : null}
         {downloadError ? <p role="alert">{downloadError}</p> : null}
-        {artifacts.length ? <ul>{artifacts.map(a => <li key={a.artifact_id}><span>{a.filename} <small>({(a.size_bytes / 1024).toFixed(1)} KB)</small></span><button type="button" disabled={Boolean(downloading)} onClick={() => {
-          if (identity.current === getSessionEpoch()) void download(a.artifact_id, a.filename, a.size_bytes);
-        }}><Download aria-hidden="true" />{downloading === a.artifact_id ? "下载中…" : `下载 ${a.filename}`}</button></li>)}</ul>
+        {artifacts.length ? <ul>{artifacts.map(a => {
+          const source = artifactStages.get(a.stage_run_id), originId = `${resultId}-artifact-origin-${encodeURIComponent(a.artifact_id)}`;
+          return <li key={a.artifact_id}><span><code>{a.filename}</code><small id={originId} className="np-pmd-artifact-origin">来源：{source ? <>{stageLabel(source.stage)} · 第 <span className="np-pmd-numeric-value">{source.attempt}</span> 次</> : "阶段来源未记录"}</small><small><span className="np-pmd-numeric-value">{(a.size_bytes / 1024).toFixed(1)}</span> KB</small></span><button type="button" aria-label={`下载 ${a.filename}`} aria-describedby={originId} disabled={Boolean(busy) || Boolean(downloading)} onClick={() => void download(a)}><Download aria-hidden="true" /><span>{downloading?.artifactId === a.artifact_id ? "下载中…" : "下载"}</span></button></li>;
+        })}</ul>
           : <div className="np-pmd-result-empty"><Files aria-hidden="true" /><h3>暂无可下载文件</h3><p>尚无可下载产物，或产物已清理。</p></div>}
       </section> : null}
     </section>

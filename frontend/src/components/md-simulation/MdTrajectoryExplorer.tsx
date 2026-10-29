@@ -426,6 +426,9 @@ type MdTrajectoryExplorerProps = {
   onSelectionChange: (selection: MdAtomSelectionSlots) => void;
   onCalculate: () => void;
   distanceEnabled?: boolean;
+  onCancelDistance?: () => void;
+  distanceElapsedSeconds?: number;
+  distanceNotice?: string | null;
   onClear: () => void;
 };
 
@@ -442,6 +445,9 @@ export function MdTrajectoryExplorer({
   onSelectionChange,
   onCalculate,
   distanceEnabled = true,
+  onCancelDistance,
+  distanceElapsedSeconds,
+  distanceNotice,
   onClear
 }: MdTrajectoryExplorerProps) {
   const atomLookup = useMemo(() => new Map(points.map((point) => [point.atom_id, selectionFromPoint(point)])), [points]);
@@ -565,6 +571,7 @@ export function MdTrajectoryExplorer({
         </div>
         {selectionError ? <p className="np-md-inline-error" role="alert">{selectionError}</p> : null}
         {distanceError ? <p className="np-md-inline-error" role="alert">{distanceError}</p> : null}
+        {distanceNotice ? <p className="np-polymer-md-muted" role="status">{distanceNotice}</p> : null}
         <div className="np-md-distance-actions">
           <button
             type="button"
@@ -575,6 +582,7 @@ export function MdTrajectoryExplorer({
             {distanceLoading ? <LoaderCircle className="np-sw-spin" /> : <Play />}
             {distanceLoading ? "计算中" : "计算距离"}
           </button>
+          {distanceLoading && onCancelDistance ? <button type="button" onClick={onCancelDistance}>停止等待分析</button> : null}
           <button
             type="button"
             disabled={distanceLoading || (!selections[0] && !selections[1])}
@@ -591,7 +599,7 @@ export function MdTrajectoryExplorer({
               </span>
               <div>
                 <strong>正在分析原子对距离</strong>
-                <span>正在读取轨迹中的采样帧</span>
+                <span>{distanceElapsedSeconds === undefined ? "正在读取轨迹中的采样帧" : <>正在读取轨迹中的采样帧 · 已等待 <span className="np-pmd-numeric-value">{distanceElapsedSeconds}</span> 秒</>}</span>
               </div>
             </div>
           ) : distance ? (

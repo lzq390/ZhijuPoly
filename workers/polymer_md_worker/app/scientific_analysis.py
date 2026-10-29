@@ -679,11 +679,17 @@ def analyze_distance(work_dir: Path, stage_result: dict, payload: dict) -> dict:
         physical_times = trajectory_times_ps(meta, np.arange(index, index + chunk.n_frames), chunk.time)
         if max(atom1, atom2) > chunk.n_atoms:
             raise ValueError("atom ID does not exist in this stage")
+        # Indexing Trajectory once per frame defaults to copy=True in mdtraj:
+        # that deep-copies every atom/bond in the topology for each sample.
+        # The native kernel already supports all frames, including triclinic
+        # minimum-image distances. Compute once per bounded chunk, then select.
+        distances = mdtraj.compute_distances(chunk, [[atom1 - 1, atom2 - 1]],
+                                             periodic=bool(payload.get("use_pbc", True)))[:, 0]
         for local in range(chunk.n_frames):
             frame = index + local
             if frame < start or (stop is not None and frame >= stop) or (frame - start) % stride:
                 continue
-            value = float(mdtraj.compute_distances(chunk[local], [[atom1 - 1, atom2 - 1]], periodic=bool(payload.get("use_pbc", True)))[0, 0] * 10)
+            value = float(distances[local]) * 10
             points.append({"frame": frame, "time_ps": float(physical_times[local]), "value": value})
             if len(points) > 10000:
                 raise ValueError("distance request exceeds 10000 samples; increase stride")
