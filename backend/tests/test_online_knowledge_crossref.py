@@ -40,7 +40,7 @@ def crossref(monkeypatch):
     calls = []
     responses = []
 
-    def get(url, **kwargs):
+    def get(_session, url, **kwargs):
         calls.append((url, kwargs))
         assert responses, "Unexpected HTTP call; real network is prohibited"
         response = responses.pop(0)
@@ -48,7 +48,7 @@ def crossref(monkeypatch):
             raise response
         return Response(response)
 
-    monkeypatch.setattr(literature_searcher.requests, "get", get)
+    monkeypatch.setattr(literature_searcher.requests.Session, "get", get)
     monkeypatch.setattr(
         literature_searcher, "provider_http_request", lambda request, *args, **kwargs: request(*args, **kwargs)
     )

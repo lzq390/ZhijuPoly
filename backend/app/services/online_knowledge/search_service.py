@@ -47,7 +47,7 @@ def run_online_knowledge_search(
     execution_facts: dict | None = None,
 ) -> dict[str, Any]:
     validate_model_access(api_key=api_key, base_url=base_url, model=model)
-    searcher = SimpleLiteratureSearcher(max_workers=4)
+    searcher = SimpleLiteratureSearcher(max_workers=4, proxy_url=proxy_url)
     source_count = len(SimpleLiteratureSearcher.DEFAULT_SOURCES)
     per_source_limit = max(1, math.ceil(max_papers / source_count))
     _report_progress(

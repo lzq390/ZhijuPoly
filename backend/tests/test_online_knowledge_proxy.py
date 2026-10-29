@@ -123,8 +123,9 @@ def test_search_service_passes_proxy_and_closes_extractor(
     class FakeSearcher:
         DEFAULT_SOURCES = ("fixture",)
 
-        def __init__(self, max_workers: int) -> None:
+        def __init__(self, max_workers: int, proxy_url: str = "") -> None:
             captured["max_workers"] = max_workers
+            captured["source_proxy_url"] = proxy_url
 
         def search_all(self, material: str, max_papers: int):
             return [
@@ -168,6 +169,8 @@ def test_search_service_passes_proxy_and_closes_extractor(
         proxy_url="http://proxy.example.test:17892",
     )
 
+    assert captured["source_proxy_url"] == "http://proxy.example.test:17892"
+    assert captured["max_workers"] == 4
     assert captured["extractor_options"] == {
         "api_key": "test-key",
         "base_url": "https://api.example.test/v1",
