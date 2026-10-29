@@ -156,6 +156,79 @@ def test_existing_doi_uses_exact_identity_without_title_search(crossref):
     assert crossref.calls[0][0] == f"https://api.crossref.org/works/{DOI}"
 
 
+@pytest.mark.parametrize("markup,expected", [
+    ("Modulus 4 × 10<jats:sup>3</jats:sup> MPa.", "Modulus 4 × 10^(3) MPa."),
+    ("Conductivity 10<sup>-3</sup> S m<sup>−1</sup>.", "Conductivity 10^(-3) S m^(−1)."),
+    ("Yield 10<sup><i>n</i> + 1</sup>; H<sub>2</sub>O.", "Yield 10^(n + 1); H2O."),
+    ("Value 10<sup>3<sup>2</sup></sup>.", "Value 10^(3^(2))."),
+    ("<jats:p>First &amp; second.</jats:p><jats:p>Next finding.</jats:p>",
+     "First & second.\n\nNext finding."),
+    ("<p>Safe <b>finding</b>.</p><script>untrusted evidence</script><style>hidden</style>",
+     "Safe finding."),
+])
+def test_crossref_abstract_preserves_scientific_inline_notation(crossref, markup, expected):
+    crossref.responses.append({"message": record(abstract=markup)})
+    original = paper(doi=DOI)
+    result = literature_searcher.SimpleLiteratureSearcher().enrich_with_crossref(original)
+    assert result["abstract"] == expected
+    assert result["doi"] == DOI and result["title"] == TITLE
+
+
+@pytest.mark.parametrize("markup", [
+    "<sup> </sup>", "Value 10<sup>3", "Value 10</sup>3",
+    "<p>Value 10<sup>3</p><p>Other finding</sup>.</p>",
+    "Value 10<sup>3<br>Other finding</sup>.",
+    "Value 10<sup>3<div>Other finding</div></sup>.",
+    "Value 10<sup>3<table><tr><td>Other finding</td></tr></table></sup>.",
+])
+def test_empty_or_structurally_ambiguous_superscript_does_not_replace_original_evidence(crossref, markup):
+    crossref.responses.append({"message": record(abstract=markup)})
+    original = paper(doi=DOI)
+    before = deepcopy(original)
+    assert literature_searcher.SimpleLiteratureSearcher().enrich_with_crossref(original) == before
+
+
+@pytest.mark.parametrize("markup", [
+    "Value <mml:math><mml:msup><mml:mn>10</mml:mn><mml:mn>3</mml:mn></mml:msup></mml:math>.",
+    "Value <math><msup><mn>10</mn><mn>-3</mn></msup></math>.",
+    "Value <inline-formula><tex-math>10^{-3}</tex-math></inline-formula>.",
+])
+def test_unsupported_formula_markup_is_not_silently_flattened_into_model_evidence(crossref, markup):
+    crossref.responses.append({"message": record(abstract=markup)})
+    original = paper(doi=DOI)
+    before = deepcopy(original)
+    assert literature_searcher.SimpleLiteratureSearcher().enrich_with_crossref(original) == before
+
+
+def test_service_passes_crossref_exponents_to_model_without_changing_title_identity(crossref, monkeypatch):
+    title = "Polymer 10<sup>3</sup> study"
+    markup = "<jats:p>Conductivity 10<jats:sup>-3</jats:sup> S/m in H<sub>2</sub>O.</jats:p>"
+    crossref.responses.append({"message": record(abstract=markup)})
+    monkeypatch.setattr(literature_searcher.SimpleLiteratureSearcher, "search_all",
+                        lambda *args, **kwargs: [paper(title=title, doi=DOI)])
+    prompts = []
+
+    def complete(**kwargs):
+        prompts.append(kwargs["messages"][1]["content"])
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+            content='{"has_polymer": false, "total_data_points": 0, "data_points": []}'
+        ))])
+
+    closed = []
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=complete)),
+                             close=lambda: closed.append(True))
+    monkeypatch.setattr(extractor, "create_openai_client", lambda **kwargs: client)
+    monkeypatch.setattr(extractor, "provider_call", lambda fn, **kwargs: fn(**kwargs))
+    result = search_service.run_online_knowledge_search(
+        material="polyimide", mode="property", api_key="fixture-key", base_url="https://unused.invalid/v1",
+        model="fixture-model", max_papers=1, extraction_delay_seconds=0,
+    )
+    assert len(prompts) == 1 and "Conductivity 10^(-3) S/m in H2O." in prompts[0]
+    assert title in prompts[0]
+    assert result["exampleUsed"] is False and result["totalPapers"] == 1
+    assert closed == [True]
+
+
 def test_existing_doi_rejects_wrong_detail_identity(crossref):
     crossref.responses.append({"message": record(doi="10.5555/wrong")})
     original = paper(doi=DOI)

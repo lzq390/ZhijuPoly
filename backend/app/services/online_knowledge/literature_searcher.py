@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from html import unescape
+from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import quote
 
@@ -22,6 +23,79 @@ def _crossref_text(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return unescape(re.sub(r"<[^>]+>", "", value)).strip()
+
+
+class _CrossrefAbstractParser(HTMLParser):
+    """Render HTML/JATS evidence as text without joining bases and exponents."""
+
+    _BLOCK_TAGS = {
+        "p", "div", "sec", "section", "title", "br", "blockquote", "h1", "h2", "h3",
+        "h4", "h5", "h6", "list", "list-item", "ul", "ol", "li", "table", "tr", "td", "th",
+    }
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.exponents: list[list[str]] = []
+        self.ignored = 0
+
+    def _append(self, text: str) -> None:
+        (self.exponents[-1] if self.exponents else self.parts).append(text)
+
+    def _block_boundary(self) -> None:
+        if self.exponents:
+            raise ValueError("Scientific superscript crosses a structural boundary")
+        self._append("\n")
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:
+        mathml = tag.startswith("mml:")
+        tag = tag.rsplit(":", 1)[-1]
+        if tag in {"script", "style"}:
+            self.ignored += 1
+        if self.ignored:
+            return
+        if mathml or tag in {"math", "msup", "msub", "msubsup", "mfrac", "msqrt", "mroot", "inline-formula", "disp-formula"}:
+            # Unsupported formula trees must not become plausible, wrong
+            # numeric evidence (e.g. MathML msup(10, 3) flattened into 103).
+            raise ValueError("Unsupported scientific formula markup")
+        if tag == "sup":
+            self.exponents.append([])
+        elif tag in self._BLOCK_TAGS:
+            self._block_boundary()
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.rsplit(":", 1)[-1]
+        if tag in {"script", "style"}:
+            self.ignored = max(0, self.ignored - 1)
+            return
+        if self.ignored:
+            return
+        if tag == "sup":
+            if not self.exponents:
+                raise ValueError("Unbalanced scientific superscript")
+            text = " ".join("".join(self.exponents.pop()).split())
+            if text:
+                self._append(f"^({text})")
+        elif tag in self._BLOCK_TAGS:
+            self._block_boundary()
+
+    def handle_data(self, data: str) -> None:
+        if not self.ignored:
+            self._append(data)
+
+    def result(self) -> str:
+        if self.exponents:
+            raise ValueError("Unbalanced scientific superscript")
+        return "\n\n".join(" ".join(line.split()) for line in "".join(self.parts).splitlines() if line.strip())
+
+
+def _crossref_abstract(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    parser = _CrossrefAbstractParser()
+    parser.feed(value)
+    parser.close()
+    return parser.result()
 
 
 def _crossref_title(value: Any) -> str:
@@ -140,7 +214,7 @@ class SimpleLiteratureSearcher:
                 return paper
             if not existing_doi and not _crossref_title_matches(message, _crossref_title(paper.get("title"))):
                 return paper
-            abstract = _crossref_text(message.get("abstract"))
+            abstract = _crossref_abstract(message.get("abstract"))
             if not abstract:
                 return paper
         except (requests.RequestException, ValueError):
@@ -424,15 +498,32 @@ class SimpleLiteratureSearcher:
         return all_papers
 
     def deduplicate(self, papers: list[Paper]) -> list[Paper]:
-        seen_titles: set[str] = set()
+        identity_positions: dict[tuple[str, str], int] = {}
         unique: list[Paper] = []
 
         for paper in papers:
-            title = str(paper.get("title") or "").lower().strip()
-            if not title or title in seen_titles:
+            title = _crossref_title(str(paper.get("title") or ""))
+            if not title:
                 continue
-            seen_titles.add(title)
-            unique.append(paper)
+            doi = _crossref_doi(paper.get("doi"))
+            # A matching title alone cannot establish publication identity.
+            # Keep ambiguous/no-DOI records separate instead of discarding
+            # evidence or attaching one publication's abstract to another.
+            if doi is None:
+                unique.append(paper)
+                continue
+            identity = (title, doi)
+            position = identity_positions.get(identity)
+            if position is None:
+                identity_positions[identity] = len(unique)
+                unique.append(paper)
+            elif (
+                not str(unique[position].get("abstract") or "").strip()
+                and str(paper.get("abstract") or "").strip()
+            ):
+                # Source requests finish in any order. Prefer the complete
+                # source record without mixing its metadata with the first.
+                unique[position] = paper
 
         return unique
 

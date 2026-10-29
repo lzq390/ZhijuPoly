@@ -92,6 +92,37 @@ def test_polymer_without_property_relationships_is_a_valid_empty_result(model_re
 
 
 @pytest.mark.parametrize("mode", ["synthesis", "property"])
+@pytest.mark.parametrize("placeholder", ["", "  ", "N/A", "NaN", "none", "null", "  NOT PROVIDED  "])
+def test_missing_value_text_is_not_scientific_evidence(model_responses, mode, placeholder):
+    response = positive(mode)
+    collection = "reactions" if mode == "synthesis" else "data_points"
+    field = "product_name" if mode == "synthesis" else "polymer_name"
+    response[collection] = [{field: placeholder}]
+    assert extract_one(model_responses, response, mode)["error"] == INVALID_EXTRACTION_RESULT
+
+
+@pytest.mark.parametrize("field,value", [
+    ("reactants", ["N/A", "not provided"]),
+    ("reaction_conditions", {"temperature": "null", "time": "none"}),
+    ("properties", [{"property_name": "N/A", "value": "not provided", "unit": "MPa"}]),
+])
+def test_nested_missing_value_text_cannot_create_a_synthesis_record(model_responses, field, value):
+    response = positive("synthesis")
+    response["reactions"] = [{"reaction_number": 1, field: value}]
+    assert extract_one(model_responses, response, "synthesis")["error"] == INVALID_EXTRACTION_RESULT
+
+
+@pytest.mark.parametrize("mode", ["synthesis", "property"])
+def test_real_science_and_zero_values_remain_valid_with_other_missing_text(model_responses, mode):
+    response = positive(mode)
+    if mode == "synthesis":
+        response["reactions"] = [{"product_name": "N/A", "reaction_conditions": {"temperature": "0"}}]
+    else:
+        response["data_points"] = [{"polymer_name": "not provided", "property_value": "0"}]
+    assert "error" not in extract_one(model_responses, response, mode)
+
+
+@pytest.mark.parametrize("mode", ["synthesis", "property"])
 @pytest.mark.parametrize("response", [{}, [], None, "", "not-json", '{"secret": "sk-never-disclose"}'])
 def test_invalid_json_or_missing_envelope_is_a_safe_failure(model_responses, mode, response):
     result = extract_one(model_responses, response, mode)
@@ -228,6 +259,19 @@ def test_all_invalid_results_fail_with_accurate_private_execution_facts(local_se
     assert facts == {"successful_extractions": 0, "failed_extractions": 2}
     assert model_responses.provider_boundary.call_count == 2
     model_responses.clients[0].close.assert_called_once()
+
+
+@pytest.mark.parametrize("mode", ["synthesis", "property"])
+def test_placeholder_only_results_are_failures_in_execution_facts(local_search, mode):
+    response = positive(mode)
+    if mode == "synthesis":
+        response["reactions"] = [{"product_name": "N/A"}]
+    else:
+        response["data_points"] = [{"polymer_name": "not provided"}]
+    facts = {}
+    with pytest.raises(search_service.OnlineKnowledgeModelError, match=INVALID_EXTRACTION_RESULT):
+        local_search([response], mode, facts)
+    assert facts == {"successful_extractions": 0, "failed_extractions": 1}
 
 
 @pytest.mark.parametrize("mode", ["synthesis", "property"])

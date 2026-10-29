@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from contextvars import ContextVar
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -201,3 +202,78 @@ def test_failed_source_closes_its_session_without_retrying(transport):
     searcher = literature_searcher.SimpleLiteratureSearcher(proxy_url=PROXY)
     assert searcher.search_openalex("polymer", per_page=1) == []
     assert len(transport.calls) == len(transport.sessions) == 1
+
+
+@pytest.mark.parametrize("complete_first", [False, True])
+def test_same_doi_duplicates_keep_the_complete_source_record_in_either_arrival_order(complete_first):
+    incomplete = {"title": TITLE, "doi": f" {DOI.upper()} ", "abstract": "", "source": "Semantic Scholar",
+                  "authors": "Incomplete-source author"}
+    complete = {"title": TITLE, "doi": DOI, "abstract": ABSTRACT, "source": "PubMed",
+                "authors": "Complete-source author"}
+    papers = [complete, incomplete] if complete_first else [incomplete, complete]
+    before = deepcopy(papers)
+    result = literature_searcher.SimpleLiteratureSearcher().deduplicate(papers)
+    assert result == [complete]
+    assert result[0] is complete
+    assert papers == before
+
+
+def test_same_title_different_dois_are_distinct_papers_and_never_mix_evidence():
+    first = {"title": TITLE, "doi": DOI, "abstract": "", "source": "Semantic Scholar"}
+    second = {"title": TITLE, "doi": "10.5555/another", "abstract": ABSTRACT, "source": "PubMed"}
+    result = literature_searcher.SimpleLiteratureSearcher().deduplicate([first, second])
+    assert result == [first, second]
+    assert result[0]["abstract"] == "" and result[1]["doi"] == "10.5555/another"
+
+
+@pytest.mark.parametrize("first_doi,second_doi", [("", ""), ("", DOI), (DOI, ""),
+                                                  ("arXiv:1234.56789", "arXiv:9876.54321")])
+def test_same_title_without_verified_doi_identity_preserves_separate_source_records(first_doi, second_doi):
+    papers = [
+        {"title": TITLE, "doi": first_doi, "abstract": "", "source": "First source"},
+        {"title": TITLE, "doi": second_doi, "abstract": ABSTRACT, "source": "Second source"},
+    ]
+    assert literature_searcher.SimpleLiteratureSearcher().deduplicate(papers) == papers
+
+
+@pytest.mark.parametrize("complete_first", [False, True])
+def test_duplicate_arrival_order_cannot_replace_real_evidence_with_fallback_during_crossref_outage(
+    monkeypatch, complete_first,
+):
+    incomplete = {"title": TITLE, "doi": DOI, "abstract": "", "source": "Semantic Scholar"}
+    complete = {"title": TITLE, "doi": DOI, "abstract": ABSTRACT, "source": "PubMed"}
+    papers = [complete, incomplete] if complete_first else [incomplete, complete]
+    crossref_calls = []
+    extracted = []
+    closed = []
+
+    def unavailable_crossref(*args, **kwargs):
+        crossref_calls.append(True)
+        raise requests.Timeout("Controlled Crossref outage; no network is used")
+
+    class Extractor:
+        def __init__(self, **kwargs):
+            pass
+
+        def process_papers(self, values, **kwargs):
+            extracted.extend(values)
+            return [{"has_polymer": False, "total_data_points": 0, "data_points": []} for _ in values]
+
+        def convert_to_rows(self, **kwargs):
+            return []
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(literature_searcher.SimpleLiteratureSearcher, "search_all", lambda *args, **kwargs: papers)
+    monkeypatch.setattr(literature_searcher.SimpleLiteratureSearcher, "_get", unavailable_crossref)
+    monkeypatch.setattr(search_service, "PolymerExtractor", Extractor)
+    result = search_service.run_online_knowledge_search(
+        material="polymer", mode="property", api_key="fixture-key", base_url="https://invalid.example/v1",
+        model="fixture-model", max_papers=2, extraction_delay_seconds=0,
+    )
+    assert result["exampleUsed"] is False
+    assert result["totalPapers"] == 1
+    assert extracted == [complete]
+    assert crossref_calls == []
+    assert closed == [True]

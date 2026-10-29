@@ -154,6 +154,8 @@ python -m app.import_literature rollback PREVIOUS_PUBLISHED_GENERATION_UUID
 
 正文 JSON 限制 32 MiB。保留块顺序，表格经受控解析转换为纯文本单元格；普通正文和公式按文本呈现。源 HTML、脚本和远程资源不会执行。精确块跳转必须额外证明唯一提取内容指纹与完整输入对象键链；未证明时仍可查看摘录，但不显示精确跳转。
 
+正文和表格的 HTML/JATS 上标保留为分组文本，例如 `10<sup>-3</sup>` 显示为 `10^(-3)`，避免误读为 `10-3`；下标保持 `H2O`、`Tg` 等连续记号。未闭合的上标在正文结构或单元格边界结束，不吞入下一段内容。
+
 ## 浏览记录与总结
 
 新结果 `knowledge_id=null`，使用字符串 `document_uid + generation_id + snapshot_uid`；旧整数 ID 和深链保留。观察要求当前用户、search_id、搜索结果成员及版本一致。主动打开、重开、切换提取/原文页签才记事件，自动展开或预加载不计。

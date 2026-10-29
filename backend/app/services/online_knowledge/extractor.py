@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.services.ai_client import INVALID_EXTRACTION_RESULT, clean_ai_provider_error, create_openai_client
+from app.services.online_knowledge.analytics import _has_value
 from app.services.usage_provider import provider_call
 from app.services.private_quotas import PrivateQuotaSettings
 
@@ -29,7 +30,7 @@ def _optional_text_fields(value: dict[str, Any], fields: tuple[str, ...]) -> dic
 
 def _has_scientific_value(value: Any) -> bool:
     if isinstance(value, str):
-        return bool(value.strip())
+        return _has_value(value)
     if isinstance(value, dict):
         return any(_has_scientific_value(item) for item in value.values())
     if isinstance(value, list):

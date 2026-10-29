@@ -144,16 +144,46 @@ def _release(response):
 
 class _SafeTableParser(HTMLParser):
     """Extract cell text only; no source HTML is ever sent as executable markup."""
+    _BODY_BOUNDARIES = {
+        "address", "article", "aside", "blockquote", "br", "dd", "div", "dl", "dt",
+        "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3",
+        "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre",
+        "section", "table", "td", "th", "tr", "ul",
+    }
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.parts, self.text, self.rows, self.row, self.cell = [], [], [], [], None
         self.in_table, self.ignore = False, 0
+        self.superscripts = []
+
+    def _append(self, value):
+        target = self.superscripts[-1] if self.superscripts else self.cell if self.cell is not None else self.text
+        target.append(value)
+
+    def _finish_superscript(self):
+        if self.superscripts:
+            value = "".join(self.superscripts.pop()).strip()
+            if value:
+                # Plain text must retain exponent grouping, signs and nested
+                # markup instead of changing 10<sup>-3</sup> into 10-3.
+                self._append(f"^({value})")
+
+    def _finish_superscripts(self):
+        while self.superscripts:
+            self._finish_superscript()
 
     def handle_starttag(self, tag, attrs):
         if tag in {"script", "style"}:
             self.ignore += 1
         if self.ignore:
             return
+        if tag.rsplit(":", 1)[-1] == "sup":
+            self.superscripts.append([])
+            return
+        if tag in self._BODY_BOUNDARIES:
+            # An unclosed exponent cannot absorb the next paragraph or cell.
+            self._finish_superscripts()
         if tag == "table":
             if self.text:
                 self.parts.append({"type": "text", "text": "".join(self.text)})
@@ -164,7 +194,7 @@ class _SafeTableParser(HTMLParser):
         elif tag in {"td", "th"} and self.in_table:
             self.cell = []
         elif tag in {"br", "p"}:
-            (self.cell if self.cell is not None else self.text).append("\n")
+            self._append("\n")
 
     def handle_endtag(self, tag):
         if tag in {"script", "style"}:
@@ -172,6 +202,11 @@ class _SafeTableParser(HTMLParser):
             return
         if self.ignore:
             return
+        if tag.rsplit(":", 1)[-1] == "sup":
+            self._finish_superscript()
+            return
+        if tag in self._BODY_BOUNDARIES:
+            self._finish_superscripts()
         if tag in {"td", "th"} and self.cell is not None:
             self.row.append("".join(self.cell).strip())
             self.cell = None
@@ -184,9 +219,10 @@ class _SafeTableParser(HTMLParser):
 
     def handle_data(self, data):
         if not self.ignore:
-            (self.cell if self.cell is not None else self.text).append(data)
+            self._append(data)
 
     def result(self):
+        self._finish_superscripts()
         if self.text:
             self.parts.append({"type": "text", "text": "".join(self.text)})
         return self.parts

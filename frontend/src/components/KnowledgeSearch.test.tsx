@@ -623,6 +623,40 @@ describe("KnowledgeSearch", () => {
     await act(async () => { await Promise.resolve(); });
   });
 
+  it.each(["success", "failure"] as const)("再次恢复同一历史会恢复所选详情，并隔离新任务创建的迟到 %s", async (outcome) => {
+    const saved = onlineHistoryItem();
+    apiMocks.fetchHistory.mockResolvedValue({ history: [saved] });
+    let resolveCreate!: (value: { job_id: string; status: "pending" }) => void;
+    let rejectCreate!: (error: Error) => void;
+    apiMocks.createJob.mockImplementation(() => new Promise((resolve, reject) => { resolveCreate = resolve; rejectCreate = reject; }));
+    render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /在线文献/ }));
+    await screen.findByRole("button", { name: /检索历史 1/ });
+    fireEvent.click(screen.getByRole("button", { name: /检索历史 1/ }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
+    expect(screen.getByRole("dialog", { name: "性质关系详情" })).toBeTruthy();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "在线检索材料名称" }), { target: { value: "New material" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始检索" }));
+    const signal = apiMocks.createJob.mock.calls[0][1] as AbortSignal;
+    fireEvent.click(screen.getByRole("button", { name: /检索历史 1/ }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
+    expect(signal.aborted).toBe(true);
+    const drawer = screen.getByRole("dialog", { name: "性质关系详情" });
+    expect(within(drawer).getByText("tensile strength · 62 MPa")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /tensile strength · 62 MPa PLA · biopolymer/ }).getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByRole("textbox", { name: "在线检索材料名称" }) as HTMLInputElement).value).toBe(saved.material);
+    await act(async () => {
+      if (outcome === "success") resolveCreate({ job_id: "obsolete-job", status: "pending" });
+      else rejectCreate(new Error("Obsolete task failed"));
+      await Promise.resolve();
+    });
+    expect(apiMocks.fetchJob).not.toHaveBeenCalled();
+    expect(screen.queryByText("Obsolete task failed")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "性质关系详情" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "开始检索" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("恢复历史清除原结果的 CSV 错误和已失败任务的重试状态", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const saved: OnlineKnowledgeHistoryItem = {
