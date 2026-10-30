@@ -1,4 +1,4 @@
-import { polymerMdUserConfigurationSpec, type PolymerMdUserConfiguration, type PolymerMdUserOption } from "./userConfiguration";
+import { polymerMdUserConfigurationSpec, type PolymerMdUserConfiguration } from "./userConfiguration";
 import { basisFieldLabel, declaredBasisOverridesText } from "./PolymerMdBasisEvidence";
 import { PolymerMdSelect } from "./PolymerMdSelect";
 import {
@@ -18,6 +18,22 @@ const FIELD_BRIEFS: Record<string, string> = {
   charge_basis: "电荷计算所用主基组",
   polar_method: "静态极化率所用量化方法",
   polar_basis: "静态极化率所用主基组"
+};
+const BASE_PROPERTY_BRIEFS: Record<string, string> = {
+  density: "平衡态质量密度",
+  Rg: "链构象的空间尺度",
+  "self-diffusion": "全原子均方位移拟合",
+  Cp: "恒压条件下的质量比热",
+  Cv: "恒容条件下的质量比热",
+  compressibility: "恒温条件下的体积响应",
+  isentropic_compressibility: "等熵条件下的体积响应",
+  bulk_modulus: "等温压缩率的倒数",
+  isentropic_bulk_modulus: "等熵压缩率的倒数",
+  volume_expansion: "平衡态体积热响应",
+  linear_expansion: "按各向同性假设估计",
+  r2: "链端残基间的距离平方",
+  static_dielectric_const: "固定部分电荷模型估计",
+  nematic_order_parameter: "残基取向的有序程度"
 };
 type Props = { configuration: PolymerMdUserConfiguration; onChange: (change: Partial<PolymerMdUserConfiguration>) => void };
 
@@ -68,21 +84,22 @@ export function PolymerMdPropertyChoices({ configuration, onChange }: Props) {
     if (values.includes(POLYMER_MD_THERMAL_CONDUCTIVITY_PROPERTY) && !checked) next.delete(POLYMER_MD_THERMAL_DIFFUSIVITY_PROPERTY);
     onChange({ properties: expandPolymerMdProperties([...next]) });
   }
-  const help = (item: PolymerMdUserOption) => <details className="np-polymer-md-choice-help"><summary aria-label={`${item.label}说明`}>说明</summary><p>{item.description}</p><small>适用范围：{scopeLabel[item.scope] ?? item.scope}</small></details>;
-  const checkbox = (key: string, description: string) => {
-    const item = option(key);
-    return <li key={key}><label><input type="checkbox" aria-label={item.label} checked={selected.has(key)} onChange={event => toggle([key], event.target.checked)} /><span>{item.label}</span></label><p className="np-polymer-md-flow-description">{description}</p>{help(item)}</li>;
+  const checkbox = (key: string | readonly string[], description: string, label?: string) => {
+    const keys = typeof key === "string" ? [key] : key;
+    const title = label ?? option(keys[0]).label;
+    const checked = keys.some(value => selected.has(value));
+    return <li key={keys[0]} className={checked ? "is-selected" : undefined}><label><input type="checkbox" aria-label={title} checked={checked} onChange={event => toggle(keys, event.target.checked)} /><span><strong>{title}</strong><span className="np-polymer-md-flow-description">{description}</span></span></label></li>;
   };
   return <section className="np-polymer-md-card np-polymer-md-property-choices" aria-labelledby="polymer-md-properties-title">
     <header><div><span className="np-polymer-md-eyebrow">计算目标</span><h2 id="polymer-md-properties-title">计算内容</h2></div><span className="np-polymer-md-tag">基础 {POLYMER_MD_BASE_PROPERTIES.length} 项默认包含</span></header>
     <section className="np-polymer-md-automatic-properties" aria-labelledby="polymer-md-base-properties-title">
-      <h3 id="polymer-md-base-properties-title">平衡后自动分析</h3>
+      <details className="np-polymer-md-base-disclosure">
+      <summary><h3 id="polymer-md-base-properties-title">平衡后自动分析 <small>{POLYMER_MD_BASE_PROPERTIES.length} 项默认包含</small></h3></summary>
       <p className="np-polymer-md-muted">密度、热容、压缩率、体积模量、热膨胀、链结构和静态介电等共用平衡段日志与轨迹，无需逐项勾选。使用 EQ3 或追加平衡后的合格数据，结果是否可用由采样与收敛检查决定。</p>
-      <details className="np-polymer-md-base-disclosure"><summary>查看 {POLYMER_MD_BASE_PROPERTIES.length} 项基础物性及说明</summary>
-        <div className="np-polymer-md-property-selection-groups">{categories.map(category => {
+      <div className="np-polymer-md-base-groups">{categories.map(category => {
           const options = baseOptions.filter(item => (item.category ?? item.scope) === category);
           const label = options[0]?.category_label ?? scopeLabel[category] ?? category;
-          return <fieldset key={category}><legend>{label}</legend><ul>{options.map(item => <li className="np-polymer-md-automatic-property" key={item.value}><span>{item.label}</span>{help(item)}</li>)}</ul></fieldset>;
+          return <section key={category} aria-labelledby={`polymer-md-base-group-${category}`}><header><h4 id={`polymer-md-base-group-${category}`}>{label}</h4><span>{options.length} 项</span></header><ul>{options.map(item => <li className="np-polymer-md-automatic-property" key={item.value}><span>{item.label}</span><small>{BASE_PROPERTY_BRIEFS[item.value]}</small></li>)}</ul></section>;
         })}</div>
       </details>
     </section>
@@ -97,7 +114,7 @@ export function PolymerMdPropertyChoices({ configuration, onChange }: Props) {
         </ul></fieldset>
         <fieldset><legend>温度扫描与内聚能</legend><ul>
           {checkbox(POLYMER_MD_TG_PROPERTY, "追加高温平衡及分段降温，以温度—密度双线拟合估计 Tg。平台温区为 800→100 K、间隔 10 K；未覆盖转变或拟合不合格时不返回数值。")}
-          <li><label><input type="checkbox" aria-label="溶解度参数 SP / 内聚能密度 CED" checked={POLYMER_MD_SOLUBILITY_PROPERTIES.some(key => selected.has(key))} onChange={event => toggle(POLYMER_MD_SOLUBILITY_PROPERTIES, event.target.checked)} /><span>溶解度参数 SP / 内聚能密度 CED</span></label><p className="np-polymer-md-flow-description">在目标温压追加采样并重算分子间作用能，计算总溶解度参数及内聚能密度。至少需要两条链；用于材料内聚性质，不表示任意溶剂中的溶解度。</p>{help(option("sp_total"))}{help(option("sp_ced"))}</li>
+          {checkbox(POLYMER_MD_SOLUBILITY_PROPERTIES, "在目标温压追加采样并重算分子间作用能，计算总溶解度参数及内聚能密度。至少需要两条链；用于材料内聚性质，不表示任意溶剂中的溶解度。", "溶解度参数 SP / 内聚能密度 CED")}
         </ul></fieldset>
       </div>
     </section>

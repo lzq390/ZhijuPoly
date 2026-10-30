@@ -135,6 +135,99 @@ async def test_fulltext_order_safe_table_cursor_binding_and_release(storage):
     assert 'bucket' not in safe['assets'][0] and 'object_key' not in safe['assets'][0]
 
 
+@pytest.mark.parametrize('expression,expected', [
+    ('10<sup>3</sup>', '10^(3)'),
+    ('10<sup>-3</sup>', '10^(-3)'),
+    ('10<sup>−3.5</sup>', '10^(−3.5)'),
+    ('cm<sup>2</sup>', 'cm^(2)'),
+    ('Fe<sup>3+</sup>', 'Fe^(3+)'),
+    ('2<sup>n + 1</sup>', '2^(n + 1)'),
+    ('2<sup>n<sup>2</sup> + 1</sup>', '2^(n^(2) + 1)'),
+    ('10<sup><b>-</b><i>3</i></sup>', '10^(-3)'),
+    ('10<jats:sup>-3</jats:sup>; H<jats:sub>2</jats:sub>O', '10^(-3); H2O'),
+    ('H<sub>2</sub>O; T<sub>g</sub>', 'H2O; Tg'),
+    ('10<sup></sup>', '10'),
+])
+@pytest.mark.parametrize('in_table', [False, True], ids=['body', 'table'])
+@pytest.mark.asyncio
+async def test_fulltext_preserves_scientific_superscripts(storage, expression, expected, in_table):
+    text = f'<table><tr><td>{expression}</td></tr></table>' if in_table else expression
+    storage.data = json.dumps([{'idx': 7, 'text': text}]).encode()
+    result = await assets.get_literature_fulltext(assets_manifest=manifest(storage, 'full_text'),
+                                                document_uid='doc', snapshot_uid='snap')
+    expected_part = {'type': 'table', 'rows': [[expected]]} if in_table else {'type': 'text', 'text': expected}
+    assert result['blocks'][0]['parts'] == [expected_part]
+    assert storage.reads[-1].closed and storage.reads[-1].released
+
+
+@pytest.mark.asyncio
+async def test_fulltext_scientific_markup_preserves_safe_parts_order_and_paging(storage):
+    text = ('<img src=x onerror="alert(1)">Before 10<sup data-secret="hidden">3'
+            '<script>alert(2)</script><style>body{display:none}</style></sup>; H<sub>2</sub>O. '
+            '<table><tr><td>10<sup>-3</sup></td><td>cm<sup>2</sup></td></tr></table>'
+            'After 2<sup>n<sup>2</sup>+1</sup>.')
+    storage.data = json.dumps([{'idx': 7, 'text': text}, {'idx': 8, 'text': 'Next original block'}]).encode()
+    items = manifest(storage, 'full_text')
+    first = await assets.get_literature_fulltext(assets_manifest=items, document_uid='doc', snapshot_uid='snap', limit=1)
+    assert first['blocks'][0]['block_id'] == '7'
+    assert first['blocks'][0]['parts'] == [
+        {'type': 'text', 'text': 'Before 10^(3); H2O. '},
+        {'type': 'table', 'rows': [['10^(-3)', 'cm^(2)']]},
+        {'type': 'text', 'text': 'After 2^(n^(2)+1).'},
+    ]
+    second = await assets.get_literature_fulltext(assets_manifest=items, document_uid='doc', snapshot_uid='snap', cursor=first['next_cursor'], limit=1)
+    assert second['blocks'][0]['block_id'] == '8'
+    assert second['blocks'][0]['parts'] == [{'type': 'text', 'text': 'Next original block'}]
+    assert second['next_cursor'] is None
+    assert all(body.closed and body.released for body in storage.reads)
+
+
+@pytest.mark.parametrize('text,expected_parts', [
+    ('10<sup>-3', [{'type': 'text', 'text': '10^(-3)'}]),
+    ('10</sup> S/m', [{'type': 'text', 'text': '10 S/m'}]),
+    ('<table><tr><td>10<sup>3</td><td>H<sub>2</sub>O</td></tr></table>',
+     [{'type': 'table', 'rows': [['10^(3)', 'H2O']]}]),
+    ('10<sup>3<table><tr><td>Next cell</td></tr></table>After',
+     [{'type': 'text', 'text': '10^(3)'}, {'type': 'table', 'rows': [['Next cell']]}, {'type': 'text', 'text': 'After'}]),
+])
+def test_fulltext_superscript_tolerates_incomplete_markup_without_crossing_parts(text, expected_parts):
+    parser = assets._SafeTableParser()
+    parser.feed(text)
+    assert parser.result() == expected_parts
+
+
+@pytest.mark.parametrize('boundary,separator', [
+    ('</p><p>', '\n'), ('<p>', '\n'), ('<br>', '\n'),
+    ('</div><div>', ''), ('<div>', ''), ('</li><li>', ''),
+    ('</h2><p>', '\n'), ('</section><section>', ''),
+    ('</jats:p><jats:p>', '\n'), ('<jats:p>', '\n'), ('<jats:br>', '\n'),
+    ('</jats:sec><jats:sec>', ''), ('<jats:sec>', ''),
+])
+@pytest.mark.parametrize('prefix', ['', 'jats:'], ids=['html-sup', 'jats-sup'])
+def test_fulltext_incomplete_superscript_stops_at_body_structure(boundary, separator, prefix):
+    parser = assets._SafeTableParser()
+    parser.feed(f'10<{prefix}sup>3{boundary}Next paragraph')
+    assert parser.result() == [{'type': 'text', 'text': f'10^(3){separator}Next paragraph'}]
+
+
+@pytest.mark.asyncio
+async def test_fulltext_jats_markup_preserves_paragraph_and_cell_boundaries(storage):
+    text = ('Before 10<jats:sup>-3</jats:p><jats:p>Next H<jats:sub>2</jats:sub>O.</jats:p>'
+            '<jats:table><jats:tr><jats:td>10<jats:sup>3</jats:td>'
+            '<jats:td>Fe<jats:sup>3+</jats:sup></jats:td></jats:tr></jats:table>'
+            'After cm<jats:sup>2<jats:script>untrusted</jats:script>'
+            '<jats:style>hidden</jats:style></jats:sup>.')
+    storage.data = json.dumps([{'idx': 7, 'text': text}]).encode()
+    result = await assets.get_literature_fulltext(assets_manifest=manifest(storage, 'full_text'),
+                                                document_uid='doc', snapshot_uid='snap')
+    assert result['blocks'][0]['parts'] == [
+        {'type': 'text', 'text': 'Before 10^(-3)\nNext H2O.'},
+        {'type': 'table', 'rows': [['10^(3)', 'Fe^(3+)']]},
+        {'type': 'text', 'text': 'After cm^(2).'},
+    ]
+    assert storage.reads[-1].closed and storage.reads[-1].released
+
+
 def test_suffix_range_and_empty():
     assert assets._range('bytes=-3', 9) == (6,3,True)
     assert assets._range('bytes=3-', 9) == (3,6,True)

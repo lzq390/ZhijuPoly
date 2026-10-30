@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { clearPolymerMdViewState } from "../services/polymerMdViewState";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSession, installSession, retireSession } from "../auth/session";
@@ -27,9 +28,90 @@ function choose(name: string, label: string) {
   fireEvent.click(menu.getByText(label, { selector: "strong", exact: true }).closest('[role="option"]')!);
 }
 
-beforeEach(() => { vi.clearAllMocks(); sessionStorage.clear(); window.history.replaceState(null, "", "/md-simulation"); mocks.capabilities.mockResolvedValue(caps); mocks.status.mockResolvedValue(caps); mocks.jobs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10 }); mocks.job.mockResolvedValue(job()); mocks.create.mockResolvedValue(job()); mocks.cancel.mockResolvedValue(job({ status: "cancel_requested" })); mocks.clear.mockResolvedValue(job({ artifacts: [] })); });
+beforeEach(() => { clearPolymerMdViewState(); vi.clearAllMocks(); sessionStorage.clear(); window.history.replaceState(null, "", "/md-simulation"); mocks.capabilities.mockResolvedValue(caps); mocks.status.mockResolvedValue(caps); mocks.jobs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10 }); mocks.job.mockResolvedValue(job()); mocks.create.mockResolvedValue(job()); mocks.cancel.mockResolvedValue(job({ status: "cancel_requested" })); mocks.clear.mockResolvedValue(job({ artifacts: [] })); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 describe("formal polymer MD page", () => {
+  it("restores the last main tab for the same job while a different explicit job link wins", async () => {
+    window.history.replaceState(null, "", `/md-simulation?job=${job().job_id}`);
+    const initial = page(); await screen.findByRole("heading", { name: "任务详情" });
+    fireEvent.click(screen.getByRole("tab", { name: "任务中心" }));
+    initial.unmount();
+    const returned = page();
+    expect(screen.getByRole("tab", { name: "任务中心" }).getAttribute("aria-selected")).toBe("true");
+    returned.unmount();
+    const other = job({ job_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeef" });
+    mocks.job.mockResolvedValue(other);
+    window.history.replaceState(null, "", `/md-simulation?job=${other.job_id}`);
+    page(); await screen.findByRole("heading", { name: "任务详情" });
+    expect(screen.getByRole("tab", { name: "结果分析" }).getAttribute("aria-selected")).toBe("true");
+    expect(mocks.job).toHaveBeenLastCalledWith(other.job_id, expect.any(AbortSignal));
+  });
+
+  it("restores loaded analysis across main tabs and a module remount after rechecking the job", async () => {
+    const current = job();
+    mocks.trajectory.mockImplementation(async (id, sid, offset) => ({ job_id: id, stage_run_id: sid, total_frames: 2,
+      frames: [{ frame_index: offset, time_ps: offset, points: [{ atom_id: 1, chain_id: 1, atom_type: "C", x: 0, y: 0, z: 0 },
+        { atom_id: 2, chain_id: 1, atom_type: "H", x: 1, y: 0, z: 0 }], box: { lx: 10, ly: 10, lz: 10 } }] }));
+    mocks.distance.mockImplementation(async (id, sid) => ({ job_id: id, stage_run_id: sid, frames: [0, 1], time_ps: [0, 1], distance: [1, 2] }));
+    window.history.replaceState(null, "", `/md-simulation?job=${current.job_id}`);
+    const initial = page();
+    await screen.findByRole("heading", { name: "任务详情" });
+    fireEvent.click(screen.getByRole("tab", { name: "构象" }));
+    await screen.findByText("真实坐标原子 1");
+    fireEvent.click(screen.getByRole("button", { name: "下一帧" }));
+    await screen.findByText("轨迹来源：EQ3 平衡采样，第 2 帧");
+    fireEvent.click(screen.getByRole("checkbox", { name: "距离使用周期边界" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择原子对" }));
+    fireEvent.click(screen.getByRole("button", { name: "计算当前阶段距离" }));
+    await screen.findByText("当前阶段距离已返回");
+    fireEvent.click(screen.getByRole("tab", { name: "任务中心" }));
+    fireEvent.click(screen.getByRole("tab", { name: "结果分析" }));
+    await screen.findByText("当前阶段距离已返回");
+    expect(screen.getByText("距离周期边界：关闭")).toBeTruthy();
+    act(() => {
+      window.history.pushState(null, "", "/");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    initial.unmount();
+    window.history.replaceState(null, "", "/md-simulation");
+    let resolve!: (value: PolymerMdJob) => void;
+    mocks.job.mockImplementationOnce(() => new Promise<PolymerMdJob>(done => { resolve = done; }));
+    page();
+    expect(screen.queryByText("当前阶段距离已返回")).toBeNull();
+    await act(async () => { resolve(current); });
+    await screen.findByText("当前阶段距离已返回");
+    expect(screen.getByText("轨迹来源：EQ3 平衡采样，第 2 帧")).toBeTruthy();
+    expect(screen.getByText("距离周期边界：关闭")).toBeTruthy();
+    expect(window.location.search).toContain(current.job_id);
+    expect(mocks.trajectory).toHaveBeenCalledTimes(2); expect(mocks.distance).toHaveBeenCalledOnce();
+    for (const mutation of [mocks.create, mocks.cancel, mocks.clear, mocks.remove]) expect(mutation).not.toHaveBeenCalled();
+  });
+
+  it("shows actual execution times in task history and the selected result without mutating a job", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-29T01:41:23Z"));
+    const started = "2026-10-28T09:38:19.714180+00:00";
+    const running = job({ started_at: started });
+    const finished = job({ job_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeef", status: "completed", started_at: started, finished_at: "2026-10-28T10:39:22.714180+00:00" });
+    const queued = job({ job_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeff", status: "queued", started_at: null });
+    mocks.jobs.mockResolvedValue({ items: [running, finished, queued], total: 3, page: 1, page_size: 10 });
+    mocks.job.mockResolvedValue(running);
+    page();
+    fireEvent.click(screen.getByRole("tab", { name: "任务中心" }));
+    await screen.findAllByRole("button", { name: "查看任务" });
+    const timings = screen.getAllByLabelText("任务执行时间");
+    expect(within(timings[0]).getByText("2026-10-28 17:38:19")).toBeTruthy();
+    expect(within(timings[0]).getByText("运行时长").nextElementSibling?.textContent).toBe("16 小时 3 分 3 秒");
+    expect(within(timings[0]).getByText("北京时间")).toBeTruthy();
+    expect(within(timings[1]).getByText("运行时长").nextElementSibling?.textContent).toBe("1 小时 1 分 3 秒");
+    expect(within(timings[2]).getAllByText("尚未开始")).toHaveLength(2);
+    fireEvent.click(screen.getAllByRole("button", { name: "查看任务" })[0]);
+    await screen.findByRole("heading", { name: "任务详情" });
+    const overview = screen.getByLabelText("任务执行时间");
+    expect(within(overview).getByText("2026-10-28 17:38:19")).toBeTruthy();
+    expect(within(overview).getByText("运行时长").nextElementSibling?.textContent).toBe("16 小时 3 分 3 秒");
+    for (const mutation of [mocks.create, mocks.cancel, mocks.clear, mocks.remove]) expect(mutation).not.toHaveBeenCalled();
+  });
+
   it("uses one workbench and preserves formal inputs while switching modes and workspaces", async () => {
     mocks.jobs.mockResolvedValue({ items: [job()], total: 1, page: 1, page_size: 10 });
     const view = page();
@@ -64,8 +146,32 @@ describe("formal polymer MD page", () => {
     fireEvent.click(screen.getByRole("button", { name: "示例演示" })); expect(screen.getByText("固定示例演示内容")).toBeTruthy(); expect(mocks.create).not.toHaveBeenCalled();
   });
   it("retains editable inputs and explains a worker that is not ready", async () => {
-    mocks.status.mockResolvedValue({ ...caps, worker_ready: false }); page();
+    mocks.capabilities.mockResolvedValue({ ...caps, worker_ready: false }); page();
     expect(await screen.findByText("计算服务尚未就绪，请稍后刷新。")).toBeTruthy(); expect((screen.getByRole("button", { name: "提交正式计算" }) as HTMLButtonElement).disabled).toBe(true); expect((screen.getByLabelText("目标温度") as HTMLInputElement).disabled).toBe(false); expect(mocks.create).not.toHaveBeenCalled();
+  });
+  it("marks a single lost status observation as unconfirmed, keeps repeated failures explicit and recovers without changing inputs", async () => {
+    page();
+    const submit = screen.getByRole("button", { name: "提交正式计算" }) as HTMLButtonElement;
+    const toolbar = within(screen.getByLabelText("聚合物 MD 模拟工具栏"));
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.change(screen.getByLabelText("目标温度"), { target: { value: "350" } });
+    mocks.capabilities.mockRejectedValueOnce(new Error("Temporary observation failure"));
+    fireEvent.click(toolbar.getByRole("button", { name: "刷新" }));
+    const unconfirmed = await toolbar.findByText("状态待确认");
+    expect(unconfirmed.closest('[role="status"]')?.className).toBe("is-unavailable");
+    expect(submit.disabled).toBe(true);
+    expect((screen.getByLabelText("目标温度") as HTMLInputElement).value).toBe("350");
+    mocks.capabilities.mockRejectedValueOnce(new Error("Repeated observation failure"));
+    fireEvent.click(toolbar.getByRole("button", { name: "刷新" }));
+    const failed = await toolbar.findByText("连接异常");
+    expect(failed.closest('[role="status"]')?.className).toBe("is-error");
+    expect(submit.disabled).toBe(true);
+    fireEvent.click(toolbar.getByRole("button", { name: "刷新" }));
+    await toolbar.findByText("准备就绪");
+    expect(submit.disabled).toBe(false);
+    expect((screen.getByLabelText("目标温度") as HTMLInputElement).value).toBe("350");
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.status).not.toHaveBeenCalled();
   });
   it("marks a forcefield rejected by the service and lets the user repair the saved choice", async () => {
     mocks.capabilities.mockResolvedValue({ ...caps, supported_forcefields: ["Dreiding"] });
@@ -121,23 +227,23 @@ describe("formal polymer MD page", () => {
     expect((screen.getByLabelText("组分 A 每链目标原子数") as HTMLInputElement).value).toBe("5000");
     expect(mocks.create).not.toHaveBeenCalled();
   });
-  it("shows actual resource and acceptance metadata without treating readiness as scientific acceptance", async () => {
-    mocks.status.mockResolvedValue({ ...caps, submit_enabled: false, worker_ready: false, admission_reason: "maintenance", maintenance: { enabled: true, persisted: true, updated_at: null }, runtime: { adapter_scientific_validation: "pending", accepted_protocols: [] }, acceptance_summary: { accepted_protocol_count: 0 }, resource_limits: { cpu_count: 16, memory_bytes: 32 * 1024 ** 3, stage_timeout_seconds: 86400, job_timeout_seconds: 345600 } });
+  it("omits the environment and acceptance block while retaining the authoritative maintenance restriction", async () => {
+    mocks.capabilities.mockResolvedValue({ ...caps, submit_enabled: false, worker_ready: false, admission_reason: "maintenance", maintenance: { enabled: true, persisted: true, updated_at: null }, runtime: { adapter_scientific_validation: "pending", accepted_protocols: [] }, acceptance_summary: { accepted_protocol_count: 0 }, resource_limits: { cpu_count: 16, memory_bytes: 32 * 1024 ** 3, stage_timeout_seconds: 86400, job_timeout_seconds: 345600 } });
     page(); await screen.findByText(/计算服务正在维护/);
-    fireEvent.click(screen.getByText("运行环境与验收状态"));
-    expect(screen.getByText(/当前独立科学验收尚未核验通过/)).toBeTruthy();
-    expect(screen.getByText(/已验收协议：0 项/)).toBeTruthy();
-    expect(screen.getByText(/单阶段最长 24 小时，单任务最长 96 小时/)).toBeTruthy();
+    expect(screen.queryByText("运行环境与验收状态")).toBeNull();
+    expect(screen.queryByText(/当前独立科学验收尚未核验通过/)).toBeNull();
+    expect(screen.queryByText(/已验收协议/)).toBeNull();
+    expect(screen.queryByText(/当前执行资源|单阶段最长|单任务最长/)).toBeNull();
     expect(screen.queryByText(/容量已满/)).toBeNull();
     expect((screen.getByRole("button", { name: "提交正式计算" }) as HTMLButtonElement).disabled).toBe(true);
   });
-  it("keeps independent acceptance pending when only historical sealed passed flags exist", async () => {
-    mocks.status.mockResolvedValue({ ...caps, runtime: { scientific_acceptance: "passed", adapter_scientific_validation: "passed", accepted_protocols: ["legacy-global-approval"] } });
+  it("does not expose historical runtime seals in configuration or change submission readiness", async () => {
+    mocks.capabilities.mockResolvedValue({ ...caps, runtime: { scientific_acceptance: "passed", adapter_scientific_validation: "passed", accepted_protocols: ["legacy-global-approval"] } });
     page();
     await waitFor(() => expect((screen.getByRole("button", { name: "提交正式计算" }) as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(screen.getByText("运行环境与验收状态"));
-    expect(screen.getByText(/当前独立科学验收尚未核验通过/)).toBeTruthy();
-    expect(screen.getByText(/已验收协议：0 项/)).toBeTruthy();
+    expect(screen.queryByText("运行环境与验收状态")).toBeNull();
+    expect(screen.queryByText(/当前独立科学验收尚未核验通过/)).toBeNull();
+    expect(screen.queryByText(/已验收协议/)).toBeNull();
     expect(screen.queryByText(/legacy-global-approval/)).toBeNull();
     expect(screen.queryByText(/当前适配器已记录科学验证/)).toBeNull();
   });
@@ -156,7 +262,7 @@ describe("formal polymer MD page", () => {
     expect(screen.getByRole("combobox", { name: "几何优化方法" })).toBeTruthy();
     expect(screen.getByRole("combobox", { name: "原子电荷模型" })).toBeTruthy();
     expect(screen.getAllByRole("checkbox")).toHaveLength(5);
-    expect(screen.getByRole("heading", { name: "平衡后自动分析" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "平衡后自动分析 14 项默认包含" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "其他 RadonPy 计算流程" })).toBeNull();
     expect(screen.getByRole("group", { name: "聚合物类型" })).toBeTruthy();
     expect(screen.getAllByRole("radio")).toHaveLength(5);
@@ -449,7 +555,7 @@ describe("formal polymer MD page", () => {
     const finished = job({ status: "completed", quality_status: "not_converged", results: { properties: [{ key: "Cp", value: null, unit: "J/(kg·K)", quality_status: "not_converged", reason: "有效样本不足" }, { key: "density", value: 1.125, unit: "g/cm³", quality_status: "passed", source_stage: "eq3", analysis_range: { start_ps: 2000, stop_ps: 5000 } }] }, artifacts: [{ artifact_id: "density", stage_run_id: stage.stage_run_id, filename: "density.csv", kind: "results", media_type: "text/csv", size_bytes: 200, sha256: "a".repeat(64) }] });
     mocks.job.mockResolvedValue(finished); window.history.replaceState(null, "", `/md-simulation?job=${finished.job_id}`); page(); await screen.findByText("执行完成"); expect(screen.getByText("尚未收敛")).toBeTruthy(); expect(screen.getByText("有效样本不足")).toBeTruthy(); expect(screen.getByText(/分析区间 2,000–5,000 ps/)).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "输出文件" }));
-    fireEvent.click(screen.getByRole("button", { name: "下载 density.csv" })); await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(finished.job_id, "density", "density.csv", 200));
+    fireEvent.click(screen.getByRole("button", { name: "下载 density.csv" })); await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(finished.job_id, "density", "density.csv", 200, expect.any(AbortSignal)));
     mocks.job.mockResolvedValue({ ...finished, artifact_state: "deleted" }); fireEvent.click(screen.getByRole("button", { name: "清理输出文件" })); expect(mocks.clear).not.toHaveBeenCalled(); fireEvent.click(screen.getByRole("button", { name: "确认清理" })); await waitFor(() => expect(mocks.clear).toHaveBeenCalled()); await waitFor(() => expect(screen.queryByRole("button", { name: "下载 density.csv" })).toBeNull()); fireEvent.click(screen.getByRole("tab", { name: "概览" })); expect(screen.getByText("1.125")).toBeTruthy();
   });
   it("binds trajectory and distance calls to the selected actual stage and retires them on a stage change", async () => {

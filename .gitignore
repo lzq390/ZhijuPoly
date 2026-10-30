@@ -81,6 +81,8 @@ nexpoly-release-*.tar.gz
 /scripts/prepare_pi_reverse_design_demo_data.py
 /scripts/prepare_pi_reverse_design_test_data.py
 /backend/tests/*
+!/backend/tests/test_polymer_md_analysis_client.py
+!/backend/tests/test_polymer_md_logs.py
 !/backend/tests/test_usage*.py
 !/backend/tests/test_entitlement*.py
 !/backend/tests/test_literature_*.py

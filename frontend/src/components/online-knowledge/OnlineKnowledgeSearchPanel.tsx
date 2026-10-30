@@ -301,7 +301,11 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
   }, []);
 
   useEffect(() => {
-    if (!data || data === previousDataRef.current) return;
+    if (!data) {
+      previousDataRef.current = null;
+      return;
+    }
+    if (data === previousDataRef.current) return;
     previousDataRef.current = data;
     const count = data.mode === "property" ? data.propertyPoints.length : data.syntheses.length;
     if (!count) {

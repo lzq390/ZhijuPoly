@@ -47,25 +47,30 @@ export function useOnlineKnowledgeSearch() {
   });
   const pollTokenRef = useRef(0);
   const pollAbortRef = useRef<AbortController | null>(null);
+  const historyTokenRef = useRef(0);
 
   useEffect(() => {
     return () => {
       pollTokenRef.current += 1;
       pollAbortRef.current?.abort();
       pollAbortRef.current = null;
+      historyTokenRef.current += 1;
     };
   }, []);
 
   const loadHistory = useCallback(async () => {
+    const token = ++historyTokenRef.current;
     setState((current) => ({ ...current, isHistoryLoading: true, historyError: null }));
     try {
       const response = await fetchOnlineKnowledgeHistory();
+      if (historyTokenRef.current !== token) return;
       setState((current) => ({
         ...current,
         isHistoryLoading: false,
         history: response.history
       }));
     } catch (error) {
+      if (historyTokenRef.current !== token) return;
       setState((current) => ({
         ...current,
         isHistoryLoading: false,
@@ -198,8 +203,12 @@ export function useOnlineKnowledgeSearch() {
     setState((current) => ({ ...current, historyError: null }));
     try {
       await deleteOnlineKnowledgeHistory(historyId);
+      // Any earlier list response may still contain the deleted record.
+      historyTokenRef.current += 1;
       setState((current) => ({
         ...current,
+        isHistoryLoading: false,
+        historyError: null,
         history: current.history.filter((item) => item.history_id !== historyId)
       }));
     } catch (error) {
@@ -215,7 +224,8 @@ export function useOnlineKnowledgeSearch() {
     setState((current) => ({ ...current, historyError: null }));
     try {
       await clearOnlineKnowledgeHistory();
-      setState((current) => ({ ...current, history: [] }));
+      historyTokenRef.current += 1;
+      setState((current) => ({ ...current, history: [], isHistoryLoading: false, historyError: null }));
     } catch (error) {
       setState((current) => ({
         ...current,

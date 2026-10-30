@@ -13,12 +13,13 @@ import { POLYMER_MD_PENDING_MAX_AGE_MS, polymerMdRequestFingerprint } from "../.
 import { MdSimulationDemoPage } from "../MdSimulationDemoPage";
 import { MdStructureInput } from "../md-simulation/MdStructureInput";
 import { PolymerMdResults } from "./PolymerMdResults";
-import { PolymerMdAcceptanceEvidence } from "./PolymerMdAcceptanceEvidence";
+import { PolymerMdTaskCenter } from "./PolymerMdTaskCenter";
+import { readPolymerMdWorkspace, savePolymerMdWorkspace } from "../../services/polymerMdViewState";
 import { PolymerMdConfigurationSelects, PolymerMdPropertyChoices } from "./PolymerMdConfigurationFields";
 import { POLYMER_MD_BASE_PROPERTIES } from "./propertyGroups";
 import { effectiveModel, PolymerMdModelFields } from "./PolymerMdModelFields";
 import { defaultPolymerMdUserConfiguration, fixedPolymerMdExecutionRequest, mapPolymerMdUserConfiguration, readPolymerMdUserConfiguration, savePolymerMdUserConfiguration, type PolymerMdUserConfiguration } from "./userConfiguration";
-import { jobIdFromLocation, POLYMER_MD_DEFAULTS, QUALITY_LABELS, readPolymerMdDraft, savePolymerMdDraft, stageLabel, STATUS_LABELS, terminalJob, validatePolymerMdRequest } from "./config";
+import { jobIdFromLocation, POLYMER_MD_DEFAULTS, readPolymerMdDraft, savePolymerMdDraft, terminalJob, validatePolymerMdRequest } from "./config";
 const MAIN_TABS = [
   { id: "config", label: "模拟配置", description: "聚合物建模与计算参数", title: "聚合物 MD 任务配置", detail: "配置聚合物组成、模拟条件与物性计算目标。", icon: FlaskConical },
   { id: "tasks", label: "任务中心", description: "我的正式队列与历史", title: "聚合物 MD 任务中心", detail: "查看本人的正式计算任务、执行状态与历史。", icon: ClipboardList },
@@ -78,13 +79,26 @@ export function PolymerMdFormalPage({
 }) {
   const guest = useAuth()?.status === "guest";
   const [request, setRequest] = useState(readPolymerMdDraft);
-  const [selectedId, setSelectedId] = useState(jobIdFromLocation);
-  const [view, setView] = useState<"config" | "tasks" | "results">(() => jobIdFromLocation() ? "results" : "config");
+  const [restored] = useState(readPolymerMdWorkspace);
+  const [selectedId, setSelectedId] = useState(() => jobIdFromLocation() ?? restored?.selectedId ?? null);
+  const [view, setView] = useState<"config" | "tasks" | "results">(() => {
+    const linkedId = jobIdFromLocation();
+    return linkedId && linkedId !== restored?.selectedId ? "results" : restored?.view ?? (linkedId ? "results" : "config");
+  });
   const [runMode, setRunMode] = useState<"formal" | "demo">("formal");
   const [hasOpenedDemo, setHasOpenedDemo] = useState(false);
   const [configuration, setConfiguration] = useState(readPolymerMdUserConfiguration);
   const [configurationError, setConfigurationError] = useState<string | null>(null);
   const identity = useRef(getSessionEpoch());
+  useEffect(() => {
+    if (!guest && runMode === "formal") savePolymerMdWorkspace({ selectedId, view }, identity.current);
+  }, [guest, runMode, selectedId, view]);
+  useEffect(() => {
+    if (!selectedId || jobIdFromLocation() || identity.current !== getSessionEpoch()) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("job", selectedId);
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [selectedId]);
   const [confirmation, setConfirmation] = useState<{ action: PolymerMdConfirmationAction; jobId: string } | null>(null);
   const dismissConfirmation = useCallback(() => setConfirmation(null), []);
   useEffect(dismissConfirmation, [dismissConfirmation, runMode]);
@@ -102,13 +116,16 @@ export function PolymerMdFormalPage({
   } = simulation;
   const execution = mapPolymerMdUserConfiguration(configuration, { ...request, smiles: request.smiles.trim() });
   const errors = validatePolymerMdRequest(execution.request ?? fixedPolymerMdExecutionRequest({ ...request, smiles: request.smiles.trim() }), capabilities);
-  const service = polymerMdServiceState(guest, simulation.serviceError, capabilities, status);
+  const service = polymerMdServiceState(guest, simulation.serviceError, capabilities, status, simulation.serviceCheck);
   const { ready, reason } = service;
   useEffect(() => {
     if (identity.current === getSessionEpoch()) savePolymerMdDraft(request);
   }, [request]);
   useEffect(() => {
     const pop = () => {
+      // App transitions keep this module mounted briefly after history changes.
+      // Leaving the module must not erase its remembered selected task.
+      if (window.location.pathname.replace(/\/+$/, "") !== "/md-simulation") return;
       const id = jobIdFromLocation();
       setSelectedId(id);
       if (id) { setRunMode("formal"); setView("results"); }
@@ -192,8 +209,10 @@ export function PolymerMdFormalPage({
   }
   const activeTab = MAIN_TABS.find(tab => tab.id === view) ?? MAIN_TABS[0];
   const SurfaceIcon = activeTab.icon;
-  const serviceTone = ready ? "ready" : guest ? "guest" : simulation.serviceError ? "error" : !capabilities || !status ? "loading" : "unavailable";
-  const StatusIcon = guest ? LockKeyhole : simulation.serviceError ? TriangleAlert : serviceTone === "loading" ? LoaderCircle : TriangleAlert;
+  const serviceTone = ready ? "ready" : guest ? "guest" : simulation.serviceCheck === "unconfirmed" ? "unavailable"
+    : simulation.serviceCheck === "unavailable" || simulation.serviceError ? "error"
+    : simulation.serviceCheck === "checking" ? "loading" : "unavailable";
+  const StatusIcon = guest ? LockKeyhole : serviceTone === "loading" ? LoaderCircle : TriangleAlert;
   const changeDemoView = useCallback((next: "input" | "results") => setView(next === "results" ? "results" : "config"), []);
 
   return <div className="np-pmd-page np-module-page-body">
@@ -257,19 +276,12 @@ export function PolymerMdFormalPage({
         </div>
       </footer>
               </form> : null}
-              {runMode === "formal" && (status?.runtime || status?.resource_limits || status?.acceptance_summary) ? <details className="np-polymer-md-runtime"><summary>运行环境与验收状态</summary>
-                <PolymerMdAcceptanceEvidence capabilities={status} />
-                {status.resource_limits ? <p>当前执行资源：最多 {status.resource_limits.cpu_count} CPU、{status.resource_limits.memory_bytes / 1024 ** 3} GiB 内存；单阶段最长 {status.resource_limits.stage_timeout_seconds / 3600} 小时，单任务最长 {status.resource_limits.job_timeout_seconds / 3600} 小时。</p> : <p>当前未获取到实际资源上限。</p>}
-              </details> : null}
             </div> : null}
             {hasOpenedDemo ? <div hidden={runMode !== "demo" || view === "tasks"} className="np-pmd-demo-slot"><MdSimulationDemoPage structure={structure} onEditStructure={onEditStructure} embedded active={runMode === "demo" && view !== "tasks"} workspaceView={view === "results" ? "results" : "input"} onWorkspaceViewChange={changeDemoView} /></div> : null}
-            {view === "tasks" ? <section className="np-pmd-task-center">
-              <header className="np-pmd-section-heading"><div><h3>我的计算任务</h3><p>查看正式计算的执行状态与历史，选择任务后继续分析。</p></div>{simulation.history ? <span>共 {simulation.history.total} 个任务</span> : null}</header>
-              {simulation.historyError ? <p role="alert" className="np-polymer-md-notice">{simulation.historyError}</p> : null}
-              {simulation.history?.items.length ? <ul className="np-polymer-md-jobs">{simulation.history.items.map(j => <li key={j.job_id} className="np-pmd-task-row"><div className="np-pmd-task-identity"><strong className="np-pmd-code">{j.scientific_request.smiles}</strong><small className="np-pmd-code">{j.job_id}</small><span>{stageLabel(j.stage)} · {QUALITY_LABELS[j.quality_status]}</span></div><span className={`np-pmd-status-pill is-${j.status}`}>{STATUS_LABELS[j.status]}</span><div className="np-pmd-task-actions"><button type="button" onClick={() => selectJob(j.job_id)}>查看任务</button>{!terminalJob(j.status) ? <button type="button" disabled={Boolean(simulation.busy) || j.status === "cancel_requested"} onClick={() => setConfirmation({ action: "cancel", jobId: j.job_id })}>{j.status === "cancel_requested" ? "正在取消" : "取消"}</button> : null}</div></li>)}</ul> : <div className="np-pmd-empty-state"><ClipboardList aria-hidden="true" /><h3>暂无任务记录。</h3><p>提交正式计算后，可在这里查看任务状态与历史。</p></div>}
-              <div className="np-pmd-pagination"><button type="button" disabled={simulation.page <= 1} onClick={() => simulation.setPage(p => p - 1)}>上一页</button><span>第 {simulation.page} 页{simulation.history ? ` · 共 ${simulation.history.total} 个任务` : ""}</span><button type="button" disabled={!simulation.history || simulation.page * 10 >= simulation.history.total} onClick={() => simulation.setPage(p => p + 1)}>下一页</button></div>
-            </section> : null}
-            {view === "results" && runMode === "formal" ? simulation.loading && !simulation.job ? <div className="np-pmd-empty-state" role="status"><LoaderCircle className="np-sw-spin" aria-hidden="true" /><h3>正在读取所选任务…</h3><p>正在读取任务的最新状态和已有结果。</p></div> : simulation.job ? <PolymerMdResults key={simulation.job.job_id} job={simulation.job} capabilities={capabilities} busy={simulation.busy} onCancel={() => setConfirmation({ action: "cancel", jobId: simulation.job!.job_id })} onClear={() => setConfirmation({ action: "clear", jobId: simulation.job!.job_id })} onDelete={() => setConfirmation({ action: "delete", jobId: simulation.job!.job_id })} /> : <div className="np-pmd-empty-state"><Activity aria-hidden="true" /><h3>{selectedId ? "当前任务不可读取" : "尚未选择计算任务"}</h3><p>{selectedId ? "当前任务不可读取，请刷新或从我的任务重新选择。" : "提交计算或在“任务中心”中选择任务后查看结果。"}</p></div> : null}
+            {view === "tasks" ? <PolymerMdTaskCenter history={simulation.history} page={simulation.page} error={simulation.historyError} busy={simulation.busy} guest={guest} selectedId={selectedId}
+              onSelect={selectJob} onCancel={jobId => setConfirmation({ action: "cancel", jobId })} onPageChange={simulation.setPage}
+              onRefresh={() => void simulation.refresh()} onLogin={() => { requestServiceAccess(); }} /> : null}
+            {view === "results" && runMode === "formal" ? simulation.loading && !simulation.job ? <div className="np-pmd-empty-state" role="status"><LoaderCircle className="np-sw-spin" aria-hidden="true" /><h3>正在读取所选任务…</h3><p>正在读取任务的最新状态和已有结果。</p></div> : simulation.job ? <PolymerMdResults key={simulation.job.job_id} job={simulation.job} capabilities={capabilities} serviceCheck={simulation.serviceCheck} busy={simulation.busy} onCancel={() => setConfirmation({ action: "cancel", jobId: simulation.job!.job_id })} onClear={() => setConfirmation({ action: "clear", jobId: simulation.job!.job_id })} onDelete={() => setConfirmation({ action: "delete", jobId: simulation.job!.job_id })} /> : <div className="np-pmd-empty-state"><Activity aria-hidden="true" /><h3>{selectedId ? "当前任务不可读取" : "尚未选择计算任务"}</h3><p>{selectedId ? "当前任务不可读取，请刷新或从我的任务重新选择。" : "提交计算或在“任务中心”中选择任务后查看结果。"}</p></div> : null}
           </section>
         </main>
       </div>

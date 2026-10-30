@@ -67,6 +67,7 @@ WORKFLOW_JOB_HEADER = re.compile(r"(?m)^  (?P<name>[A-Za-z0-9_-]+):\n")
 WORKFLOW_STEP_ITEM = re.compile(r"(?m)^      - ")
 WORKFLOW_STEP_KEY = re.compile(r"^        [A-Za-z_][A-Za-z0-9_-]*:")
 POLYMER_MD_OPERATOR_TESTS = (
+    "test_polymer_md_analysis_release.py",
     "test_polymer_md_api_services.py",
     "test_polymer_md_backend_full.py",
     "test_polymer_md_backup_dev.py",
@@ -1271,6 +1272,15 @@ def validate_polymer_md_script_tests(ci_text: str, failures: list[str]) -> None:
     gate = workflow_job_body(ci_text, "ci-gate", failures)
     if script is None or backend is None or gate is None:
         return
+    native_header = "      - name: Install locked trajectory analysis test dependencies\n"
+    native_steps = [step for step in workflow_step_blocks(backend) if step.startswith(native_header)]
+    if len(native_steps) != 1:
+        failures.append("backend-tests must install locked native analysis test dependencies exactly once")
+    else:
+        for marker in ("        if: matrix.shard == 0\n", "--require-hashes --only-binary=:all:",
+                       "-r workers/polymer_md_analysis/requirements-ci.lock"):
+            if marker not in native_steps[0]:
+                failures.append(f"native analysis test dependencies are missing: {marker.strip()}")
     header = "      - name: Run polymer MD offline Worker and registry tests\n"
     steps = [step for step in workflow_step_blocks(backend) if step.startswith(header)]
     if len(steps) != 1:
@@ -1288,12 +1298,14 @@ def validate_polymer_md_script_tests(ci_text: str, failures: list[str]) -> None:
         '            PYTHONPATH="$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/backend"',
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
         "python -m pytest --assert=plain --tb=short",
+        "              workers/polymer_md_analysis/tests \\\n",
     ):
         if marker not in step:
             failures.append(f"polymer MD offline pytest is missing: {marker.strip()}")
     require_ordered_markers(
         backend,
         (("hashed backend dependencies", "python -m pip install --require-hashes -r backend/requirements-ci.lock"),
+         ("locked native analysis dependencies", "-r workers/polymer_md_analysis/requirements-ci.lock"),
          ("offline pytest", header)),
         label="polymer MD script test runtime", failures=failures,
     )

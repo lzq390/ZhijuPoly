@@ -130,17 +130,6 @@
   transform: rotate(225deg);
 }
 
-.np-polymer-md-page.np-md-simulation .np-polymer-md-choice-help > summary {
-  min-height: 28px;
-  width: fit-content;
-  gap: 10px;
-  padding: 4px 8px;
-}
-
-.np-polymer-md-page.np-md-simulation .np-polymer-md-choice-help[open] > summary {
-  margin-bottom: 8px;
-}
-
 @media (min-width: 2000px) and (min-height: 1120px) {
   .np-polymer-md-page.np-md-simulation .np-sw-select .np-sw-select__trigger {
     height: 52px;
@@ -150,11 +139,6 @@
     min-height: 46px;
     padding: 10px 14px;
     border-radius: 9px;
-  }
-
-  .np-polymer-md-page.np-md-simulation .np-polymer-md-choice-help > summary {
-    min-height: 36px;
-    padding: 6px 10px;
   }
 
   .np-polymer-md-page.np-md-simulation details > summary::after {

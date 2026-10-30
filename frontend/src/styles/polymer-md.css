@@ -80,9 +80,6 @@
 .np-polymer-md-blocks>.np-polymer-md-fields>button{align-self:end}
 @media(max-width:650px){.np-polymer-md-model-components{grid-template-columns:minmax(0,1fr)}}
 .np-polymer-md-configuration-field{min-width:0}
-.np-polymer-md-page .np-polymer-md-choice-help{padding:5px 0 0}
-.np-polymer-md-choice-help summary{cursor:pointer;width:fit-content;color:var(--np-theme-muted)}
-.np-polymer-md-choice-help p,.np-polymer-md-choice-help small{color:var(--np-theme-muted);margin:8px 0 0;overflow-wrap:anywhere}
 .np-polymer-md-property-selection-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start}
 .np-polymer-md-property-selection-groups fieldset{min-width:0;border:1px solid var(--np-theme-border);border-radius:8px;padding:8px 14px 12px;margin:0}
 .np-polymer-md-property-selection-groups legend{padding:0 6px}
@@ -91,16 +88,33 @@
 .np-polymer-md-property-selection-groups li:last-child{border-bottom:0}
 .np-polymer-md-property-selection-groups li>label{display:flex;align-items:baseline;gap:9px;flex:1;min-width:0;cursor:pointer}
 .np-polymer-md-property-selection-groups input{accent-color:var(--np-theme-blue);flex-shrink:0}
-.np-polymer-md-property-selection-groups li>.np-polymer-md-choice-help{flex-shrink:0}
-.np-polymer-md-property-selection-groups .np-polymer-md-choice-help[open]{flex-basis:100%}
 .np-polymer-md-property-choices>section{margin-top:24px}
 .np-polymer-md-property-choices>section>h3{margin:0 0 10px}
 .np-polymer-md-property-choices>section>.np-polymer-md-muted{margin:0 0 14px}
-.np-polymer-md-base-disclosure>summary{cursor:pointer;width:fit-content}
-.np-polymer-md-base-disclosure>.np-polymer-md-property-selection-groups{margin-top:16px}
-.np-polymer-md-property-selection-groups .np-polymer-md-automatic-property>span{flex:1;min-width:0}
-.np-polymer-md-property-selection-groups .np-polymer-md-flow-description{flex-basis:100%;color:var(--np-theme-muted);margin:0}
-.np-polymer-md-additional-properties .np-polymer-md-choice-help{order:1}
+.np-polymer-md-page .np-polymer-md-base-disclosure{padding:0}
+.np-polymer-md-base-disclosure>summary>h3{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px;margin:0}
+.np-polymer-md-base-disclosure>.np-polymer-md-muted{margin:12px 0 14px}
+.np-polymer-md-base-groups{container-type:inline-size;border-top:1px solid var(--np-theme-border-soft)}
+.np-polymer-md-base-groups>section{display:grid;grid-template-columns:94px minmax(0,1fr);gap:18px;padding:16px 0;border-bottom:1px solid var(--np-theme-border-soft)}
+.np-polymer-md-base-groups header{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;align-content:start}
+.np-polymer-md-base-groups h4{margin:0;color:var(--np-theme-ink)}
+.np-polymer-md-base-groups header>span{color:var(--np-theme-muted)}
+.np-polymer-md-base-groups ul{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 20px;list-style:none;margin:0;padding:0}
+.np-polymer-md-automatic-property{min-width:0;display:flex;flex-direction:column;gap:3px;overflow-wrap:anywhere}
+.np-polymer-md-automatic-property>span{font-weight:600}
+.np-polymer-md-automatic-property small{color:var(--np-theme-muted)}
+.np-polymer-md-additional-properties .np-polymer-md-property-selection-groups li{display:block;padding:0;margin-top:10px;border:1px solid var(--np-theme-border-soft);border-radius:8px;transition:background .15s,border-color .15s}
+.np-polymer-md-additional-properties .np-polymer-md-property-selection-groups li:hover{border-color:var(--np-theme-input-border);background:var(--np-theme-neutral-soft)}
+.np-polymer-md-additional-properties .np-polymer-md-property-selection-groups li.is-selected{border-color:var(--np-theme-info-border);background:var(--np-theme-info-soft)}
+.np-polymer-md-additional-properties .np-polymer-md-property-selection-groups li:focus-within{outline:2px solid var(--np-theme-focus);outline-offset:2px}
+.np-polymer-md-additional-properties .np-polymer-md-property-selection-groups li>label{align-items:flex-start;gap:10px;padding:13px 14px}
+.np-polymer-md-additional-properties input{margin:3px 0 0;width:14px;height:14px}
+.np-polymer-md-additional-properties label>span{min-width:0}
+.np-polymer-md-additional-properties label strong{display:block;color:var(--np-theme-ink)}
+.np-polymer-md-property-selection-groups .np-polymer-md-flow-description{display:block;color:var(--np-theme-muted);margin-top:5px;overflow-wrap:anywhere}
+@container(max-width:700px){.np-polymer-md-base-groups>section{grid-template-columns:76px minmax(0,1fr);gap:12px}.np-polymer-md-base-groups ul{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@container(max-width:460px){.np-polymer-md-base-groups>section{grid-template-columns:minmax(0,1fr);gap:10px}.np-polymer-md-base-groups ul{gap:12px}}
+@media(max-width:560px){.np-polymer-md-additional-properties .np-polymer-md-property-selection-groups li>label{padding:12px}}
 .np-polymer-md-other-workflows,.np-polymer-md-saved-properties{padding-top:22px;border-top:1px solid var(--np-theme-border)}
 .np-polymer-md-other-workflows ul,.np-polymer-md-saved-properties ul{list-style:none;margin:0;padding:0}
 .np-polymer-md-other-workflows ul{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 24px}

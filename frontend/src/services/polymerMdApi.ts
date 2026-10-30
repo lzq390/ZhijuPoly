@@ -31,13 +31,20 @@ export const fetchPolymerMdJobs = (page = 1, signal?: AbortSignal) => request<Po
 export const fetchPolymerMdJob = (id: string, signal?: AbortSignal) => request<PolymerMdJob>(jobPath(id), {
   signal
 });
-export const fetchPolymerMdStageLogs = (id: string, stage: string, signal?: AbortSignal) => request<{
+export type PolymerMdLogSource = "auto" | "engine" | "stdout" | "runner";
+export type PolymerMdStageLogs = {
   job_id: string;
   stage_run_id: string;
   lines: string[];
   truncated: boolean;
   status?: string;
-}>(`${stagePath(id, stage)}/logs?tail_lines=200`, { signal });
+  available?: boolean;
+  resolved_source?: PolymerMdLogSource | null;
+  source_label?: string | null;
+  available_sources?: Array<{ source: PolymerMdLogSource; label: string }>;
+  read_at?: string | null;
+};
+export const fetchPolymerMdStageLogs = (id: string, stage: string, signal?: AbortSignal, options?: { source?: PolymerMdLogSource }) => request<PolymerMdStageLogs>(`${stagePath(id, stage)}/logs?tail_lines=200${options?.source ? `&source=${encodeURIComponent(options.source)}` : ""}`, { signal });
 export const createPolymerMdJob = (body: PolymerMdRequest, key: string, signal?: AbortSignal) => request<PolymerMdJob>("/jobs", {
   method: "POST",
   headers: {

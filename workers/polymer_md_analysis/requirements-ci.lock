@@ -1,0 +1,15 @@
+# Additional native analysis test dependencies for Linux x86_64 / CPython 3.11.
+# Install alongside backend/requirements-ci.lock for pinned NumPy/SciPy/Pandas.
+# Versions match the independently deployed analysis interpreter; no simulation dependencies.
+
+cftime==1.6.6.1 \
+    --hash=sha256:92566dd8c3213b824f8b2e86904efa7f0d8db6a51017cc5ad365b1d20b579617
+
+mdtraj==1.10.3 \
+    --hash=sha256:95c6186a4cfa7d451f064fe82682f418774ce004fdeb8ab36718d6adbf64ad49
+
+netCDF4==1.7.5.1.post1 \
+    --hash=sha256:fde13b1fc71bf2b0f684a272fe279fa7d01ee45e6098b4711840a4ab6ae42130
+
+pyparsing==3.3.3 \
+    --hash=sha256:ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4

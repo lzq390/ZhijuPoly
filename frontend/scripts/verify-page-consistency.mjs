@@ -20,7 +20,7 @@ const modules = [
   ["/conditional-generation", "条件聚合物生成"], ["/reverse-design", "Tg 逆向设计"],
   ["/high-throughput-workflow-demo", "高通量优化演示"],
 ].filter(([path]) => !process.env.PAGE_PATH || process.env.PAGE_PATH.split(",").includes(path));
-const viewports = [[1920,1080], [2560,1440], [1440,900], [1024,768], [1023,768], [390,844],
+const viewports = [[1920,1080], [2560,1440], [1440,900], [1512,850], [1512,982], [1728,1000], [1024,768], [1023,768], [390,844],
   [899,900], [900,900], [901,900], [1999,1120], [2000,1119], [2000,1120], [2560,1119]]
   .filter(([width]) => !process.env.PAGE_VIEWPORT || process.env.PAGE_VIEWPORT.split(",").map(Number).includes(width));
 assert.ok(modules.length && viewports.length, "PAGE_PATH/PAGE_VIEWPORT must select at least one module and viewport");
@@ -44,6 +44,13 @@ async function geometry(page, title, viewport, state) {
     const entries = [...document.querySelectorAll('[data-recording-entry]')].filter(visible);
     const entry = entries[0];
     const button = entry?.querySelector('button')?.getBoundingClientRect();
+    const polytaoWorkspace = root.querySelector(".polytao-workbench-shell");
+    const polytaoLayout = polytaoWorkspace ? {
+      containerWidth: root.getBoundingClientRect().width,
+      workspaceWidth: polytaoWorkspace.getBoundingClientRect().width,
+      drawerMode: root.classList.contains("is-drawer-overlay") ? "overlay"
+        : root.classList.contains("is-drawer-inline") ? "inline" : null,
+    } : undefined;
     return { title: h1.textContent, x: rect.x - origin.x, y: rect.y - origin.y,
       mainTop: origin.top, recordingEntries: entries.length, recordingHost: entry?.dataset.recordingEntry,
       recordingInHeader: entry ? h1.parentElement.contains(entry) : false,
@@ -55,7 +62,7 @@ async function geometry(page, title, viewport, state) {
       headings: [...main.querySelectorAll("h1")].filter(visible).length,
       overflow: main.scrollWidth > main.clientWidth + 1 || root.scrollWidth > root.clientWidth + 1 || document.documentElement.scrollWidth > innerWidth + 1,
       palette: ["blue", "blue-strong", "cyan", "success", "warning", "danger"].map(key => rootStyle.getPropertyValue(`--np-theme-${key}`).trim()),
-      directHeader: h1.parentElement.parentElement === root, surfaces };
+      directHeader: h1.parentElement.parentElement === root, surfaces, polytaoLayout };
   });
   const [width, height] = viewport;
   const expected = width >= 2000 && height >= 1120 ? [36,30,28,42,84] : width <= 899 ? [16,20,20,30,60] : [20,22,20,30,62];
@@ -78,6 +85,10 @@ async function geometry(page, title, viewport, state) {
   near(data.rootHeight, data.mainHeight, `${title}: full-height root`);
   assert.ok(data.bodyTop >= expected[4] - 1, `${title}: body overlaps header`);
   assert.deepEqual(data.palette, ["#2563eb", "#1d4ed8", "#0891b2", "#10b981", "#f59e0b", "#dc2626"]);
+  if (title === "聚合物生成" && [1440,1512].includes(width)) {
+    near(data.polytaoLayout?.workspaceWidth, 1040, `${title} ${state}: laptop workspace width`);
+    assert.equal(data.polytaoLayout?.drawerMode, "overlay", `${title} ${state}: laptop results use an overlay`);
+  }
   for (const surface of data.surfaces) {
     near(surface.radius, expected[2] === 28 ? 20 : 14, `${title}: surface radius`);
     assert.notEqual(surface.shadow, "none", `${title}: surface shadow`);
@@ -297,7 +308,8 @@ try {
         await page.waitForTimeout(250);
         await settleModule(page, path);
         results.push(await geometry(page, title, viewport, "settled"));
-        if ([1920,2560,390].includes(width) && ["/knowledge","/polytao-generation","/database-filter","/structure-workbench","/monomer-dft","/high-throughput-workflow-demo"].includes(path)) {
+        if (([1920,2560,390].includes(width) && ["/knowledge","/polytao-generation","/database-filter","/structure-workbench","/monomer-dft","/high-throughput-workflow-demo"].includes(path))
+          || (path === "/polytao-generation" && [1440,1512,1728].includes(width))) {
           if (path === "/structure-workbench") await page.waitForFunction(() => {
             const editor = document.querySelector('[data-structure-editor]');
             return editor ? editor.dataset.editorStatus === "ready" : Boolean(document.querySelector('.np-sw-editor iframe')?.contentWindow?.ketcher);

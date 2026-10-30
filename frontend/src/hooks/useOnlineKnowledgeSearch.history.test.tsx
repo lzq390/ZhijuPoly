@@ -11,13 +11,17 @@ import type {
 } from "../types";
 import { useOnlineKnowledgeSearch } from "./useOnlineKnowledgeSearch";
 
-const api = vi.hoisted(() => ({ create: vi.fn(), fetch: vi.fn(), history: vi.fn() }));
+const api = vi.hoisted(() => ({
+  create: vi.fn(), fetch: vi.fn(), history: vi.fn(), deleteHistory: vi.fn(), clearHistory: vi.fn()
+}));
 
 vi.mock("../services/api", async () => ({
   ...await vi.importActual<typeof import("../services/api")>("../services/api"),
   createOnlineKnowledgeJob: api.create,
   fetchOnlineKnowledgeJob: api.fetch,
-  fetchOnlineKnowledgeHistory: api.history
+  fetchOnlineKnowledgeHistory: api.history,
+  deleteOnlineKnowledgeHistory: api.deleteHistory,
+  clearOnlineKnowledgeHistory: api.clearHistory
 }));
 
 const payload: OnlineKnowledgeSearchRequest = {
@@ -68,6 +72,91 @@ beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
   api.create.mockResolvedValue({ job_id: "old-job", status: "pending" });
   api.history.mockResolvedValue({ history: [saved] });
+  api.deleteHistory.mockResolvedValue({ success: true });
+  api.clearHistory.mockResolvedValue({ success: true });
+});
+
+describe("online history refresh ordering", () => {
+  const other = { ...saved, history_id: 18, material: "Other material" };
+
+  it.each([
+    ["delete", "success"], ["delete", "failure"],
+    ["clear", "success"], ["clear", "failure"]
+  ] as const)("keeps successful %s intact after a stale refresh returns %s", async (mutation, outcome) => {
+    const pending = deferred<{ history: OnlineKnowledgeHistoryItem[] }>();
+    api.history.mockResolvedValueOnce({ history: [saved, other] }).mockReturnValueOnce(pending.promise);
+    const { result } = renderHook(() => useOnlineKnowledgeSearch());
+    await act(async () => { await result.current.loadHistory(); });
+    let refresh!: Promise<void>;
+    act(() => { refresh = result.current.loadHistory(); });
+    expect(result.current.isHistoryLoading).toBe(true);
+
+    await act(async () => {
+      if (mutation === "delete") await result.current.deleteHistoryItem(saved.history_id);
+      else await result.current.clearHistory();
+    });
+    const expected = mutation === "delete" ? [other] : [];
+    expect(result.current.history).toEqual(expected);
+    await act(async () => {
+      if (outcome === "success") pending.resolve({ history: [saved, other] });
+      else pending.reject(new Error("Obsolete refresh failed"));
+      await refresh;
+    });
+    expect(result.current).toMatchObject({ history: expected, isHistoryLoading: false, historyError: null });
+    expect(api[mutation === "delete" ? "deleteHistory" : "clearHistory"]).toHaveBeenCalledOnce();
+  });
+
+  it.each(["success", "failure"] as const)(
+    "keeps the newest refresh loading when an earlier request returns %s",
+    async (outcome) => {
+      const older = deferred<{ history: OnlineKnowledgeHistoryItem[] }>();
+      const latest = deferred<{ history: OnlineKnowledgeHistoryItem[] }>();
+      api.history.mockResolvedValueOnce({ history: [saved] })
+        .mockReturnValueOnce(older.promise).mockReturnValueOnce(latest.promise);
+      const { result } = renderHook(() => useOnlineKnowledgeSearch());
+      await act(async () => { await result.current.loadHistory(); });
+      let first!: Promise<void>;
+      let second!: Promise<void>;
+      act(() => { first = result.current.loadHistory(); });
+      act(() => { second = result.current.loadHistory(); });
+
+      await act(async () => {
+        if (outcome === "success") older.resolve({ history: [other] });
+        else older.reject(new Error("Obsolete refresh failed"));
+        await first;
+      });
+      expect(result.current).toMatchObject({ history: [saved], isHistoryLoading: true, historyError: null });
+      await act(async () => { latest.resolve({ history: [saved, other] }); await second; });
+      expect(result.current).toMatchObject({ history: [saved, other], isHistoryLoading: false, historyError: null });
+    }
+  );
+
+  it.each(["delete", "clear"] as const)("preserves the pending refresh when %s fails", async (mutation) => {
+    const pending = deferred<{ history: OnlineKnowledgeHistoryItem[] }>();
+    api.history.mockResolvedValueOnce({ history: [saved] }).mockReturnValueOnce(pending.promise);
+    api[mutation === "delete" ? "deleteHistory" : "clearHistory"].mockRejectedValueOnce(new Error("Mutation failed"));
+    const { result } = renderHook(() => useOnlineKnowledgeSearch());
+    await act(async () => { await result.current.loadHistory(); });
+    let refresh!: Promise<void>;
+    act(() => { refresh = result.current.loadHistory(); });
+    await act(async () => {
+      const change = mutation === "delete" ? result.current.deleteHistoryItem(saved.history_id) : result.current.clearHistory();
+      await expect(change).rejects.toThrow("Mutation failed");
+    });
+    expect(result.current).toMatchObject({ history: [saved], isHistoryLoading: true, historyError: "Mutation failed" });
+    await act(async () => { pending.resolve({ history: [saved, other] }); await refresh; });
+    expect(result.current.history).toEqual([saved, other]);
+    expect(result.current.isHistoryLoading).toBe(false);
+  });
+
+  it("reports the current refresh failure and allows a later retry", async () => {
+    api.history.mockRejectedValueOnce(new Error("Current refresh failed"));
+    const { result } = renderHook(() => useOnlineKnowledgeSearch());
+    await act(async () => { await result.current.loadHistory(); });
+    expect(result.current).toMatchObject({ history: [], isHistoryLoading: false, historyError: "Current refresh failed" });
+    await act(async () => { await result.current.loadHistory(); });
+    expect(result.current).toMatchObject({ history: [saved], isHistoryLoading: false, historyError: null });
+  });
 });
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
