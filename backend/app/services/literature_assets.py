@@ -148,7 +148,7 @@ class _SafeTableParser(HTMLParser):
         "address", "article", "aside", "blockquote", "br", "dd", "div", "dl", "dt",
         "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3",
         "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre",
-        "section", "table", "td", "th", "tr", "ul",
+        "sec", "section", "table", "td", "th", "tr", "ul",
     }
 
     def __init__(self):
@@ -174,11 +174,12 @@ class _SafeTableParser(HTMLParser):
             self._finish_superscript()
 
     def handle_starttag(self, tag, attrs):
+        tag = tag.rsplit(":", 1)[-1]
         if tag in {"script", "style"}:
             self.ignore += 1
         if self.ignore:
             return
-        if tag.rsplit(":", 1)[-1] == "sup":
+        if tag == "sup":
             self.superscripts.append([])
             return
         if tag in self._BODY_BOUNDARIES:
@@ -197,12 +198,13 @@ class _SafeTableParser(HTMLParser):
             self._append("\n")
 
     def handle_endtag(self, tag):
+        tag = tag.rsplit(":", 1)[-1]
         if tag in {"script", "style"}:
             self.ignore = max(0, self.ignore - 1)
             return
         if self.ignore:
             return
-        if tag.rsplit(":", 1)[-1] == "sup":
+        if tag == "sup":
             self._finish_superscript()
             return
         if tag in self._BODY_BOUNDARIES:

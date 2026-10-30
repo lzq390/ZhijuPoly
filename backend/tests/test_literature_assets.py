@@ -200,11 +200,32 @@ def test_fulltext_superscript_tolerates_incomplete_markup_without_crossing_parts
     ('</p><p>', '\n'), ('<p>', '\n'), ('<br>', '\n'),
     ('</div><div>', ''), ('<div>', ''), ('</li><li>', ''),
     ('</h2><p>', '\n'), ('</section><section>', ''),
+    ('</jats:p><jats:p>', '\n'), ('<jats:p>', '\n'), ('<jats:br>', '\n'),
+    ('</jats:sec><jats:sec>', ''), ('<jats:sec>', ''),
 ])
-def test_fulltext_incomplete_superscript_stops_at_body_structure(boundary, separator):
+@pytest.mark.parametrize('prefix', ['', 'jats:'], ids=['html-sup', 'jats-sup'])
+def test_fulltext_incomplete_superscript_stops_at_body_structure(boundary, separator, prefix):
     parser = assets._SafeTableParser()
-    parser.feed(f'10<sup>3{boundary}Next paragraph')
+    parser.feed(f'10<{prefix}sup>3{boundary}Next paragraph')
     assert parser.result() == [{'type': 'text', 'text': f'10^(3){separator}Next paragraph'}]
+
+
+@pytest.mark.asyncio
+async def test_fulltext_jats_markup_preserves_paragraph_and_cell_boundaries(storage):
+    text = ('Before 10<jats:sup>-3</jats:p><jats:p>Next H<jats:sub>2</jats:sub>O.</jats:p>'
+            '<jats:table><jats:tr><jats:td>10<jats:sup>3</jats:td>'
+            '<jats:td>Fe<jats:sup>3+</jats:sup></jats:td></jats:tr></jats:table>'
+            'After cm<jats:sup>2<jats:script>untrusted</jats:script>'
+            '<jats:style>hidden</jats:style></jats:sup>.')
+    storage.data = json.dumps([{'idx': 7, 'text': text}]).encode()
+    result = await assets.get_literature_fulltext(assets_manifest=manifest(storage, 'full_text'),
+                                                document_uid='doc', snapshot_uid='snap')
+    assert result['blocks'][0]['parts'] == [
+        {'type': 'text', 'text': 'Before 10^(-3)\nNext H2O.'},
+        {'type': 'table', 'rows': [['10^(3)', 'Fe^(3+)']]},
+        {'type': 'text', 'text': 'After cm^(2).'},
+    ]
+    assert storage.reads[-1].closed and storage.reads[-1].released
 
 
 def test_suffix_range_and_empty():
