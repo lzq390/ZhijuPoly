@@ -1,4 +1,5 @@
 """Full-application integration boundaries without starting DBs or engines."""
+import asyncio
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -8,6 +9,7 @@ import pytest
 from app import main
 from app.routers import polymer_md
 from app.services import deployment_control, polymer_md_schema
+from app.services.polymer_md_repository import PolymerMdError
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -36,8 +38,11 @@ LIMITS = {"cpu_count": 16, "memory_bytes": 32 * 1024**3, "gpu_count": 0,
     "stage_timeout_seconds": 24 * 3600, "job_timeout_seconds": 96 * 3600,
     "max_job_bytes": 20 * 1024**3, "max_total_atoms": 20000, "max_replicated_atoms": 60000}
 
+ANALYSIS_HEALTH = {"protocol_version": 1, "service": "polymer-md-analysis", "ready": True,
+    "active": 0, "queued": 0, "request_timeout_seconds": 90}
 
-def status_app(health, *, submit=False, schema=True, enabled=True):
+
+def status_app(health, *, submit=False, schema=True, enabled=True, analysis_health=None):
     app = FastAPI()
     app.include_router(polymer_md.router)
     app.state.settings = SimpleNamespace(polymer_md_dev_enabled=enabled, polymer_md_submit_enabled=submit)
@@ -46,7 +51,13 @@ def status_app(health, *, submit=False, schema=True, enabled=True):
     async def worker_health():
         return health
 
+    async def reader_health():
+        if isinstance(analysis_health, Exception):
+            raise analysis_health
+        return analysis_health
+
     app.state.polymer_md_worker_client = SimpleNamespace(health=worker_health) if health is not None else None
+    app.state.polymer_md_analysis_client = SimpleNamespace(health=reader_health) if analysis_health is not None else None
     return app
 
 
@@ -58,7 +69,7 @@ def test_status_reports_worker_policy_and_pause_without_claiming_acceptance():
         "runtime": {"scientific_acceptance": "pending_full_PE_PEO_and_sensitivity_benchmarks",
                     "adapter_scientific_validation": "pending", "accepted_protocols": [],
                     "lammps": "/private/lammps"}}
-    with TestClient(status_app(health)) as client:
+    with TestClient(status_app(health, analysis_health=ANALYSIS_HEALTH)) as client:
         response = client.get("/api/v1/polymer-md/status")
     value = response.json()
     assert value["admission_reason"] == "maintenance" and not value["submit_enabled"]
@@ -69,6 +80,37 @@ def test_status_reports_worker_policy_and_pause_without_claiming_acceptance():
     assert value["acceptance_summary"]["accepted_protocol_count"] == 0
     assert value["acceptance_summary"]["scientific_acceptance"].startswith("pending")
     assert "/private" not in response.text
+
+
+@pytest.mark.parametrize("analysis_health", [
+    None,
+    {**ANALYSIS_HEALTH, "ready": False},
+    PolymerMdError("analysis_service_unavailable", "/private/analysis.sock", 503),
+    asyncio.TimeoutError(),
+], ids=["unconfigured", "not_ready", "unavailable", "timeout"])
+def test_unavailable_analysis_does_not_fall_back_to_worker_or_close_execution(analysis_health):
+    health = {"ready": True, "analysis_ready": True}
+    with TestClient(status_app(health, submit=True, analysis_health=analysis_health)) as client:
+        response = client.get("/api/v1/polymer-md/capabilities")
+    assert response.status_code == 200
+    value = response.json()
+    assert value["submit_enabled"] and value["admission_reason"] is None
+    assert not value["trajectory_available"] and not value["distance_available"]
+    assert value["analysis"] == {"status": "unavailable", "timeout_seconds": 90}
+    assert "/private" not in response.text
+
+
+@pytest.mark.parametrize("active,status", [(0, "ready"), (1, "busy")])
+def test_independent_analysis_is_available_while_execution_is_paused(active, status):
+    health = {"ready": False, "analysis_ready": False, "admission_reason": "maintenance"}
+    analysis_health = {**ANALYSIS_HEALTH, "active": active}
+    with TestClient(status_app(health, submit=True, analysis_health=analysis_health)) as client:
+        response = client.get("/api/v1/polymer-md/capabilities")
+    assert response.status_code == 200
+    value = response.json()
+    assert not value["submit_enabled"] and value["admission_reason"] == "maintenance"
+    assert value["trajectory_available"] and value["distance_available"]
+    assert value["analysis"] == {"status": status, "timeout_seconds": 90}
 
 
 @pytest.mark.parametrize("health,options,reason", [
@@ -130,7 +172,7 @@ def test_quota_policy_closes_new_compute_but_keeps_read_and_original_replay(monk
     monkeypatch.setattr(entitlements, "enabled", lambda: True)
     monkeypatch.setattr(polymer_md, "current_owner_id", lambda: "00000000-0000-0000-0000-000000000002")
     health = {"ready": True, "analysis_ready": True, "protocol_version": 1}
-    app = status_app(health, submit=True)
+    app = status_app(health, submit=True, analysis_health=ANALYSIS_HEALTH)
     job = {"job_id": str(uuid4()), "attempt_token": "a"*64, "artifacts": []}
     app.state.polymer_md_repository.get_job = lambda *args, **kwargs: job
     app.state.polymer_md_repository.find_idempotent_job = lambda *args, **kwargs: None
