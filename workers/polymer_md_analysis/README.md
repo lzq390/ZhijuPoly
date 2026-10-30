@@ -106,3 +106,7 @@ python -B -m unittest discover -s workers/polymer_md_analysis/tests -v
 
 Tests create synthetic trajectories and subprocesses in temporary directories;
 they never query real jobs, start a simulation, or alter an execution release.
+CI collects this suite and the source-release verifier in the isolated Backend
+shard-0 pytest step. Its CPython 3.11 Linux runtime installs the hashed native
+test dependencies in `requirements-ci.lock` alongside `backend/requirements-ci.lock`;
+these additions do not change the Backend or simulation deployment dependencies.

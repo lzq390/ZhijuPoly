@@ -163,6 +163,7 @@ jobs:
               ! -name 'test_polymer_md_backend_full.py' \
               ! -name 'test_polymer_md_backup_dev.py' \
               ! -name 'test_polymer_md_worker_dev.py' \
+              ! -name 'test_polymer_md_analysis_release.py' \
               ! -name 'test_polymer_md_acceptance_registry_cli.py' -print | sort
           )
           python3 -m unittest -v "${unittest_files[@]}"
@@ -349,6 +350,12 @@ jobs:
             python -m pytest scripts/tests/test_user_isolation_release_contract.py scripts/tests/test_monomer_usage_hooks.py --assert=plain --tb=short
           fi
 
+      - name: Install locked trajectory analysis test dependencies
+        if: matrix.shard == 0
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all:
+          -r backend/requirements-ci.lock
+          -r workers/polymer_md_analysis/requirements-ci.lock
       - name: Run polymer MD offline Worker and registry tests
         if: matrix.shard == 0
         run: |
@@ -362,6 +369,8 @@ jobs:
             OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
             python -m pytest --assert=plain --tb=short -p no:cacheprovider -p anyio.pytest_plugin \
               workers/polymer_md_worker/tests \
+              workers/polymer_md_analysis/tests \
+              scripts/tests/test_polymer_md_analysis_release.py \
               scripts/tests/test_polymer_md_acceptance_registry_cli.py \
               scripts/tests/test_polymer_md_api_services.py \
               scripts/tests/test_polymer_md_backend_full.py \

@@ -124,6 +124,8 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         backend = policy.workflow_job_body(CI_TEXT, "backend-tests", [])
         for marker in (
             "python -m pip install --require-hashes -r backend/requirements-ci.lock",
+            "-r workers/polymer_md_analysis/requirements-ci.lock",
+            "              workers/polymer_md_analysis/tests \\\n",
             "        if: matrix.shard == 0\n",
             "          env -i \\\n",
             "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
