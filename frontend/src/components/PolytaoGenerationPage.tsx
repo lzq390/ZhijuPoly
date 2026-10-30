@@ -127,7 +127,6 @@ const DRAWER_MIN_WIDTH = 320;
 const DRAWER_MAX_WIDTH = 560;
 const DRAWER_DEFAULT_WIDTH = 380;
 const DRAWER_KEYBOARD_STEP = 16;
-const DRAWER_INLINE_MIN_WIDTH = 1160;
 const TWO_K_MEDIA_QUERY = "(min-width: 2000px) and (min-height: 1120px)";
 
 const TWO_K_DRAWER_MIN_WIDTH = 480;
@@ -303,7 +302,7 @@ export function PolytaoGenerationPage({
   const drawerWasPresentRef = useRef(false);
   const toastTimerRef = useRef<number | null>(null);
   const drawerProfile = isTwoK ? TWO_K_DRAWER_PROFILE : STANDARD_DRAWER_PROFILE;
-  const drawerMode = useDrawerMode(pageRef, { inlineMinWidth: DRAWER_INLINE_MIN_WIDTH, fallback: "inline" });
+  const drawerMode = useDrawerMode(pageRef);
   const drawerPresence = useMotionPresence(drawerOpen, { enter: "drawerEnter", exit: "drawerExit", property: "transform", elementRef: drawerRef });
   const drawerResize = useDrawerResize({ width: drawerWidth, minWidth: drawerProfile.min, maxWidth: drawerProfile.max,
     onWidthChange: setDrawerWidth, enabled: drawerOpen && drawerMode === "inline" });

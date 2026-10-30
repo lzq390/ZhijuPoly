@@ -574,8 +574,63 @@ describe("PolytaoGenerationPage", () => {
     expect(screen.queryByText("detail-hidden")).toBeNull();
   });
 
+  it("starts in overlay mode until the module has a measured width", () => {
+    const view = renderPage();
+    expect(view.container.querySelector(".polytao-page")?.classList.contains("is-drawer-overlay")).toBe(true);
+    resizePolytaoContainer(0);
+    expect(view.container.querySelector(".polytao-page")?.classList.contains("is-drawer-overlay")).toBe(true);
+  });
+
+  it.each([
+    [1160, "overlay"],
+    [1225, "overlay"],
+    [1279, "overlay"],
+    [1280, "inline"]
+  ] as const)("uses %s px of module width to select %s results", (width, mode) => {
+    const view = renderPage();
+    resizePolytaoContainer(width);
+    expect(view.container.querySelector(".polytao-page")?.classList.contains(`is-drawer-${mode}`)).toBe(true);
+  });
+
+  it("retains descriptors, reference and results when resizing across the shared inline threshold", async () => {
+    api.fetchPolytaoJob.mockImplementation(async (jobId: string) => completedJob(jobId, generationResult()));
+    const view = renderPage();
+    resizePolytaoContainer(1225);
+    openReferenceSection();
+    fireEvent.click(screen.getByRole("button", { name: "提取描述符" }));
+    await screen.findByText("目标特征源自参考结构");
+    const descriptor = screen.getByLabelText("分子量 MolWt");
+    const reference = await screen.findByAltText("共享聚合物重复单元二维结构");
+    const panel = openParameterPanel();
+    const submit = within(panel).getByRole("button", { name: "开始生成" });
+    await waitFor(() => expect(submit).toHaveProperty("disabled", false));
+    fireEvent.click(submit);
+    const candidate = await screen.findByAltText("PolyTAO 候选结构 1");
+    const dialog = screen.getByRole("dialog", { name: "聚合物生成结果" });
+    await waitFor(() => expect(dialog.dataset.motionPhase).toBe("open"));
+
+    for (const [width, mode] of [[1279, "overlay"], [1280, "inline"], [1279, "overlay"]] as const) {
+      resizePolytaoContainer(width);
+      expect(view.container.querySelector(".polytao-page")?.classList.contains(`is-drawer-${mode}`)).toBe(true);
+      expect(dialog.getAttribute("aria-modal")).toBe(String(mode === "overlay"));
+      expect(view.container.querySelector(".polytao-page-scroll")?.hasAttribute("inert")).toBe(mode === "overlay");
+      expect(Boolean(within(dialog).queryByRole("separator"))).toBe(mode === "inline");
+      expect(descriptor).toHaveProperty("value", String(PREFILL_DESCRIPTORS.MolWt));
+      expect(descriptor.isConnected && reference.isConnected && candidate.isConnected).toBe(true);
+      expect(screen.getByRole("dialog", { name: "聚合物生成结果" })).toBe(dialog);
+    }
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "关闭聚合物生成结果" }));
+    await waitFor(() => expect(dialog.dataset.motionPhase).toBe("closed"));
+    expect(dialog.getAttribute("aria-hidden")).toBe("true");
+    expect(view.container.querySelector(".polytao-page-scroll")?.hasAttribute("inert")).toBe(false);
+    expect(api.calculatePolytaoDescriptors).toHaveBeenCalledOnce();
+    expect(api.createPolytaoJob).toHaveBeenCalledOnce();
+  });
+
   it("creates the result drawer on submit and supports standard and 2K keyboard widths", async () => {
     const view = renderPage();
+    resizePolytaoContainer(1280);
     expect(screen.queryByRole("button", { name: "打开聚合物生成结果" })).toBeNull();
     const { submit } = await loadSampleAndOpenParameters();
     fireEvent.click(submit);
