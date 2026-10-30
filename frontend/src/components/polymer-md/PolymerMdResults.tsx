@@ -396,6 +396,7 @@ function Trajectory({
     [trajectory, setTrajectory] = useState<PolymerMdTrajectory | null>(restored?.trajectory ?? null);
   const [error, setError] = useState<string | null>(null),
     [loading, setLoading] = useState(false);
+  const [trajectoryRetry, setTrajectoryRetry] = useState(0);
   const [selections, setSelections] = useState<MdAtomSelectionSlots>(restored?.selections ?? [null, null]);
   const [distance, setDistance] = useState<MdDemoAtomDistanceResponse | null>(restored?.distance ?? null),
     [distanceError, setDistanceError] = useState<string | null>(null),
@@ -492,7 +493,7 @@ function Trajectory({
     };
     // Only a selected scientific identity or frame change retires its coordinates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job.job_id, stageId, offset, trajectoryReady, sourceIdentity]);
+  }, [job.job_id, stageId, offset, trajectoryReady, sourceIdentity, trajectoryRetry]);
   const frame = trajectory?.frames[0];
   function stopWaiting() {
     ++generation.current;
@@ -566,7 +567,7 @@ function Trajectory({
           clearDistance();
           setStageId(stageRunId);
           setOffset(0);
-        }} /><div className="np-pmd-frame-navigation" role="group" aria-label="轨迹翻帧"><button type="button" disabled={loading || !trajectoryReady || offset <= 0} onClick={() => setOffset(v => v - 1)}>上一帧</button><span className="np-pmd-frame-position"><PolymerMdNumericText>{`第 ${offset + 1} 帧${trajectory ? ` / ${trajectory.total_frames} 帧` : ""}`}</PolymerMdNumericText></span><button type="button" disabled={loading || !trajectoryReady || !trajectory || offset + 1 >= trajectory.total_frames} onClick={() => setOffset(v => v + 1)}>下一帧</button></div></div>{loading ? <div className="np-pmd-trajectory-loading" role="status"><LoaderCircle className="np-sw-spin" aria-hidden="true" /><strong>正在读取当前任务的轨迹…</strong><p>轨迹较大时，请稍候。</p></div> : null}{error ? <p role="alert">{error}</p> : null}{frame ? <><div className="np-pmd-trajectory-meta"><p className="np-pmd-trajectory-caption"><PolymerMdNumericText>{`采样坐标：${frame.points.length.toLocaleString()} 个原子 · ${frame.time_ps} ps`}</PolymerMdNumericText></p><label className="np-pmd-trajectory-pbc"><input type="checkbox" checked={pbc} onChange={e => {
+        }} /><div className="np-pmd-frame-navigation" role="group" aria-label="轨迹翻帧"><button type="button" disabled={loading || !trajectoryReady || offset <= 0} onClick={() => setOffset(v => v - 1)}>上一帧</button><span className="np-pmd-frame-position"><PolymerMdNumericText>{`第 ${offset + 1} 帧${trajectory ? ` / ${trajectory.total_frames} 帧` : ""}`}</PolymerMdNumericText></span><button type="button" disabled={loading || !trajectoryReady || !trajectory || offset + 1 >= trajectory.total_frames} onClick={() => setOffset(v => v + 1)}>下一帧</button></div></div>{loading ? <div className="np-pmd-trajectory-loading" role="status"><LoaderCircle className="np-sw-spin" aria-hidden="true" /><strong>正在读取当前任务的轨迹…</strong><p>轨迹较大时，请稍候。</p></div> : null}{error ? <><p role="alert">{error}</p><div className="np-polymer-md-actions"><button type="button" disabled={loading || !trajectoryReady || !sourceIdentity} onClick={() => setTrajectoryRetry(value => value + 1)}>重试读取轨迹</button></div></> : null}{frame ? <><div className="np-pmd-trajectory-meta"><p className="np-pmd-trajectory-caption"><PolymerMdNumericText>{`采样坐标：${frame.points.length.toLocaleString()} 个原子 · ${frame.time_ps} ps`}</PolymerMdNumericText></p><label className="np-pmd-trajectory-pbc"><input type="checkbox" checked={pbc} onChange={e => {
           setPbc(e.target.checked);
           clearDistance();
         }} /> 距离使用周期边界</label></div>{!distanceReady ? <p className="np-pmd-analysis-availability" role="status">{!serviceConfirmed ? "服务状态待确认，已保留当前轨迹与原子选择；确认后可继续分析。" : "分析服务暂不可用，已保留当前轨迹与原子选择。"}</p> : capabilities.analysis?.status === "busy" ? <p className="np-pmd-analysis-availability" role="status">分析服务繁忙，新请求按可用名额受理。</p> : null}{distance ? <DistanceSampling value={distanceSampling} /> : null}<MdTrajectoryExplorer key={`${job.job_id}:${stageId}`} points={frame.points} timePs={frame.time_ps} stageLabel={stageLabel(stages.find(s => s.stage_run_id === stageId)?.stage ?? "")} frameLabel={`第 ${frame.frame_index + 1} 帧`} distanceUsePbc={pbc} selections={selections} distance={distance} distanceLoading={distanceLoading} distanceError={distanceError} distanceNotice={distanceNotice} distanceElapsedSeconds={Math.max(0, Math.floor((distanceNow - distanceStarted) / 1000))} onCancelDistance={stopWaiting} onSelectionChange={s => {

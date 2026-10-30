@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MdDemoAtomDistanceResponse } from "../../types";
 import type { PolymerMdArtifact, PolymerMdCapabilities, PolymerMdDistance, PolymerMdJob, PolymerMdStage, PolymerMdTrajectory } from "../../types/polymerMd";
 import { clearPolymerMdViewState } from "../../services/polymerMdViewState";
+import { installSession, retireSession } from "../../auth/session";
 import { PolymerMdResults } from "./PolymerMdResults";
 import { POLYMER_MD_DEFAULTS } from "./config";
 
@@ -77,6 +78,82 @@ beforeEach(() => {
 afterEach(() => { cleanup(); clearPolymerMdViewState(); });
 
 describe("polymer MD view persistence", () => {
+  it("retries a failed trajectory explicitly while polls and restored successful views avoid extra reads", async () => {
+    const value = job();
+    api.trajectory.mockRejectedValueOnce(new Error("轨迹临时不可读取"));
+    const mounted = render(result(value));
+    fireEvent.click(screen.getByRole("tab", { name: "构象" }));
+    await screen.findByText("轨迹临时不可读取");
+
+    mounted.rerender(result({ ...value, updated_at: "2026-10-29T02:00:00Z" }));
+    expect(api.trajectory).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "重试读取轨迹" }));
+    await screen.findByLabelText("当前构象");
+    expect(api.trajectory).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "重试读取轨迹" })).toBeNull();
+    expect(screen.queryByText("轨迹临时不可读取")).toBeNull();
+    mounted.rerender(result({ ...value, updated_at: "2026-10-29T03:00:00Z" }));
+    mounted.unmount();
+    render(result(value));
+    await screen.findByLabelText("当前构象");
+    expect(api.trajectory).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts a retry when its source changes and never replaces the new source with a late response", async () => {
+    const value = job();
+    let finishRetry!: (value: PolymerMdTrajectory) => void;
+    api.trajectory.mockRejectedValueOnce(new Error("轨迹临时不可读取"))
+      .mockImplementationOnce(() => new Promise<PolymerMdTrajectory>(resolve => { finishRetry = resolve; }));
+    const mounted = render(result(value));
+    fireEvent.click(screen.getByRole("tab", { name: "构象" }));
+    await screen.findByText("轨迹临时不可读取");
+    fireEvent.click(screen.getByRole("button", { name: "重试读取轨迹" }));
+    const signal = api.trajectory.mock.calls[1][3] as AbortSignal;
+    expect(screen.queryByRole("button", { name: "重试读取轨迹" })).toBeNull();
+
+    const current = { ...value, artifacts: [artifact("eq3-1", { sha256: "b".repeat(64) })] };
+    mounted.rerender(result(current));
+    await screen.findByLabelText("当前构象");
+    expect(signal.aborted).toBe(true);
+    expect(api.trajectory).toHaveBeenCalledTimes(3);
+    const stale = trajectory("eq3-1");
+    stale.frames[0].time_ps = 999;
+    await act(async () => { finishRetry(stale); await Promise.resolve(); });
+    expect(screen.getByLabelText("当前构象").textContent).toContain(" / 0 ps /");
+    mounted.unmount();
+    render(result(current));
+    await screen.findByLabelText("当前构象");
+    expect(screen.getByLabelText("当前构象").textContent).toContain(" / 0 ps /");
+    expect(api.trajectory).toHaveBeenCalledTimes(3);
+  });
+
+  it("retires an owner's pending retry before another session restores the same task ID", async () => {
+    const value = job();
+    let finishRetry!: (value: PolymerMdTrajectory) => void;
+    api.trajectory.mockRejectedValueOnce(new Error("轨迹临时不可读取"))
+      .mockImplementationOnce(() => new Promise<PolymerMdTrajectory>(resolve => { finishRetry = resolve; }));
+    const mounted = render(result(value));
+    fireEvent.click(screen.getByRole("tab", { name: "构象" }));
+    await screen.findByText("轨迹临时不可读取");
+    fireEvent.click(screen.getByRole("button", { name: "重试读取轨迹" }));
+    const signal = api.trajectory.mock.calls[1][3] as AbortSignal;
+    act(() => {
+      retireSession();
+      installSession({ authenticated: true, user: { id: "next-owner", username: "next", must_change_password: false },
+        session_id: "next-owner-session", csrf_token: "next-owner-csrf", capabilities: {} });
+    });
+    expect(signal.aborted).toBe(true);
+    mounted.unmount();
+    render(result(value));
+    await openConformation();
+    const stale = trajectory("eq3-1");
+    stale.frames[0].time_ps = 999;
+    await act(async () => { finishRetry(stale); await Promise.resolve(); });
+    expect(screen.getByLabelText("当前构象").textContent).toContain(" / 0 ps /");
+    expect(api.trajectory).toHaveBeenCalledTimes(3);
+    expect(api.distance).not.toHaveBeenCalled();
+  });
+
   it.each([403, 404])("retires an unavailable distance source (%s) before returning to the view", async status => {
     const value = job(); render(result(value));
     await openConformation(); await calculateDistance();
