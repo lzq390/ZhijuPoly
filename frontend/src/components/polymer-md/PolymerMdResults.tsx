@@ -12,6 +12,7 @@ import type { MdDemoAtomDistanceResponse, MdDemoSeries } from "../../types";
 import type { PolymerMdCapabilities, PolymerMdDistance, PolymerMdJob, PolymerMdRequest, PolymerMdStage, PolymerMdTrajectory } from "../../types/polymerMd";
 import { calculatePolymerMdDistance, downloadPolymerMdArtifact, fetchPolymerMdTrajectory } from "../../services/polymerMdApi";
 import { downloadPolymerMdArtifacts } from "../../services/polymerMdArtifactBundle";
+import { clearPolymerMdTrajectoryView, polymerMdTrajectoryIdentity, readPolymerMdResultView, savePolymerMdResultTab, savePolymerMdTrajectoryView, type PolymerMdResultTab } from "../../services/polymerMdViewState";
 import { MdSeriesChart } from "../md-simulation/MdSeriesChart";
 import { MdTrajectoryExplorer, type MdAtomSelectionSlots } from "../md-simulation/MdTrajectoryExplorer";
 import { QUALITY_LABELS, stageLabel, STATUS_LABELS, terminalJob } from "./config";
@@ -19,6 +20,7 @@ import { FORCEFIELD_LABELS, NATIVE_CHOICE_FIELDS, requestedCalculationDescriptio
 import { polymerMdUserConfigurationSpec } from "./userConfiguration";
 import { MODEL_LABELS } from "./PolymerMdModelFields";
 import { basisFieldLabel, LockedBasisRules, SavedBasisOverrides } from "./PolymerMdBasisEvidence";
+import { polymerMdQualityCodeTitle as qualityCodeTitle, polymerMdQualityMethod, polymerMdQualityReason } from "./qualityPresentation";
 import "../../styles/polymer-md-results.css";
 const PROPERTY_LABELS: Record<string, [string, string]> = {
   density: ["密度", "g/cm³"],
@@ -111,7 +113,7 @@ type EvidenceRow = [string, string];
 // Deliberately project known scientific fields. Never stringify public metadata:
 // older snapshots may contain internal paths or process identities in other keys.
 const numeric = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
-const safeCode = (value: unknown) => typeof value === "string" && value.length <= 250 && /^[A-Za-z][A-Za-z0-9_+.,;()=\- /]*$/.test(value) && !/(?:^|[\s;])(?:\/|[A-Za-z]:|file:)|(?:token|password|secret|cookie|authorization|bearer)\s*[=:]/i.test(value) ? value : undefined;
+const safeCode = (value: unknown) => typeof value === "string" && value.length <= 250 ? qualityCodeTitle(value) : undefined;
 const safeId = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value) ? value : undefined;
 const safeStage = (value: unknown) => typeof value === "string" && /^(?:terminal_qm|monomer_qm|build|eq[123]|additional_\d+|analyze_\d+|tc|tc_analyze|sp|sp_analyze|tg|tg_analyze)$/.test(value) ? value : undefined;
 const qualityText = (value: unknown) => typeof value === "string" && Object.hasOwn(QUALITY_LABELS, value) ? QUALITY_LABELS[value as keyof typeof QUALITY_LABELS] : "未提供质量判定";
@@ -241,7 +243,7 @@ function QualityEvidence({ value, thermal }: { value: unknown; thermal: boolean 
   const checks = record(data.checks) ? data.checks : {};
   const fits = record(data.temperature_gradient_fits) ? data.temperature_gradient_fits : {};
   const exchange = record(data.exchange_energy_fit) ? data.exchange_energy_fit : {};
-  const reasons = Array.isArray(data.reasons) ? data.reasons.flatMap(item => safeCode(item) ? [safeCode(item)!] : []) : [];
+  const reasons = Array.isArray(data.reasons) ? data.reasons.filter((item): item is string => typeof item === "string" && Boolean(item.trim())) : [];
   const estimates = Array.isArray(data.conductivity_block_estimates) && data.conductivity_block_estimates.length <= 5 && data.conductivity_block_estimates.every(v => numeric(v) !== undefined) ? data.conductivity_block_estimates as number[] : [];
   return <><EvidenceList rows={evidenceRows(data, [
     { key: "left_r2", label: "左侧温度梯度 R²" }, { key: "right_r2", label: "右侧温度梯度 R²" }, { key: "qualified_block_rate", label: "温度块合格比例" },
@@ -258,7 +260,7 @@ function QualityEvidence({ value, thermal }: { value: unknown; thermal: boolean 
   {record(data.trajectory) ? <section aria-label="构象与取向判据"><h5>构象与取向判据</h5><EvidenceList rows={evidenceRows(data.trajectory, [{ key: "production_frame_count", label: "生产轨迹帧数" }, { key: "structure_equilibrated", label: "构象平衡判据通过", kind: "boolean" }, { key: "nematic_order_below_0_1", label: "向列取向小于 0.1", kind: "boolean" }])} /><WindowEvidence value={data.trajectory.analysis_range} /></section> : null}
   {thermal ? <><WindowEvidence value={data.analysis_range} /><EvidenceList rows={evidenceRows(data.clock, [{ key: "native_time_offset_ps", label: "原生生产时间偏移", unit: "ps" }, { key: "observed_step_start", label: "生产观测首步" }, { key: "observed_step_stop", label: "生产观测末步" }])} empty="未提供生产时间轴检查。" /><EvidenceList rows={evidenceRows(data.profile_averaging, [{ key: "interval_steps", label: "温度块平均间隔", unit: "步" }, { key: "interval_ps", label: "温度块平均时间", unit: "ps" }, { key: "fixed_interval_verified", label: "固定平均间隔已验证", kind: "boolean" }])} empty="未提供温度块平均协议。" /><EvidenceList rows={evidenceRows(data.production_profile_support, [{ key: "start_ps", label: "有效温度块支撑起点", unit: "ps" }, { key: "stop_ps", label: "有效温度块支撑终点", unit: "ps" }, { key: "block_count", label: "有效温度块数" }])} empty="未提供温度块时间支撑区间。" /><GradientEvidence label="左侧温度梯度拟合" value={fits.left} /><GradientEvidence label="右侧温度梯度拟合" value={fits.right} /><section aria-label="交换能量拟合"><h5>交换能量拟合</h5><EvidenceList rows={evidenceRows(exchange, [{ key: "slope_w_m2", label: "交换能量斜率", unit: "W/m²" }, { key: "intercept_j_m2", label: "交换能量截距", unit: "J/m²" }, { key: "r2", label: "拟合 R²" }, { key: "slope_standard_error_w_m2", label: "斜率标准误差", unit: "W/m²" }])} empty="未提供交换能量拟合。" /><WindowEvidence value={exchange.fit_window} /></section>{estimates.length ? <EvidenceList rows={[["热导区块估计", `${estimates.map(numberText).join("、")} W/(m·K)`]]} /> : <p className="np-polymer-md-muted">未提供有效的热导区块估计。</p>}</> : null}
   <TgPlateauWindows value={data.plateau_analysis_windows} />
-  {reasons.length ? <p>服务端质量原因：{reasons.join("；")}</p> : <p className="np-polymer-md-muted">未提供质量原因代码；不据此判定通过。</p>}</>;
+  {reasons.length ? <p title={qualityCodeTitle(reasons.join(";"))}>质量原因：{polymerMdQualityReason(reasons.join(";"))}</p> : <p className="np-polymer-md-muted">未提供质量原因代码；不据此判定通过。</p>}</>;
 }
 function requestedModelDescription(request: PolymerMdRequest): string {
   const model = request.model_configuration;
@@ -388,20 +390,24 @@ function Trajectory({
   serviceConfirmed: boolean;
 }) {
   const stages = job.stage_runs.filter(s => s.status === "completed" && (/^eq[123]$/.test(s.stage) || /^additional_\d+$/.test(s.stage) || s.stage === "tc"));
-  const [stageId, setStageId] = useState(() => stages.find(s => /^eq\d+$/.test(s.stage))?.stage_run_id ?? stages[0]?.stage_run_id ?? "");
-  const [offset, setOffset] = useState(0),
-    [trajectory, setTrajectory] = useState<PolymerMdTrajectory | null>(null);
+  const [restored] = useState(() => readPolymerMdResultView(job)?.trajectory ?? null);
+  const [stageId, setStageId] = useState(() => restored?.stageId ?? stages.find(s => /^eq\d+$/.test(s.stage))?.stage_run_id ?? stages[0]?.stage_run_id ?? "");
+  const [offset, setOffset] = useState(restored?.offset ?? 0),
+    [trajectory, setTrajectory] = useState<PolymerMdTrajectory | null>(restored?.trajectory ?? null);
   const [error, setError] = useState<string | null>(null),
     [loading, setLoading] = useState(false);
-  const [selections, setSelections] = useState<MdAtomSelectionSlots>([null, null]);
-  const [distance, setDistance] = useState<MdDemoAtomDistanceResponse | null>(null),
+  const [selections, setSelections] = useState<MdAtomSelectionSlots>(restored?.selections ?? [null, null]);
+  const [distance, setDistance] = useState<MdDemoAtomDistanceResponse | null>(restored?.distance ?? null),
     [distanceError, setDistanceError] = useState<string | null>(null),
     [distanceLoading, setDistanceLoading] = useState(false);
-  const [distanceSampling, setDistanceSampling] = useState<unknown>(null);
+  const [distanceSampling, setDistanceSampling] = useState<unknown>(restored?.distanceSampling ?? null);
   const [distanceNotice, setDistanceNotice] = useState<string | null>(null), [distanceStarted, setDistanceStarted] = useState(0);
   const distanceNow = usePolymerMdClock(distanceLoading);
-  const [pbc, setPbc] = useState(true);
+  const [pbc, setPbc] = useState(restored?.pbc ?? true);
   const identity = useRef(getSessionEpoch()), trajectoryAbort = useRef<AbortController | null>(null);
+  const sourceIdentity = polymerMdTrajectoryIdentity(job, stageId);
+  const displayedIdentity = useRef(JSON.stringify([sourceIdentity, offset]));
+  const loadedIdentity = useRef(restored?.sourceIdentity ?? null);
   const analysisHealthy = !capabilities.analysis || ["ready", "busy"].includes(capabilities.analysis.status);
   const trajectoryReady = identity.current === getSessionEpoch() && serviceConfirmed && analysisHealthy && capabilities.trajectory_available;
   const distanceReady = identity.current === getSessionEpoch() && serviceConfirmed && analysisHealthy && capabilities.distance_available;
@@ -417,6 +423,16 @@ function Trajectory({
     setDistanceNotice(null);
     setDistanceLoading(false);
   };
+  function retireUnavailableView(error: unknown, operation: "轨迹读取" | "距离分析") {
+    if (!(error instanceof Error) || !("status" in error) || ![403, 404].includes(Number(error.status))) return false;
+    loadedIdentity.current = null;
+    trajectoryAbort.current?.abort();
+    clearDistance();
+    clearPolymerMdTrajectoryView(job.job_id, identity.current);
+    setTrajectory(null); setSelections([null, null]);
+    setError(polymerMdReadError(error, operation));
+    return true;
+  }
   useEffect(() => onSessionRetired(() => {
     trajectoryAbort.current?.abort();
     clearDistance();
@@ -429,17 +445,27 @@ function Trajectory({
     }
   }, [stageId, stages]);
   useEffect(() => {
+    const next = JSON.stringify([sourceIdentity, offset]);
+    if (displayedIdentity.current === next) return;
+    displayedIdentity.current = next;
+    loadedIdentity.current = null;
+    clearPolymerMdTrajectoryView(job.job_id, identity.current);
     setTrajectory(null);
     setError(null);
     setSelections([null, null]);
     clearDistance();
-    return () => { ++generation.current; distanceAbort.current?.abort(); distanceAbort.current = null; };
     // Scientific identity changes retire selections; service observations do not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job.job_id, stageId, offset]);
+  }, [job.job_id, stageId, offset, sourceIdentity]);
+  useEffect(() => () => { ++generation.current; distanceAbort.current?.abort(); distanceAbort.current = null; }, []);
   useEffect(() => {
-    if (!stageId || !trajectoryReady) { setLoading(false); return; }
-    if (trajectory?.job_id === job.job_id && trajectory.stage_run_id === stageId && trajectory.frames[0]?.frame_index === offset) return;
+    if (trajectory && sourceIdentity && loadedIdentity.current === sourceIdentity) savePolymerMdTrajectoryView(job, {
+      sourceIdentity, stageId, offset, trajectory, selections, pbc, distance, distanceSampling
+    }, identity.current);
+  }, [job, sourceIdentity, stageId, offset, trajectory, selections, pbc, distance, distanceSampling]);
+  useEffect(() => {
+    if (!stageId || !sourceIdentity || !trajectoryReady) { setLoading(false); return; }
+    if (loadedIdentity.current === sourceIdentity && trajectory?.job_id === job.job_id && trajectory.stage_run_id === stageId && trajectory.frames[0]?.frame_index === offset) return;
     const c = new AbortController(),
       epoch = getSessionEpoch();
     let disposed = false;
@@ -449,10 +475,13 @@ function Trajectory({
     void boundedPolymerMdRead(c, POLYMER_MD_ANALYSIS_TIMEOUT_MS, signal => fetchPolymerMdTrajectory(job.job_id, stageId, offset, signal)).then(value => {
       if (c.signal.aborted || epoch !== getSessionEpoch()) return;
       if (value.job_id !== job.job_id || value.stage_run_id !== stageId) throw new Error("轨迹与当前任务阶段不匹配，请刷新。");
+      loadedIdentity.current = sourceIdentity;
       setTrajectory(value);
       setError(null);
     }).catch(e => {
-      if (!disposed && epoch === getSessionEpoch() && (!c.signal.aborted || e instanceof PolymerMdAnalysisTimeout)) setError(polymerMdReadError(e, "轨迹读取"));
+      if (!disposed && epoch === getSessionEpoch() && (!c.signal.aborted || e instanceof PolymerMdAnalysisTimeout)) {
+        if (!retireUnavailableView(e, "轨迹读取")) setError(polymerMdReadError(e, "轨迹读取"));
+      }
     }).finally(() => {
       if (!disposed && epoch === getSessionEpoch()) setLoading(false);
     });
@@ -463,7 +492,7 @@ function Trajectory({
     };
     // Only a selected scientific identity or frame change retires its coordinates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job.job_id, stageId, offset, trajectoryReady]);
+  }, [job.job_id, stageId, offset, trajectoryReady, sourceIdentity]);
   const frame = trajectory?.frames[0];
   function stopWaiting() {
     ++generation.current;
@@ -521,7 +550,9 @@ function Trajectory({
         }
       });
     } catch (e) {
-      if (revision === generation.current && epoch === getSessionEpoch() && (!c.signal.aborted || e instanceof PolymerMdAnalysisTimeout)) setDistanceError(polymerMdReadError(e, "距离分析"));
+      if (revision === generation.current && epoch === getSessionEpoch() && (!c.signal.aborted || e instanceof PolymerMdAnalysisTimeout)) {
+        if (!retireUnavailableView(e, "距离分析")) setDistanceError(polymerMdReadError(e, "距离分析"));
+      }
     } finally {
       if (distanceAbort.current === c && revision === generation.current && epoch === getSessionEpoch()) {
         distanceAbort.current = null;
@@ -535,10 +566,10 @@ function Trajectory({
           clearDistance();
           setStageId(stageRunId);
           setOffset(0);
-        }} /><button disabled={loading || !trajectoryReady || offset <= 0} onClick={() => setOffset(v => v - 1)}>上一帧</button><span><PolymerMdNumericText>{`第 ${offset + 1} 帧${trajectory ? ` / ${trajectory.total_frames} 帧` : ""}`}</PolymerMdNumericText></span><button disabled={loading || !trajectoryReady || !trajectory || offset + 1 >= trajectory.total_frames} onClick={() => setOffset(v => v + 1)}>下一帧</button></div>{loading ? <div className="np-pmd-trajectory-loading" role="status"><LoaderCircle className="np-sw-spin" aria-hidden="true" /><strong>正在读取当前任务的轨迹…</strong><p>轨迹较大时，请稍候。</p></div> : null}{error ? <p role="alert">{error}</p> : null}{frame ? <><p className="np-pmd-trajectory-caption"><PolymerMdNumericText>{`采样坐标：${frame.points.length.toLocaleString()} 个原子 · ${frame.time_ps} ps`}</PolymerMdNumericText></p>{!distanceReady ? <p className="np-pmd-analysis-availability" role="status">{!serviceConfirmed ? "服务状态待确认，已保留当前轨迹与原子选择；确认后可继续分析。" : "分析服务暂不可用，已保留当前轨迹与原子选择。"}</p> : capabilities.analysis?.status === "busy" ? <p className="np-pmd-analysis-availability" role="status">分析服务繁忙，新请求按可用名额受理。</p> : null}<label><input type="checkbox" checked={pbc} onChange={e => {
+        }} /><div className="np-pmd-frame-navigation" role="group" aria-label="轨迹翻帧"><button type="button" disabled={loading || !trajectoryReady || offset <= 0} onClick={() => setOffset(v => v - 1)}>上一帧</button><span className="np-pmd-frame-position"><PolymerMdNumericText>{`第 ${offset + 1} 帧${trajectory ? ` / ${trajectory.total_frames} 帧` : ""}`}</PolymerMdNumericText></span><button type="button" disabled={loading || !trajectoryReady || !trajectory || offset + 1 >= trajectory.total_frames} onClick={() => setOffset(v => v + 1)}>下一帧</button></div></div>{loading ? <div className="np-pmd-trajectory-loading" role="status"><LoaderCircle className="np-sw-spin" aria-hidden="true" /><strong>正在读取当前任务的轨迹…</strong><p>轨迹较大时，请稍候。</p></div> : null}{error ? <p role="alert">{error}</p> : null}{frame ? <><div className="np-pmd-trajectory-meta"><p className="np-pmd-trajectory-caption"><PolymerMdNumericText>{`采样坐标：${frame.points.length.toLocaleString()} 个原子 · ${frame.time_ps} ps`}</PolymerMdNumericText></p><label className="np-pmd-trajectory-pbc"><input type="checkbox" checked={pbc} onChange={e => {
           setPbc(e.target.checked);
           clearDistance();
-        }} /> 距离使用周期边界</label>{distance ? <DistanceSampling value={distanceSampling} /> : null}<MdTrajectoryExplorer key={`${job.job_id}:${stageId}`} points={frame.points} timePs={frame.time_ps} stageLabel={stageLabel(stages.find(s => s.stage_run_id === stageId)?.stage ?? "")} frameLabel={`第 ${frame.frame_index + 1} 帧`} distanceUsePbc={pbc} selections={selections} distance={distance} distanceLoading={distanceLoading} distanceError={distanceError} distanceNotice={distanceNotice} distanceElapsedSeconds={Math.max(0, Math.floor((distanceNow - distanceStarted) / 1000))} onCancelDistance={stopWaiting} onSelectionChange={s => {
+        }} /> 距离使用周期边界</label></div>{!distanceReady ? <p className="np-pmd-analysis-availability" role="status">{!serviceConfirmed ? "服务状态待确认，已保留当前轨迹与原子选择；确认后可继续分析。" : "分析服务暂不可用，已保留当前轨迹与原子选择。"}</p> : capabilities.analysis?.status === "busy" ? <p className="np-pmd-analysis-availability" role="status">分析服务繁忙，新请求按可用名额受理。</p> : null}{distance ? <DistanceSampling value={distanceSampling} /> : null}<MdTrajectoryExplorer key={`${job.job_id}:${stageId}`} points={frame.points} timePs={frame.time_ps} stageLabel={stageLabel(stages.find(s => s.stage_run_id === stageId)?.stage ?? "")} frameLabel={`第 ${frame.frame_index + 1} 帧`} distanceUsePbc={pbc} selections={selections} distance={distance} distanceLoading={distanceLoading} distanceError={distanceError} distanceNotice={distanceNotice} distanceElapsedSeconds={Math.max(0, Math.floor((distanceNow - distanceStarted) / 1000))} onCancelDistance={stopWaiting} onSelectionChange={s => {
         setSelections(s);
         clearDistance();
       }} distanceEnabled={distanceReady} onCalculate={() => {
@@ -548,7 +579,7 @@ function Trajectory({
         clearDistance();
       }} /></> : null}</section>;
 }
-type ResultTab = "overview" | "curves" | "conformation" | "files";
+type ResultTab = PolymerMdResultTab;
 const RESULT_TABS = [
   { id: "overview", label: "概览", description: "任务快照与科学指标", icon: Gauge },
   { id: "curves", label: "曲线", description: "真实采样与分析曲线", icon: BarChart3 },
@@ -578,12 +609,13 @@ export function PolymerMdResults({
   const downloadOperation = useRef<{ controller: AbortController; jobId: string; epoch: number } | null>(null);
   const currentJobId = useRef(job.job_id);
   currentJobId.current = job.job_id;
-  const [tab, setTab] = useState<ResultTab>("overview");
+  const [tab, setTab] = useState<ResultTab>(() => readPolymerMdResultView(job)?.tab ?? "overview");
   const now = usePolymerMdClock(tab === "overview" && polymerMdTimingIsLive(job));
   const resultId = useId();
   const tabId = (id: ResultTab) => `${resultId}-tab-${id}`;
   const panelId = `${resultId}-panel`;
   const identity = useRef(getSessionEpoch());
+  useEffect(() => { savePolymerMdResultTab(job, tab, identity.current); }, [job, tab]);
   const isTerminal = terminalJob(job.status);
   const artifactsAvailable = job.artifact_state !== "deleted" && job.artifact_state !== "delete_requested";
   const artifacts = artifactsAvailable ? job.artifacts : [];
@@ -669,9 +701,9 @@ export function PolymerMdResults({
           } as Record<string, string>)[s.status] ?? s.status}</span></div><span className={`np-pmd-stage-quality is-${s.quality_status}`}>阶段质量 · {QUALITY_LABELS[s.quality_status]}</span><StageProgress stage={s} /><StageLogs jobId={job.job_id} stage={s} available={job.artifact_state !== "deleted" && job.artifact_state !== "delete_requested"} />{s.errors.map((e, i) => <FailureDiagnostic key={i} message={e.message} code={e.code} />)}</li>)}</ol> : <p className="np-polymer-md-muted">尚无阶段执行记录。</p>}
         </section>
         <section className="np-pmd-overview-section" aria-label="汇总物性"><h3><Gauge aria-hidden="true" />科学指标</h3>
-          {rows.length ? <div className="np-polymer-md-table-wrap np-pmd-property-table"><table><thead><tr><th>性质</th><th>数值</th><th>单位</th><th>质量说明</th></tr></thead><tbody>{rows.map(p => <tr key={p.key}><th scope="row">{p.label}</th><td className={`np-pmd-property-value${p.value !== null ? " np-pmd-numeric-value" : " is-unavailable"}`}>{p.value === null ? "不可用" : `${numberText(p.value)}${p.uncertainty !== undefined ? ` ± ${numberText(p.uncertainty)}` : ""}`}</td><td className="np-pmd-property-unit">{p.unit}</td><td className="np-pmd-property-quality"><span className={`np-pmd-property-quality-label is-${p.quality ?? "not_evaluated"}`}>{p.reason ?? (p.quality ? QUALITY_LABELS[p.quality as keyof typeof QUALITY_LABELS] ?? p.quality : "见阶段质量判据")}</span>{p.method ? <small className="np-polymer-md-method">{p.method}</small> : null}{p.source || p.range ? <small className="np-polymer-md-method">{[p.source, p.range ? `分析区间 ${p.range}` : undefined].filter(Boolean).join(" · ")}</small> : null}</td></tr>)}</tbody></table></div>
+          {rows.length ? <div className="np-polymer-md-table-wrap np-pmd-property-table"><table><thead><tr><th>性质</th><th>数值</th><th>单位</th><th>质量说明</th></tr></thead><tbody>{rows.map(p => <tr key={p.key}><th scope="row">{p.label}</th><td className={`np-pmd-property-value${p.value !== null ? " np-pmd-numeric-value" : " is-unavailable"}`}>{p.value === null ? "不可用" : `${numberText(p.value)}${p.uncertainty !== undefined ? ` ± ${numberText(p.uncertainty)}` : ""}`}</td><td className="np-pmd-property-unit">{p.unit}</td><td className="np-pmd-property-quality"><span className={`np-pmd-property-quality-label is-${p.quality ?? "not_evaluated"}`} title={qualityCodeTitle(p.reason)}>{p.reason ? polymerMdQualityReason(p.reason) : (p.quality ? QUALITY_LABELS[p.quality as keyof typeof QUALITY_LABELS] ?? p.quality : "见阶段质量判据")}</span>{p.method ? <small className="np-polymer-md-method" title={safeCode(p.method)}>{polymerMdQualityMethod(p.method)}</small> : null}{p.source || p.range ? <small className="np-polymer-md-method">{[p.source, p.range ? `分析区间 ${p.range}` : undefined].filter(Boolean).join(" · ")}</small> : null}</td></tr>)}</tbody></table></div>
             : <div className="np-pmd-result-empty"><Gauge aria-hidden="true" /><h3>物性结果尚未发布</h3><p>当前尚无已发布的基础物性结果。</p></div>}
-          {job.stage_runs.filter(s => properties(s.results).length > 0).map(s => <details className="np-pmd-stage-properties" key={s.stage_run_id}><summary>{stageLabel(s.stage)}的阶段物性</summary><dl>{properties(s.results).map(p => <div key={p.key}><dt>{p.label}</dt><dd><span className={p.value !== null ? "np-pmd-numeric-value" : undefined}>{p.value === null ? "不可用" : numberText(p.value)}</span> <span>{p.unit}</span>{p.reason ? <small> · {p.reason}</small> : null}</dd></div>)}</dl></details>)}
+          {job.stage_runs.filter(s => properties(s.results).length > 0).map(s => <details className="np-pmd-stage-properties" key={s.stage_run_id}><summary>{stageLabel(s.stage)}的阶段物性</summary><dl>{properties(s.results).map(p => <div key={p.key}><dt>{p.label}</dt><dd><span className={p.value !== null ? "np-pmd-numeric-value" : undefined}>{p.value === null ? "不可用" : numberText(p.value)}</span> <span>{p.unit}</span>{p.reason ? <small title={qualityCodeTitle(p.reason)}> · {polymerMdQualityReason(p.reason)}</small> : null}</dd></div>)}</dl></details>)}
         </section>
         <RunEvidence job={job} rows={rows} />
       </> : null}

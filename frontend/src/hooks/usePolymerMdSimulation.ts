@@ -4,6 +4,7 @@ import * as api from "../services/polymerMdApi";
 import { clearPolymerMdPending, createPolymerMdPending, readPolymerMdPending, writePolymerMdPending, type PolymerMdPendingSubmission } from "../services/polymerMdPending";
 import type { PolymerMdCapabilities, PolymerMdJob, PolymerMdJobPage, PolymerMdRequest, PolymerMdServiceStatus } from "../types/polymerMd";
 import type { PolymerMdServiceCheck } from "../components/polymer-md/serviceState";
+import { clearPolymerMdTrajectoryView, forgetPolymerMdJobView } from "../services/polymerMdViewState";
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : "读取计算任务失败，请稍后重试。";
 }
@@ -124,7 +125,10 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
     } catch (e) {
       if (valid() && !c.signal.aborted && !aborted(e) && revision === jobRevision.current && activeId.current === id) {
         setError(errorText(e));
-        if (e instanceof api.PolymerMdApiError && [403, 404].includes(e.status)) setJob(null);
+        if (e instanceof api.PolymerMdApiError && [403, 404].includes(e.status)) {
+          forgetPolymerMdJobView(id);
+          setJob(null);
+        }
       }
     } finally {
       requestControllers.current.delete(c);
@@ -305,6 +309,8 @@ export function usePolymerMdSimulation(enabled: boolean, selectedId: string | nu
     try {
       if (kind === "cancel") await api.cancelPolymerMdJob(id, c.signal);else if (kind === "clear") await api.clearPolymerMdArtifacts(id, c.signal);else await api.deletePolymerMdJob(id, c.signal);
       if (!valid() || c.signal.aborted || revision !== actionRevision.current) return;
+      if (kind === "delete") forgetPolymerMdJobView(id);
+      else if (kind === "clear") clearPolymerMdTrajectoryView(id, getSessionEpoch());
       if (kind === "delete" && activeId.current === id) {
         setJob(null);
         onSelect(null);

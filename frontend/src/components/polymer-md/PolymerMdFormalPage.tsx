@@ -14,6 +14,7 @@ import { MdSimulationDemoPage } from "../MdSimulationDemoPage";
 import { MdStructureInput } from "../md-simulation/MdStructureInput";
 import { PolymerMdResults } from "./PolymerMdResults";
 import { PolymerMdTaskCenter } from "./PolymerMdTaskCenter";
+import { readPolymerMdWorkspace, savePolymerMdWorkspace } from "../../services/polymerMdViewState";
 import { PolymerMdConfigurationSelects, PolymerMdPropertyChoices } from "./PolymerMdConfigurationFields";
 import { POLYMER_MD_BASE_PROPERTIES } from "./propertyGroups";
 import { effectiveModel, PolymerMdModelFields } from "./PolymerMdModelFields";
@@ -78,13 +79,26 @@ export function PolymerMdFormalPage({
 }) {
   const guest = useAuth()?.status === "guest";
   const [request, setRequest] = useState(readPolymerMdDraft);
-  const [selectedId, setSelectedId] = useState(jobIdFromLocation);
-  const [view, setView] = useState<"config" | "tasks" | "results">(() => jobIdFromLocation() ? "results" : "config");
+  const [restored] = useState(readPolymerMdWorkspace);
+  const [selectedId, setSelectedId] = useState(() => jobIdFromLocation() ?? restored?.selectedId ?? null);
+  const [view, setView] = useState<"config" | "tasks" | "results">(() => {
+    const linkedId = jobIdFromLocation();
+    return linkedId && linkedId !== restored?.selectedId ? "results" : restored?.view ?? (linkedId ? "results" : "config");
+  });
   const [runMode, setRunMode] = useState<"formal" | "demo">("formal");
   const [hasOpenedDemo, setHasOpenedDemo] = useState(false);
   const [configuration, setConfiguration] = useState(readPolymerMdUserConfiguration);
   const [configurationError, setConfigurationError] = useState<string | null>(null);
   const identity = useRef(getSessionEpoch());
+  useEffect(() => {
+    if (!guest && runMode === "formal") savePolymerMdWorkspace({ selectedId, view }, identity.current);
+  }, [guest, runMode, selectedId, view]);
+  useEffect(() => {
+    if (!selectedId || jobIdFromLocation() || identity.current !== getSessionEpoch()) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("job", selectedId);
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [selectedId]);
   const [confirmation, setConfirmation] = useState<{ action: PolymerMdConfirmationAction; jobId: string } | null>(null);
   const dismissConfirmation = useCallback(() => setConfirmation(null), []);
   useEffect(dismissConfirmation, [dismissConfirmation, runMode]);
@@ -109,6 +123,9 @@ export function PolymerMdFormalPage({
   }, [request]);
   useEffect(() => {
     const pop = () => {
+      // App transitions keep this module mounted briefly after history changes.
+      // Leaving the module must not erase its remembered selected task.
+      if (window.location.pathname.replace(/\/+$/, "") !== "/md-simulation") return;
       const id = jobIdFromLocation();
       setSelectedId(id);
       if (id) { setRunMode("formal"); setView("results"); }

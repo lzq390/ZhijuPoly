@@ -188,6 +188,7 @@ export type PolymerMdArtifact = {
 };
 export type PolymerMdJob = {
   job_id: string;
+  attempt_fingerprint?: string;
   status: PolymerMdStatus;
   quality_status: PolymerMdQuality;
   scientific_request: PolymerMdRequest;

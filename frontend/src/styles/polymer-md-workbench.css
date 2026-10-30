@@ -144,7 +144,7 @@
 .np-polymer-md-page .np-pmd-workbench-surface {
   position: relative;
   min-width: 0;
-  overflow: hidden;
+  overflow: clip;
   border: 1px solid var(--np-theme-surface-border);
   border-radius: var(--np-theme-surface-radius);
   background: var(--np-theme-surface);

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { clearPolymerMdViewState } from "../../services/polymerMdViewState";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PolymerMdCapabilities, PolymerMdJob, PolymerMdStage } from "../../types/polymerMd";
@@ -36,10 +37,52 @@ function expandEvidence(container: HTMLElement) {
   return within(root);
 }
 
-beforeEach(() => { vi.clearAllMocks(); api.bundle.mockReset(); api.download.mockReset(); });
+beforeEach(() => { clearPolymerMdViewState(); vi.clearAllMocks(); api.bundle.mockReset(); api.download.mockReset(); });
 afterEach(cleanup);
 
 describe("polymer MD result provenance", () => {
+  it("keeps hidden quality identifiers out of tooltips and expanded method evidence", () => {
+    const canary = "ab".repeat(32);
+    const view = page(job({ results: { properties: [{ key: "density", value: .9, quality_status: "warning", reason: canary, method: canary }] },
+      stage_runs: [stage("analyze_2", { quality: { reasons: [canary] } })] }));
+    expandEvidence(view.container);
+    expect(view.container.innerHTML).not.toContain(canary);
+    expect(screen.getAllByText(/质量原因包含不可展示的信息/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("未提供可展示的计算方法").length).toBeGreaterThan(0);
+  });
+
+  it("explains saved stability reasons in Chinese across properties, stage results and quality evidence", () => {
+    const codes = ["unstable_TotEng", "unstable_E_bond", "unstable_E_dihed", "unstable_E_vdwl"];
+    const reason = codes.join(";");
+    const property = { key: "Cp", value: 0, unit: "J/(kg K)", quality_status: "warning", reason, method: "NPT_fluctuation_5_block_SE" };
+    const view = page(job({ quality_status: "not_converged", results: { properties: [property,
+      { key: "refractive_index", value: null, quality_status: "failed", reason: "density_quality_not_passed" }] },
+      stage_runs: [stage("analyze_2", { quality_status: "not_converged", results: { properties: [property] },
+        quality: { reasons: [...codes, "已有的中文说明", "new_quality_gate", "/private/QUALITY_SECRET_CANARY"], checks: {
+          Density: { block_mean_sd: .000924537, limit: .001, passed: true }
+        } } })] }));
+    const row = screen.getByRole("rowheader", { name: "定压比热容 Cp" }).closest("tr")!;
+    expect(within(row).getByText("0")).toBeTruthy();
+    for (const label of ["总能量", "键能", "二面角能", "范德华能"]) expect(row.textContent).toContain(label);
+    expect(row.textContent).not.toContain("unstable_");
+    expect(within(row).getByTitle(reason)).toBeTruthy();
+    expect(within(row).getByTitle("NPT_fluctuation_5_block_SE").textContent).toMatch(/NPT.*区块/);
+    const unavailable = screen.getByRole("rowheader", { name: "折射率" }).closest("tr")!;
+    expect(within(unavailable).getByText("不可用")).toBeTruthy();
+    expect(unavailable.textContent).toMatch(/密度.*未通过.*质量检查/);
+    expect(unavailable.textContent).not.toContain("密度波动");
+    const stageProperties = view.container.querySelector<HTMLDetailsElement>(".np-pmd-stage-properties")!;
+    stageProperties.open = true;
+    for (const label of ["总能量", "键能", "二面角能", "范德华能"]) expect(stageProperties.textContent).toContain(label);
+    expect(stageProperties.textContent).not.toContain("unstable_");
+    const evidence = expandEvidence(view.container);
+    const quality = evidence.getByRole("region", { name: "阶段质量判据" });
+    for (const label of ["总能量", "键能", "二面角能", "范德华能", "已有的中文说明", "new_quality_gate"]) expect(quality.textContent).toContain(label);
+    expect(quality.textContent).not.toContain("unstable_");
+    expect(within(quality).getByText("是")).toBeTruthy();
+    expect(view.container.innerHTML).not.toContain("QUALITY_SECRET_CANARY");
+  });
+
   it("publishes slow running-stage logs before scheduling another read and stops after unmount", async () => {
     vi.useFakeTimers();
     try {
@@ -308,7 +351,8 @@ describe("polymer MD result provenance", () => {
     expect(within(exchange).getByText("1.8000e+8 W/m²")).toBeTruthy();
     expect(within(exchange).getByText("2,000 W/m²")).toBeTruthy();
     expect(evidence.getByText("0.7")).toBeTruthy();
-    expect(evidence.getByText(/服务端质量原因：conductivity_block_uncertainty_not_converged/)).toBeTruthy();
+    const explanation = evidence.getByText(/质量原因：.*热导.*区块/);
+    expect(explanation.getAttribute("title")).toBe("conductivity_block_uncertainty_not_converged");
   });
 
   it("shows the requested burn-in and available observations when no valid analysis window exists", () => {

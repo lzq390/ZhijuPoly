@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { clearPolymerMdViewState } from "../services/polymerMdViewState";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSession, installSession, retireSession } from "../auth/session";
@@ -27,9 +28,65 @@ function choose(name: string, label: string) {
   fireEvent.click(menu.getByText(label, { selector: "strong", exact: true }).closest('[role="option"]')!);
 }
 
-beforeEach(() => { vi.clearAllMocks(); sessionStorage.clear(); window.history.replaceState(null, "", "/md-simulation"); mocks.capabilities.mockResolvedValue(caps); mocks.status.mockResolvedValue(caps); mocks.jobs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10 }); mocks.job.mockResolvedValue(job()); mocks.create.mockResolvedValue(job()); mocks.cancel.mockResolvedValue(job({ status: "cancel_requested" })); mocks.clear.mockResolvedValue(job({ artifacts: [] })); });
+beforeEach(() => { clearPolymerMdViewState(); vi.clearAllMocks(); sessionStorage.clear(); window.history.replaceState(null, "", "/md-simulation"); mocks.capabilities.mockResolvedValue(caps); mocks.status.mockResolvedValue(caps); mocks.jobs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10 }); mocks.job.mockResolvedValue(job()); mocks.create.mockResolvedValue(job()); mocks.cancel.mockResolvedValue(job({ status: "cancel_requested" })); mocks.clear.mockResolvedValue(job({ artifacts: [] })); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 describe("formal polymer MD page", () => {
+  it("restores the last main tab for the same job while a different explicit job link wins", async () => {
+    window.history.replaceState(null, "", `/md-simulation?job=${job().job_id}`);
+    const initial = page(); await screen.findByRole("heading", { name: "任务详情" });
+    fireEvent.click(screen.getByRole("tab", { name: "任务中心" }));
+    initial.unmount();
+    const returned = page();
+    expect(screen.getByRole("tab", { name: "任务中心" }).getAttribute("aria-selected")).toBe("true");
+    returned.unmount();
+    const other = job({ job_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeef" });
+    mocks.job.mockResolvedValue(other);
+    window.history.replaceState(null, "", `/md-simulation?job=${other.job_id}`);
+    page(); await screen.findByRole("heading", { name: "任务详情" });
+    expect(screen.getByRole("tab", { name: "结果分析" }).getAttribute("aria-selected")).toBe("true");
+    expect(mocks.job).toHaveBeenLastCalledWith(other.job_id, expect.any(AbortSignal));
+  });
+
+  it("restores loaded analysis across main tabs and a module remount after rechecking the job", async () => {
+    const current = job();
+    mocks.trajectory.mockImplementation(async (id, sid, offset) => ({ job_id: id, stage_run_id: sid, total_frames: 2,
+      frames: [{ frame_index: offset, time_ps: offset, points: [{ atom_id: 1, chain_id: 1, atom_type: "C", x: 0, y: 0, z: 0 },
+        { atom_id: 2, chain_id: 1, atom_type: "H", x: 1, y: 0, z: 0 }], box: { lx: 10, ly: 10, lz: 10 } }] }));
+    mocks.distance.mockImplementation(async (id, sid) => ({ job_id: id, stage_run_id: sid, frames: [0, 1], time_ps: [0, 1], distance: [1, 2] }));
+    window.history.replaceState(null, "", `/md-simulation?job=${current.job_id}`);
+    const initial = page();
+    await screen.findByRole("heading", { name: "任务详情" });
+    fireEvent.click(screen.getByRole("tab", { name: "构象" }));
+    await screen.findByText("真实坐标原子 1");
+    fireEvent.click(screen.getByRole("button", { name: "下一帧" }));
+    await screen.findByText("轨迹来源：EQ3 平衡采样，第 2 帧");
+    fireEvent.click(screen.getByRole("checkbox", { name: "距离使用周期边界" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择原子对" }));
+    fireEvent.click(screen.getByRole("button", { name: "计算当前阶段距离" }));
+    await screen.findByText("当前阶段距离已返回");
+    fireEvent.click(screen.getByRole("tab", { name: "任务中心" }));
+    fireEvent.click(screen.getByRole("tab", { name: "结果分析" }));
+    await screen.findByText("当前阶段距离已返回");
+    expect(screen.getByText("距离周期边界：关闭")).toBeTruthy();
+    act(() => {
+      window.history.pushState(null, "", "/");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    initial.unmount();
+    window.history.replaceState(null, "", "/md-simulation");
+    let resolve!: (value: PolymerMdJob) => void;
+    mocks.job.mockImplementationOnce(() => new Promise<PolymerMdJob>(done => { resolve = done; }));
+    page();
+    expect(screen.queryByText("当前阶段距离已返回")).toBeNull();
+    await act(async () => { resolve(current); });
+    await screen.findByText("当前阶段距离已返回");
+    expect(screen.getByText("轨迹来源：EQ3 平衡采样，第 2 帧")).toBeTruthy();
+    expect(screen.getByText("距离周期边界：关闭")).toBeTruthy();
+    expect(window.location.search).toContain(current.job_id);
+    expect(mocks.trajectory).toHaveBeenCalledTimes(2); expect(mocks.distance).toHaveBeenCalledOnce();
+    for (const mutation of [mocks.create, mocks.cancel, mocks.clear, mocks.remove]) expect(mutation).not.toHaveBeenCalled();
+  });
+
   it("shows actual execution times in task history and the selected result without mutating a job", async () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-29T01:41:23Z"));
     const started = "2026-10-28T09:38:19.714180+00:00";
