@@ -57,7 +57,7 @@ it("refreshes membership in the same session without clearing drafts or remounti
 it("offers self-registration only when the server enables it and installs the returned ordinary session", async () => {
   const fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(response(url.endsWith("/plans") ? { registration_enabled: true } : url.endsWith("/register") ? { ...account("new-user"), account_type: "free" } : GUEST_SESSION)));
   vi.stubGlobal("fetch", fetch); page(); await screen.findByText("共享游客页面"); openGuestLogin();
-  fireEvent.click(screen.getByRole("button", { name: "注册普通账号" }));
+  fireEvent.click(screen.getByRole("button", { name: "注册账号" }));
   await screen.findByRole("button", { name: "创建账号" });
   fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "new-user" } });
   fireEvent.change(screen.getByLabelText("密码"), { target: { value: "long-password-123" } });
@@ -71,7 +71,7 @@ it("offers self-registration only when the server enables it and installs the re
 it("keeps the registration form unavailable when registration is disabled", async () => {
   vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => Promise.resolve(response(url.endsWith("/plans") ? { registration_enabled: false } : GUEST_SESSION))));
   page(); await screen.findByText("共享游客页面"); openGuestLogin();
-  fireEvent.click(screen.getByRole("button", { name: "注册普通账号" }));
+  fireEvent.click(screen.getByRole("button", { name: "注册账号" }));
   await screen.findByText(/自助注册暂未开放/);
   expect(screen.queryByRole("button", { name: "创建账号" })).toBeNull();
 });

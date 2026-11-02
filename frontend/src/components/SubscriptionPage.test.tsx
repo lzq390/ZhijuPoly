@@ -22,7 +22,7 @@ it("does not read private orders for a guest and offers enabled registration", a
   const login = vi.fn(), register = vi.fn(); mocks.auth.mockReturnValue({ status: "guest", session: {}, login, register });
   render(<SubscriptionPage />);
   fireEvent.click(await screen.findByRole("button", { name: "登录后开通" }));
-  fireEvent.click(screen.getByRole("button", { name: "注册普通账号" }));
+  fireEvent.click(screen.getByRole("button", { name: "注册账号" }));
   expect(login).toHaveBeenCalledOnce(); expect(register).toHaveBeenCalledOnce(); expect(mocks.subscription).not.toHaveBeenCalled(); expect(mocks.orders).not.toHaveBeenCalled();
 });
 it("preserves legacy membership and does not offer another purchase", async () => {

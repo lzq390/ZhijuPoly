@@ -203,7 +203,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={{ ...state, login: () => { setRegisterMode(false); setLoginOpen(true); }, register: () => { setRegisterMode(true); setLoginOpen(true); }, refreshSession, logout, changePassword: () => setPasswordOpen(true), guestDraft, registerGuestCapture: setGuestCapture }}>
     {content}
     {state.status === "authenticated" && state.session.account_type === "free" && membershipOpen && <LoginDialog label="会员功能说明" onClose={() => setMembershipOpen(false)}><div className="np-auth-dialog-message"><h2>开通会员以使用此功能</h2><p>普通账号可使用本地画板和公开示例。会员可使用科研服务与工作空间。</p><div className="np-auth-dialog-actions"><button className="is-primary" type="button" onClick={() => { setMembershipOpen(false); openSubscription(); }}>查看会员订阅</button><button type="button" onClick={() => setMembershipOpen(false)}>暂不开通</button></div></div></LoginDialog>}
-    {state.status === "guest" && loginOpen && <LoginDialog onClose={() => setLoginOpen(false)}><>{!registerMode || registration === "enabled" ? <CredentialsForm key={registerMode ? "register" : "login"} mode={registerMode ? "register" : "login"} error={state.error} submit={login} /> : <p className="np-auth-dialog-notice" role="status">{registration === "loading" ? "正在确认注册服务…" : registration === "disabled" ? "自助注册暂未开放，请使用已有账号登录。" : "暂时无法确认注册服务，请稍后重试。"}</p>}<div className="np-auth-dialog-switch"><span>{registerMode ? "已有账号？" : "还没有账号？"}</span><button type="button" onClick={() => { setRegisterMode(value => !value); setState(previous => ({ ...previous, error: null })); }}>{registerMode ? "返回登录" : "注册普通账号"}</button></div></></LoginDialog>}
+    {state.status === "guest" && loginOpen && <LoginDialog label={registerMode ? "注册账号" : "登录工作空间"} onClose={() => setLoginOpen(false)}><>{!registerMode || registration === "enabled" ? <CredentialsForm key={registerMode ? "register" : "login"} mode={registerMode ? "register" : "login"} error={state.error} submit={login} /> : <p className="np-auth-dialog-notice" role="status">{registration === "loading" ? "正在确认注册服务…" : registration === "disabled" ? "自助注册暂未开放，请使用已有账号登录。" : "暂时无法确认注册服务，请稍后重试。"}</p>}<div className="np-auth-dialog-switch"><span>{registerMode ? "已有账号？" : "还没有账号？"}</span><button type="button" onClick={() => { setRegisterMode(value => !value); setState(previous => ({ ...previous, error: null })); }}>{registerMode ? "返回登录" : "注册账号"}</button></div></></LoginDialog>}
   </AuthContext.Provider>;
 }
 
@@ -225,7 +225,7 @@ function LoginDialog({ children, onClose, label = "登录工作空间" }: { chil
   }, [onClose]);
   return <div className="np-auth-dialog-backdrop" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="np-auth-dialog" ref={dialog} role="dialog" aria-modal="true" aria-label={label}>
-      <button className="np-auth-dialog-close" type="button" aria-label={label === "登录工作空间" ? "关闭登录" : "关闭说明"} onClick={onClose}><X aria-hidden="true" /></button>
+      <button className="np-auth-dialog-close" type="button" aria-label={label === "注册账号" ? "关闭注册" : label === "登录工作空间" ? "关闭登录" : "关闭说明"} onClick={onClose}><X aria-hidden="true" /></button>
       {children}
     </div>
   </div>;
@@ -237,6 +237,8 @@ function CredentialsForm({ mode, submit, error: externalError }: {
   const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
   const login = mode !== "password";
   const registering = mode === "register";
+  const passwordId = useId();
+  const passwordHintId = `${passwordId}-hint`;
   async function handle(event: FormEvent) {
     event.preventDefault(); if (busy) return;
     if ((!login || registering) && second !== confirm) { setError("两次输入的新密码不一致。"); return; }
@@ -244,11 +246,10 @@ function CredentialsForm({ mode, submit, error: externalError }: {
     try { await submit(first, second); } catch (reason) { setError(reason instanceof Error ? reason.message : "操作失败，请重试。"); }
     finally { setBusy(false); }
   }
-  return <form className="np-auth-form" onSubmit={event => void handle(event)}>
-    <h2>{registering ? "注册普通账号" : login ? "登录工作空间" : "修改密码"}</h2>
-    <p>{registering ? "注册后可使用本地画板和公开示例，会员服务需另行开通。" : login ? "使用账号和密码登录。" : "修改成功后，请使用新密码重新登录。"}</p>
+  return <form className={`np-auth-form${registering ? " np-auth-form--register" : ""}`} onSubmit={event => void handle(event)}>
+    {registering ? <header className="np-auth-form__register-header"><h2>注册账号</h2><p>注册后可使用本地画板和公开示例。会员服务需另行开通。</p></header> : <><h2>{login ? "登录工作空间" : "修改密码"}</h2><p>{login ? "使用账号和密码登录。" : "修改成功后，请使用新密码重新登录。"}</p></>}
     <label>{login ? "用户名" : "当前密码"}<input required maxLength={login ? 64 : 256} autoComplete={login ? "username" : "current-password"} type={login ? "text" : "password"} value={first} onChange={event => setFirst(event.target.value)} /></label>
-    <label>{login ? "密码" : "新密码"}<input required autoComplete={login && !registering ? "current-password" : "new-password"} type="password" maxLength={256} minLength={login && !registering ? 1 : 12} value={second} onChange={event => setSecond(event.target.value)} /></label>
+    {registering ? <div className="np-auth-form__password-field"><label htmlFor={passwordId}>密码</label><span className="np-auth-form__field-hint" id={passwordHintId}>至少 12 位字符</span><input id={passwordId} aria-describedby={passwordHintId} required autoComplete="new-password" type="password" maxLength={256} minLength={12} value={second} onChange={event => setSecond(event.target.value)} /></div> : <label>{login ? "密码" : "新密码"}<input required autoComplete={login ? "current-password" : "new-password"} type="password" maxLength={256} minLength={login ? 1 : 12} value={second} onChange={event => setSecond(event.target.value)} /></label>}
     {(!login || registering) && <label>{registering ? "确认密码" : "确认新密码"}<input required type="password" autoComplete="new-password" maxLength={256} value={confirm} onChange={event => setConfirm(event.target.value)} /></label>}
     {(error || externalError) && <p role="alert">{error || externalError}</p>}
     <button type="submit" disabled={busy}>{busy ? "处理中…" : registering ? "创建账号" : login ? "登录" : "修改密码并重新登录"}</button>

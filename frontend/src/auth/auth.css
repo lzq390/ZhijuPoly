@@ -5,6 +5,12 @@
 .np-auth-form{box-sizing:border-box;background:white;padding:32px;border:1px solid #dce5ef;border-radius:18px;display:grid;gap:20px;max-width:400px;width:100%;color:#18344c}
 .np-auth-form h2{font-size:23px;font-weight:650;line-height:1.4;margin:0;letter-spacing:-.02em}
 .np-auth-form p{margin:0;font-size:14px}
+.np-auth-form--register{gap:18px}
+.np-auth-form__register-header{display:grid;gap:10px;padding-bottom:2px}
+.np-auth-form__register-header p{font-size:13px;line-height:1.8;color:#60758a}
+.np-auth-form__password-field{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:baseline}
+.np-auth-form__password-field>input{grid-column:1 / -1}
+.np-auth-form__field-hint{font-size:12px;line-height:1.5;color:#718498;text-align:right}
 .np-auth-form label,.np-auth-guest label{display:grid;gap:8px;font-size:14px;font-weight:500}
 .np-auth-form input,.np-auth-guest textarea{box-sizing:border-box;border:1px solid #cbd9e6;border-radius:10px;padding:11px 12px;width:100%;min-width:0;background:#fbfdff;color:#18344c;font:inherit;transition:border-color .15s,box-shadow .15s,background .15s}
 .np-auth-form input{min-height:46px;font-size:16px}
@@ -97,6 +103,7 @@
   .np-guest-sidebar .np-account-menu__popover{width:230px;right:auto}
   .np-guest-main__content{padding:24px 16px}
   .np-auth-form{padding:28px 22px}
+  .np-auth-form--register{gap:16px}
   .np-auth-dialog-backdrop{padding:16px}
   .np-auth-dialog{--np-auth-card-padding:24px;max-height:calc(100dvh - 32px);border-radius:18px}
   .np-auth-dialog-switch{padding-block:16px}
@@ -148,6 +155,10 @@
   .np-auth-dialog { --np-auth-card-padding: 40px; }
   .np-auth-dialog-switch { gap: 12px; margin-top: 28px; padding-block: 22px; font-size: 16px; }
   .np-auth-form { gap: 24px; padding: 40px; font-size: 18px; }
+  .np-auth-form--register { gap: 22px; }
+  .np-auth-form__register-header { gap: 12px; }
+  .np-auth-form__register-header p { font-size: 16px; }
+  .np-auth-form__field-hint { font-size: 14px; }
   .np-auth-form h2 { font-size: 28px; }
   .np-auth-form label { gap: 10px; font-size: 16px; }
   .np-auth-form input { min-height: 48px; padding: 12px; border-radius: 10px; font-size: 18px; }
