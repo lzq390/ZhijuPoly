@@ -1,0 +1,53 @@
+# Standalone development project. Never merge this into a production stack.
+name: nexpoly_mcp_dev
+
+services:
+  property-filter-mcp:
+    image: nexpoly-property-filter-mcp:dev
+    build:
+      context: .
+      dockerfile: Dockerfile.property-filter-mcp
+      # Build-time access to the host proxy; runtime stays on the isolated dev network.
+      network: host
+      args: [HTTP_PROXY, HTTPS_PROXY, NO_PROXY]
+    user: "${NEXPOLY_MCP_DEV_UID:?use scripts/property_filter_mcp_dev.py}:${NEXPOLY_MCP_DEV_GID:?use scripts/property_filter_mcp_dev.py}"
+    environment:
+      NEXPOLY_MCP_DSN_FILE: /run/property-filter-mcp/dsn
+      NEXPOLY_MCP_CLIENTS_FILE: /run/property-filter-mcp/clients.json
+      NEXPOLY_MCP_HOST: 0.0.0.0
+      NEXPOLY_MCP_PORT: "18110"
+      NEXPOLY_MCP_ALLOWED_HOSTS: "127.0.0.1:18110,localhost:18110"
+      NEXPOLY_MCP_ALLOWED_ORIGINS: ""
+      NEXPOLY_MCP_RATE_LIMIT: "60"
+      NEXPOLY_MCP_MAX_CONCURRENCY: "2"
+    ports:
+      - "127.0.0.1:18110:18110"
+    volumes:
+      - type: bind
+        source: ${NEXPOLY_MCP_DEV_RUNTIME:?use scripts/property_filter_mcp_dev.py}
+        target: /run/property-filter-mcp
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 128
+    restart: "no"
+    stop_grace_period: 30s
+    networks: [development-database]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18110/healthz', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+networks:
+  development-database:
+    external: true
+    name: nexpoly_dev_default

@@ -499,7 +499,14 @@ def search_property_filter_records_postgres(
     query: str,
     page: int,
     page_size: int,
+    measurement_limit_per_filter: int | None = None,
 ) -> tuple[int, int, list[dict[str, Any]]]:
+    if measurement_limit_per_filter is not None and (
+        isinstance(measurement_limit_per_filter, bool)
+        or not isinstance(measurement_limit_per_filter, int)
+        or measurement_limit_per_filter < 1
+    ):
+        raise ValueError("measurement_limit_per_filter must be a positive integer")
     candidate_sql_parts: list[str] = []
     candidate_params: list[Any] = []
     for filter_index, condition in enumerate(conditions):
@@ -512,6 +519,31 @@ def search_property_filter_records_postgres(
     record_columns = ",\n          ".join(
         f"records.{column}" for column in PROPERTY_FILTER_RECORD_COLUMNS
     )
+    evidence_columns = ""
+    evidence_join = "true"
+    evidence_params: list[Any] = []
+    if measurement_limit_per_filter is not None:
+        # Rank only after all AND conditions and material pagination have been
+        # applied. Count before sampling so callers can disclose omitted rows.
+        evidence_columns = """,
+          COUNT(*) OVER (
+            PARTITION BY page_records.group_key, page_records.filter_index
+          ) AS matching_measurement_count,
+          ROW_NUMBER() OVER (
+            PARTITION BY page_records.group_key, page_records.filter_index
+            ORDER BY
+              CASE lower(COALESCE(records.value_origin, ''))
+                WHEN 'observed' THEN 0
+                WHEN 'median' THEN 1
+                WHEN 'impute' THEN 2
+                ELSE 3
+              END ASC,
+              records.reliable_score DESC NULLS LAST,
+              records.filter_record_id ASC
+          ) AS measurement_rank
+        """
+        evidence_join = "ordered_records.measurement_rank <= %s"
+        evidence_params.append(measurement_limit_per_filter)
     query_rows = connection.execute(
         f"""
         WITH candidate_records AS MATERIALIZED (
@@ -577,7 +609,7 @@ def search_property_filter_records_postgres(
           SELECT
             page_records.filter_index,
             page_records.group_key,
-            {record_columns}
+            {record_columns}{evidence_columns}
           FROM page_records
           JOIN core.polymer_property_filter_records records
             ON records.filter_record_id = page_records.filter_record_id
@@ -588,7 +620,7 @@ def search_property_filter_records_postgres(
           ordered_records.*
         FROM total_summary
         CROSS JOIN matched_summary
-        LEFT JOIN ordered_records ON true
+        LEFT JOIN ordered_records ON {evidence_join}
         ORDER BY
           ordered_records.group_key ASC NULLS LAST,
           ordered_records.filter_index ASC NULLS LAST,
@@ -601,7 +633,7 @@ def search_property_filter_records_postgres(
           ordered_records.reliable_score DESC NULLS LAST,
           ordered_records.filter_record_id ASC NULLS LAST
         """,
-        [*candidate_params, filter_count, page_size, offset],
+        [*candidate_params, filter_count, page_size, offset, *evidence_params],
     ).fetchall()
     if not query_rows:
         return 0, 0, []

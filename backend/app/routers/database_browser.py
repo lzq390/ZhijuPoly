@@ -26,14 +26,11 @@ from app.models import (
     ExperimentalPropertyRecord,
     FormulationBrowseResponse,
     FormulationRecord,
-    PropertyFilterHistogram,
     PropertyFilterHistogramResponse,
     PropertyFilterOption,
     PropertyFilterOptionsResponse,
-    PropertyFilterRecord,
     PropertyFilterSearchRequest,
     PropertyFilterSearchResponse,
-    PropertyFilterSearchResult,
     SmilesLookupRequest,
     SmilesLookupResponse,
     SmilesLookupResult,
@@ -43,12 +40,16 @@ from app.models import (
 from app.postgres_database import PostgresUnavailableError
 from app.recording_models import RecordedFilterSearchRequest, RecordedFilterSearchResponse
 from app.services.analytics_snapshot_store import load_analytics_snapshot, save_analytics_snapshot
-from app.services.property_filter_catalog import (
-    PropertyFilterCatalog,
-    load_property_filter_catalog,
-    property_filter_catalog_is_current,
-    resolve_property_filter_histogram,
+from app.services.property_filter import (
+    PropertyFilterOptionNotFound,
+    current_property_filter_catalog,
+    get_property_filter_histogram_data,
+    load_property_filter_context,
+    property_filter_source_status,
+    resolve_property_filter_option,
+    search_property_filter_data,
 )
+from app.services.property_filter_catalog import PropertyFilterCatalog
 from app.services.postgres_database_browser import (
     browse_dft_energy_steps_postgres,
     browse_dft_molecules_postgres,
@@ -57,14 +58,12 @@ from app.services.postgres_database_browser import (
     browse_formulation_records_postgres,
     browse_structure_property_records_postgres,
     database_analytics_sources_changed_postgres,
-    get_property_filter_options_postgres,
     get_database_analytics_postgres,
     get_dft_browser_summary_postgres,
     lookup_pi_candidate_smiles_postgres,
     lookup_polymer_smiles_postgres,
     lookup_property_smiles_postgres,
     postgres_table_exists,
-    search_property_filter_records_postgres,
     source_file_status,
 )
 
@@ -157,22 +156,11 @@ def _source_file_label(path: Path) -> str:
 
 
 def _property_filter_source_status(connection, total_records: int) -> tuple[str, str | None]:
-    source_status, source_message = source_file_status(connection, "property_filter_csv")
-    if total_records == 0 and source_status == "ready":
-        return "empty", "core.polymer_property_filter_records has no records; run the property_filter import."
-    return source_status, source_message
+    return property_filter_source_status(connection, total_records)
 
 
 def _current_property_filter_catalog(connection) -> PropertyFilterCatalog | None:
-    if not postgres_table_exists(connection, "governance", "property_filter_options_snapshots"):
-        return None
-    try:
-        catalog = load_property_filter_catalog(connection)
-        if catalog is not None and property_filter_catalog_is_current(connection, catalog):
-            return catalog
-    except RuntimeError:
-        logger.exception("property-filter catalog validation failed; using live fallback")
-    return None
+    return current_property_filter_catalog(connection)
 
 
 def _property_filter_etag(catalog: PropertyFilterCatalog, source_status: str) -> str:
@@ -521,51 +509,8 @@ async def browse_structure_property(
     )
 
 
-def _property_filter_record(row) -> PropertyFilterRecord:
-    return PropertyFilterRecord(
-        filter_record_id=int(row["filter_record_id"]),
-        source_row_number=int(row["source_row_number"]),
-        polymer_name=row["polymer_name"],
-        smiles=row["smiles"],
-        canonical_smiles=row["canonical_smiles"],
-        property_category=row["property_category"],
-        property_name=row["property_name"],
-        property_value=row["property_value"],
-        property_value_num=row["property_value_num"],
-        property_unit_raw=row["property_unit_raw"],
-        property_unit_clean=row["property_unit_clean"],
-        property_key=row["property_key"],
-        property_label=row["property_label"],
-        canonical_value=row["canonical_value"],
-        canonical_unit=row["canonical_unit"],
-        unit_conversion_status=row["unit_conversion_status"],
-        value_origin=row["value_origin"],
-        label_source=row["label_source"],
-        reliable_score=row["reliable_score"],
-        soft_quality_flags=row["soft_quality_flags"],
-        duplicate_flag=row["duplicate_flag"],
-        filter_index=int(row["filter_index"]),
-    )
-
-
 def _property_filter_option(row) -> PropertyFilterOption:
-    return PropertyFilterOption(
-        filter_type=row["filter_type"],
-        option_key=row["option_key"],
-        label=row["label"],
-        property_key=row["property_key"],
-        property_name=row["property_name"],
-        property_unit_clean=row["property_unit_clean"],
-        canonical_unit=row["canonical_unit"],
-        rows=int(row["rows"]),
-        unique_smiles=int(row["unique_smiles"]),
-        min_value=row["min_value"],
-        p5_value=row["p5_value"],
-        median_value=row["median_value"],
-        p95_value=row["p95_value"],
-        max_value=row["max_value"],
-        histogram=row.get("histogram"),
-    )
+    return PropertyFilterOption.model_validate(row)
 
 
 @router.get("/property-filter/options", response_model=PropertyFilterOptionsResponse)
@@ -577,25 +522,21 @@ def get_property_filter_options(request: Request, response: Response):
 
     try:
         with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
-            if not postgres_table_exists(connection, "core", "polymer_property_filter_records"):
-                raise RuntimeError("core.polymer_property_filter_records is missing")
             connection.execute("SET LOCAL statement_timeout = '15s'")
-            catalog = _current_property_filter_catalog(connection)
+            context = load_property_filter_context(connection)
+            catalog = context.catalog
+            total_records = context.total_records
+            mapped_records = context.mapped_records
+            raw_records = context.raw_records
+            rows = context.options
+            mode = context.mode
             if catalog is None:
-                total_records, mapped_records, raw_records, rows = get_property_filter_options_postgres(connection)
-                mode = "live-fallback"
                 _log_property_filter_event(
                     "property_filter_options_fallback",
                     level=logging.WARNING,
                     mode=mode,
                 )
-            else:
-                total_records = catalog.total_records
-                mapped_records = catalog.mapped_records
-                raw_records = catalog.raw_records
-                rows = catalog.options
-                mode = "snapshot"
-            source_status, source_message = _property_filter_source_status(connection, total_records)
+            source_status, source_message = context.source_status, context.source_message
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     except QueryCanceled as exc:
@@ -656,21 +597,12 @@ def get_property_filter_histogram(
 
     try:
         with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
-            if not postgres_table_exists(connection, "core", "polymer_property_filter_records"):
-                raise RuntimeError("core.polymer_property_filter_records is missing")
             connection.execute("SET LOCAL statement_timeout = '15s'")
-            catalog = _current_property_filter_catalog(connection)
-            if catalog is None:
-                total_records, _, _, rows = get_property_filter_options_postgres(connection)
-                mode = "live-fallback"
-            else:
-                total_records = catalog.total_records
-                rows = catalog.options
-                mode = "snapshot"
-            option = next((row for row in rows if row.get("option_key") == option_key), None)
-            if option is None:
-                raise HTTPException(status_code=404, detail="Property-filter option was not found")
-            source_status, source_message = _property_filter_source_status(connection, total_records)
+            context = load_property_filter_context(connection)
+            catalog = context.catalog
+            mode = context.mode
+            resolve_property_filter_option(context, option_key)
+            source_status, source_message = context.source_status, context.source_message
             etag = _property_filter_histogram_etag(catalog, option_key) if catalog is not None else None
             database_duration_ms = (perf_counter() - database_started_at) * 1000
             headers = {
@@ -690,10 +622,10 @@ def get_property_filter_histogram(
                     )
                     return Response(status_code=304, headers=headers)
 
-            histogram, histogram_mode = resolve_property_filter_histogram(
+            histogram, histogram_mode = get_property_filter_histogram_data(
                 connection,
-                catalog,
-                option,
+                context,
+                option_key,
             )
             if histogram_mode != "snapshot":
                 mode = f"{mode}-{histogram_mode}"
@@ -702,6 +634,8 @@ def get_property_filter_histogram(
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     except QueryCanceled as exc:
         raise HTTPException(status_code=504, detail="Property histogram query timed out") from exc
+    except PropertyFilterOptionNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -722,7 +656,7 @@ def get_property_filter_histogram(
         data_source="postgres",
         source_status=source_status,
         source_message=source_message,
-        histogram=PropertyFilterHistogram.model_validate(histogram),
+        histogram=histogram,
     )
 
 
@@ -750,17 +684,8 @@ def _search_property_filter_sync(
 
     try:
         with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
-            if not postgres_table_exists(connection, "core", "polymer_property_filter_records"):
-                raise RuntimeError("core.polymer_property_filter_records is missing")
             connection.execute("SET LOCAL statement_timeout = '20s'")
-            total_records, matched_records, rows = search_property_filter_records_postgres(
-                connection,
-                conditions=request_body.filters,
-                query=query,
-                page=request_body.page,
-                page_size=request_body.page_size,
-            )
-            source_status, source_message = _property_filter_source_status(connection, total_records)
+            data = search_property_filter_data(connection, request_body)
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     except QueryCanceled as exc:
@@ -769,31 +694,6 @@ def _search_property_filter_sync(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     database_duration_ms = (perf_counter() - database_started_at) * 1000
-    grouped: dict[str, list[PropertyFilterRecord]] = {}
-    group_meta: dict[str, dict[str, str | None]] = {}
-    for row in rows:
-        group_key = row["group_key"]
-        grouped.setdefault(group_key, []).append(_property_filter_record(row))
-        group_meta.setdefault(
-            group_key,
-            {
-                "smiles": row["smiles"],
-                "canonical_smiles": row["canonical_smiles"],
-                "polymer_name": row["polymer_name"],
-            },
-        )
-
-    results = [
-        PropertyFilterSearchResult(
-            smiles=group_meta[group_key]["smiles"],
-            canonical_smiles=group_meta[group_key]["canonical_smiles"],
-            polymer_name=group_meta[group_key]["polymer_name"],
-            matched_filters=len({record.filter_index for record in records}),
-            records=records,
-        )
-        for group_key, records in grouped.items()
-    ]
-
     duration_ms = (perf_counter() - started_at) * 1000
     response.headers["Cache-Control"] = "no-store"
     response.headers["Server-Timing"] = (
@@ -805,24 +705,13 @@ def _search_property_filter_sync(
         page=request_body.page,
         page_size=request_body.page_size,
         query_present=bool(query),
-        matched_groups=matched_records,
-        returned_groups=len(results),
-        measurement_rows=len(rows),
+        matched_groups=data.response.matched_records,
+        returned_groups=len(data.response.results),
+        measurement_rows=sum(len(result.records) for result in data.response.results),
         database_duration_ms=round(database_duration_ms, 3),
         total_duration_ms=round(duration_ms, 3),
     )
-    return PropertyFilterSearchResponse(
-        query=query,
-        page=request_body.page,
-        page_size=request_body.page_size,
-        query_time_ms=duration_ms,
-        total_records=total_records,
-        matched_records=matched_records,
-        data_source="postgres",
-        source_status=source_status,
-        source_message=source_message,
-        results=results,
-    )
+    return data.response.model_copy(update={"query_time_ms": duration_ms})
 
 
 @router.get("/dft/molecules", response_model=DftMoleculeBrowseResponse)
