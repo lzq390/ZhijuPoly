@@ -46,10 +46,12 @@ def validate_build_proxy(value):
 class BuildOnlyRunner(core.SystemRunner):
     """Apply a sealed proxy solely to hash-locked pip downloads."""
 
-    def __init__(self, proxy, download_pythons, *, md_runtime=None, operation_id=None):
+    def __init__(self, proxy, download_pythons, *, md_runtime=None, operation_id=None,
+                 source_sha=None, source_tree=None):
         self.proxy = validate_build_proxy(proxy)
         self.download_pythons = frozenset(download_pythons)
         self.md_runtime, self.operation_id = md_runtime, operation_id
+        self.source_sha, self.source_tree = source_sha, source_tree
 
     def run(self, command, *, env=None, **kwargs):
         environment = {key: value for key, value in (env or {}).items()
@@ -60,6 +62,27 @@ class BuildOnlyRunner(core.SystemRunner):
                 and '--require-hashes' in command and '--only-binary=:all:' in command):
             environment.update(HTTP_PROXY=self.proxy, HTTPS_PROXY=self.proxy)
         result = super().run(command, env=environment, **kwargs)
+        if self.source_sha is not None:
+            stage = cohorts.PRODUCTION_RUNTIME_ROOT / 'worker-venvs/dft' / f'.{self.source_sha}.preparing-{self.operation_id}'
+            if (result.returncode == 0 and len(command) > 4 and command[0] == str(stage / 'tools/uv')
+                    and command[1:3] == ['pip', 'install'] and '--python' in command
+                    and command[command.index('--python') + 1] == str(stage / 'venv/bin/python')):
+                owner = {'schema_version': 1, 'operation_id': self.operation_id,
+                    'release_sha': self.source_sha, 'source_tree': self.source_tree}
+                if stage.resolve(strict=True) != stage or core.load_private_json(stage / '.preparing.json') != owner:
+                    raise cohorts.CohortError('Candidate DFT install has different operation ownership')
+                path = stage / 'venv/.lock'
+                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                try:
+                    metadata = os.fstat(descriptor)
+                    observed = path.lstat()
+                    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
+                            or metadata.st_nlink != 1 or metadata.st_size != 0
+                            or (metadata.st_dev, metadata.st_ino) != (observed.st_dev, observed.st_ino)):
+                        raise cohorts.CohortError('Candidate DFT uv lock output is unsafe')
+                    os.fchmod(descriptor, 0o600)
+                finally:
+                    os.close(descriptor)
         if (result.returncode == 0 and self.md_runtime is not None and len(command) == 6
                 and command[0] in self.download_pythons
                 and command[1:5] == ['-I', '-m', 'venv', '--system-site-packages']):
@@ -225,6 +248,7 @@ def prepare(*, cohort_root: Path, sha: str, tree: str, operation_id: str,
         'callback_base_url': callback_base_url, 'guard_mode': guard_mode,
         'build_proxy': build_proxy,
         'md_activation_mode_policy': 'clear-group-world-write-v1',
+        'dft_uv_lock_mode_policy': 'empty-owned-operation-uv-lock-0600-v1',
         'md_base_python_identity': base, 'md_worker_env_sha256': md_env_digest,
         'dft_start_authorization_token_sha256': token_digest,
         'dft_toolchain_sha256': toolchain_digest, 'md_assets_inventory_sha256': asset_digest,
@@ -248,7 +272,7 @@ def prepare(*, cohort_root: Path, sha: str, tree: str, operation_id: str,
     builder = CandidateBuildController(source, md_runtime, sha=sha, tree=tree,
         toolchain_path=toolchain_path, toolchain_digest=toolchain_digest,
         runner=BuildOnlyRunner(build_proxy, {base['resolved_path'], str(tools.PYTHON)},
-            md_runtime=md_runtime, operation_id=operation_id))
+            md_runtime=md_runtime, operation_id=operation_id, source_sha=sha, source_tree=tree))
     result_path = cohort_root / 'config/worker-build-result.json'
     # The original lock serializes writes to the shared immutable DFT release store.
     global_lock = core.PullDeployController(core.PRODUCTION_ROOT, cohorts.PRODUCTION_RUNTIME_ROOT)

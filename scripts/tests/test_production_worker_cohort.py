@@ -270,6 +270,38 @@ def test_candidate_venv_only_normalizes_new_owned_activation_outputs(tmp_path, m
         assert all(path.stat().st_mode & 0o777 == 0o644 for path in (venv / 'bin').iterdir())
 
 
+@pytest.mark.parametrize('unsafe', [None, 'nonempty', 'symlink', 'hardlink', 'wrong-operation', 'wrong-release'])
+def test_only_empty_owned_new_dft_uv_lock_is_normalized(tmp_path, monkeypatch, unsafe):
+    operation = 'p9000-20261102u'
+    monkeypatch.setattr(module, 'PRODUCTION_RUNTIME_ROOT', tmp_path)
+    stage = tmp_path / 'worker-venvs/dft' / f'.{SHA}.preparing-{operation}'
+    (stage / 'venv').mkdir(parents=True, mode=0o700)
+    owner = {'schema_version': 1, 'operation_id': 'other-operation' if unsafe == 'wrong-operation' else operation,
+        'release_sha': 'f' * 40 if unsafe == 'wrong-release' else SHA, 'source_tree': TREE}
+    write_private(stage / '.preparing.json', json.dumps(owner).encode())
+    target = stage / 'venv/.lock'
+    target.write_bytes(b'not a generated lock' if unsafe == 'nonempty' else b'')
+    target.chmod(0o666)
+    if unsafe in {'symlink', 'hardlink'}:
+        target.unlink();outside = tmp_path / 'outside-empty-lock';outside.write_bytes(b'');outside.chmod(0o666)
+        if unsafe == 'symlink': target.symlink_to(outside)
+        else: os.link(outside, target)
+    monkeypatch.setattr(builder.core.SystemRunner, 'run', lambda *_args, **_kwargs: SimpleNamespace(returncode=0))
+    runner = builder.BuildOnlyRunner(None, set(), operation_id=operation, source_sha=SHA, source_tree=TREE)
+    command = [str(stage / 'tools/uv'), 'pip', 'install', '--python', str(stage / 'venv/bin/python'), '--offline']
+    if unsafe:
+        with pytest.raises((module.CohortError, OSError)):
+            runner.run(command, env={})
+        if unsafe in {'symlink', 'hardlink'}:
+            assert outside.stat().st_mode & 0o777 == 0o666
+    else:
+        # Other commands do not authorize metadata normalization.
+        runner.run([str(stage / 'tools/uv'), '--version'], env={})
+        assert target.stat().st_mode & 0o777 == 0o666
+        runner.run(command, env={})
+        assert target.stat().st_mode & 0o777 == 0o600
+
+
 @pytest.mark.parametrize('change', ['worktree', 'dirty', 'wrong-sha', 'wrong-tree'])
 def test_build_facade_requires_fixed_clean_standalone_clone(cohort_files, monkeypatch, change):
     _, source, _, _, _ = cohort_files

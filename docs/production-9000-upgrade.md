@@ -37,6 +37,15 @@ by the candidate launchers. It reuses the existing dependency/model build checks
 but does not migrate databases, publish applications or switch services. A
 candidate toolchain seal does not replace actual scientific acceptance.
 
+The candidate build normalizes only newly generated metadata: the four MD venv
+activation scripts lose group/world write bits, and a successful DFT `uv pip
+install` may seal its empty, owned, single-link `venv/.lock` as `0600` after
+checking the exact preparing operation and SHA. Other mode drift fails the full
+runtime inventory. Installed AIMNet console scripts are accepted only when the
+locked wheel declares them, their installed metadata matches that wheel, and
+their ordinary, owned, single-link files stay in this venv's `bin` with valid
+RECORD hashes and sizes. Existing runtimes and scientific inputs are not changed.
+
 Polymer MD uses the production runtime contract and a separate jobs root, 16 CPU,
 32 GiB, no GPU and one execution slot. Render the analysis service with
 `scripts/polymer_md_analysis_container.py`, using the fixed image built from

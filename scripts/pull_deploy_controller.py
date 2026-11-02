@@ -26865,7 +26865,7 @@ class PullDeployController:
 
     @staticmethod
     def _validate_installed_dft_aimnet(
-        venv: Path, source_lock: Mapping[str, Any]
+        venv: Path, source_lock: Mapping[str, Any], *, wheel_path: Path | None = None
     ) -> None:
         source = source_lock.get("source")
         registry = source_lock.get("registry")
@@ -26889,15 +26889,53 @@ class PullDeployController:
         checked = 0
         if not rows or any(len(row) != 3 or not row[0] for row in rows):
             raise PullDeployError("installed AIMNet RECORD rows are invalid")
+        if len({row[0] for row in rows}) != len(rows):
+            raise PullDeployError("installed AIMNet RECORD rows are duplicated")
+        console_scripts: set[str] = set()
+        if wheel_path is not None:
+            wheel_lock = source_lock.get("wheel")
+            if not isinstance(wheel_lock, dict):
+                raise PullDeployError("AIMNet wheel lock is incomplete")
+            PullDeployController._validate_dft_aimnet_wheel(wheel_path, wheel_lock)
+            entry_points_path = str(PurePosixPath(wheel_lock["record_path"]).parent / "entry_points.txt")
+            try:
+                with zipfile.ZipFile(wheel_path) as archive:
+                    entry_points = archive.read(entry_points_path)
+                if (site / entry_points_path).read_bytes() != entry_points:
+                    raise PullDeployError("installed AIMNet entry points differ from its locked wheel")
+                parser = configparser.ConfigParser(interpolation=None, strict=True)
+                parser.optionxform = str
+                parser.read_string(entry_points.decode("utf-8"))
+                for name, target_name in parser.items("console_scripts"):
+                    if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) is None
+                            or re.fullmatch(r"[A-Za-z_]\w*(?:\.\w+)*:[A-Za-z_]\w*(?:\.\w+)*", target_name) is None):
+                        raise PullDeployError("locked AIMNet console entry point is unsafe")
+                    console_scripts.add(name)
+            except (OSError, UnicodeError, KeyError, configparser.Error) as exc:
+                raise PullDeployError("AIMNet console entry points are invalid") from exc
+        seen_console_scripts: set[str] = set()
         for relative, hash_value, size_value in rows:
             member = PurePosixPath(relative)
-            if (
-                member.is_absolute()
-                or ".." in member.parts
-                or "\0" in relative
-            ):
+            if member.is_absolute() or "\0" in relative or "\\" in relative:
                 raise PullDeployError("installed AIMNet RECORD path is unsafe")
-            target = site.joinpath(*member.parts)
+            if ".." in member.parts:
+                name = member.name
+                if relative != f"../../../bin/{name}" or name not in console_scripts:
+                    raise PullDeployError("installed AIMNet RECORD path is unsafe")
+                target = venv / "bin" / name
+                try:
+                    metadata = target.lstat()
+                    if (target.resolve(strict=True) != target
+                            or venv.resolve(strict=True) != venv
+                            or not stat.S_ISREG(metadata.st_mode)
+                            or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1
+                            or metadata.st_mode & 0o022):
+                        raise PullDeployError("installed AIMNet console entry point is unsafe")
+                except OSError as exc:
+                    raise PullDeployError("installed AIMNet console entry point is unavailable") from exc
+                seen_console_scripts.add(name)
+            else:
+                target = site.joinpath(*member.parts)
             if target == record_path:
                 if hash_value or size_value:
                     raise PullDeployError("installed AIMNet RECORD self row differs")
@@ -26927,6 +26965,8 @@ class PullDeployController:
             ) != size_value:
                 raise PullDeployError("installed AIMNet RECORD entry changed")
             checked += 1
+        if seen_console_scripts != console_scripts:
+            raise PullDeployError("installed AIMNet console entry points are incomplete")
         registry_path = site / str(registry.get("path", ""))
         if (
             checked < 1
@@ -27476,7 +27516,7 @@ class PullDeployController:
         )
         if self._dft_wheelhouse_inventory(wheelhouse) != wheelhouse_inventory_sha256:
             raise PullDeployError("monomer DFT wheelhouse changed")
-        self._validate_installed_dft_aimnet(venv, parsed["document"])
+        self._validate_installed_dft_aimnet(venv, parsed["document"], wheel_path=aimnet_wheel)
         model_root = staging / "aimnet-cache"
         model_root.mkdir(mode=0o700)
         models: dict[str, str] = {}
