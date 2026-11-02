@@ -17,6 +17,7 @@ from .byteff2_env import ByteFF2SubprocessEnvironment, build_byteff2_environment
 from .config import WorkerSettings
 from .byteff2_formal_runner import ByteFF2FormalRunner, resolve_byteff2_commit
 from .models import JobRequest
+from .recovery_resources import recovery_cgroup_empty, validate_recovery_systemd_unit
 from .process_control import (
     await_safety_cleanup,
     create_fenced_subprocess_exec,
@@ -61,16 +62,28 @@ class MonomerMdRunner:
         if settings.gpu_broker_enabled and self._gpu_broker_client is None:
             self._gpu_broker_client = GpuBrokerClient(settings.gpu_broker_socket_path)
         self._gpu_admission_uncertain = False
+        self._recovery_systemd_binding = (
+            validate_recovery_systemd_unit(settings.recovery_systemd_unit)
+            if settings.recovery_systemd_unit is not None else None
+        )
 
     @property
     def gpu_admission_uncertain(self) -> bool:
         return self._gpu_admission_uncertain
 
     def recovery_resources_released(self, *, owned_job_ids: tuple[str, ...] | None = None) -> bool:
-        """Prove the old MD executions absent using the existing Broker authority."""
+        """Prove old executions absent using the configured resource authority."""
         if self._settings.mode != "real":
             return True
-        if self._gpu_admission_uncertain or self._gpu_broker_client is None:
+        if self._gpu_admission_uncertain:
+            return False
+        if not self._settings.gpu_broker_enabled:
+            unit = self._settings.recovery_systemd_unit
+            if (not unit or self._settings.gpu_broker_environment != 'prod'
+                    or self._settings.acceptance_cancel_recovery_scoped):
+                return False
+            return recovery_cgroup_empty(unit, binding=self._recovery_systemd_binding)
+        if self._gpu_broker_client is None:
             return False
         snapshot = self._gpu_broker_client.status()
         if (
@@ -499,6 +512,12 @@ class MonomerMdRunner:
     async def release_execution_lease(self, lease: ManagedGpuLease | None) -> None:
         if lease is not None:
             await await_safety_cleanup(self._close_execution_lease(lease))
+        elif self._settings.recovery_systemd_unit is not None:
+            if not await asyncio.to_thread(self.recovery_resources_released):
+                raise GpuBrokerClientError(
+                    'gpu_runtime_unhealthy',
+                    'Non-Broker execution resource cleanup remains unconfirmed',
+                )
 
     @staticmethod
     async def _close_execution_lease(lease: ManagedGpuLease) -> None:

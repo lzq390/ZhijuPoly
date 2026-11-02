@@ -248,7 +248,8 @@ async def probe_runtime_snapshot(
                 except Exception:
                     runtime_failure = "runtime import and CUDA probe failed"
     finally:
-        if lease is not None:
+        if (lease is not None or (settings.mode == 'real'
+                and settings.recovery_systemd_unit is not None)):
             try:
                 await runner.release_execution_lease(lease)
             except asyncio.CancelledError:

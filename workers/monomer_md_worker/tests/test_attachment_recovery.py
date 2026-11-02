@@ -17,7 +17,7 @@ def request(job):
 
 def runner(leases=(), *, waiters=0, attached=True, uncertain=False):
     value = object.__new__(MonomerMdRunner)
-    value._settings = SimpleNamespace(mode='real', gpu_broker_environment='dev',
+    value._settings = SimpleNamespace(mode='real', gpu_broker_enabled=True, gpu_broker_environment='dev',
         acceptance_attachment_id='r2-a-20261019-md' if attached else None)
     value._gpu_admission_uncertain = uncertain
     snapshot = dict(schema_version=1, broker_instance_id='unit-broker',

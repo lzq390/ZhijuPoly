@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -150,6 +150,31 @@ def _probe_stdout(
 
 def _completed(stdout: str = "", returncode: int = 0):
     return runtime_health._ProbeCompleted(returncode, stdout)
+
+
+@pytest.mark.parametrize('cleanup_confirmed', [True, False])
+def test_explicit_nonbroker_probe_requires_native_resource_release(tmp_path, monkeypatch, cleanup_confirmed):
+    settings = replace(_settings(tmp_path), gpu_broker_environment='prod',
+                       recovery_systemd_unit='nexpoly-test-md-worker.service')
+    runner = _Runner(); calls = []
+    async def release(lease):
+        assert lease is None; runner.release_calls.append(lease)
+        if not cleanup_confirmed:
+            raise RuntimeError('native resource absence not proven')
+    async def run(command, **kwargs):
+        calls.append(command)
+        if command[0] == settings.byteff2_python: return _completed(_probe_stdout())
+        assert runner.release_calls == [None]
+        return _completed('gmx ready')
+    monkeypatch.setattr(runner, 'release_execution_lease', release)
+    monkeypatch.setattr(runtime_health, '_run_probe_command', run)
+    snapshot = asyncio.run(probe_runtime_snapshot(settings, runner=runner, worker_instance_id='native-instance'))
+    assert runner.acquire_calls == [] and runner.release_calls == [None]
+    assert snapshot.runtime_ready is cleanup_confirmed
+    assert len(calls) == (2 if cleanup_confirmed else 1)
+    if not cleanup_confirmed:
+        assert snapshot.runtime_error == 'runtime startup probe GPU lease cleanup failed'
+        assert all(not row.runtime_ready for row in snapshot.protocols)
 
 
 def test_broker_probe_uses_fenced_lease_mps_environment_and_releases_before_gmx(

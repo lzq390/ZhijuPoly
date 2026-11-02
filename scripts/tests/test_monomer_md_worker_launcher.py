@@ -54,6 +54,8 @@ def test_launcher_executes_selected_python_with_safe_path_flags(
         lambda **_kwargs: (SimpleNamespace(), SimpleNamespace(), python),
     )
     captured: dict[str, object] = {}
+    monkeypatch.setattr(launcher, "validate_recovery_service",
+                        lambda source, unit: captured.update(recovery=(source, unit)))
 
     def execute(path: str, argv: list[str], environment: dict[str, str]) -> None:
         captured.update(path=path, argv=argv, environment=environment)
@@ -67,6 +69,7 @@ def test_launcher_executes_selected_python_with_safe_path_flags(
     )
 
     assert captured["path"] == str(python)
+    assert captured["recovery"] == (source, launcher.PRODUCTION_SYSTEMD_UNIT)
     assert captured["cwd"] == source
     assert captured["argv"] == [
         str(python),
@@ -92,12 +95,53 @@ def test_launcher_rejects_configuration_selected_python(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize("legacy_environment", [False, True])
+def test_launcher_requires_live_service_before_touching_socket_or_exec(
+    tmp_path: Path, monkeypatch, legacy_environment: bool,
+) -> None:
+    source, runtime = _runtime_layout(tmp_path)
+    environment = _environment(source, runtime)
+    if legacy_environment:
+        environment.pop("MONOMER_MD_RECOVERY_SYSTEMD_UNIT")
+    monkeypatch.setattr(launcher, "verify_runtime_binding", lambda **kwargs:
+                        (None, None, runtime / "worker-venvs/md-a/venv/bin/python"))
+    observed = []
+
+    def reject_service(release, unit):
+        observed.append((release, unit))
+        raise launcher.LauncherError("production Worker recovery service binding failed")
+
+    monkeypatch.setattr(launcher, "validate_recovery_service", reject_service)
+    monkeypatch.setattr(launcher, "prepare_socket", lambda path: pytest.fail("socket modified before service validation"))
+    with pytest.raises(launcher.LauncherError, match="recovery service binding"):
+        launcher.launch(environment, source_root=source, runtime_root=runtime,
+                        execute=lambda *args: pytest.fail("unbound worker executed"),
+                        change_directory=lambda path: pytest.fail("unbound worker changed directory"))
+    assert observed == [(source, launcher.PRODUCTION_SYSTEMD_UNIT)]
+    descriptor = launcher.acquire_worker_singleton(runtime)
+    os.close(descriptor)
+
+
+def test_launcher_loads_only_the_bound_release_recovery_verifier(tmp_path: Path) -> None:
+    source, _runtime = _runtime_layout(tmp_path)
+    module = source / "workers/monomer_md_worker/app/recovery_resources.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def validate_recovery_systemd_unit(unit):\n    raise RuntimeError('private diagnostic')\n")
+    module.chmod(0o644)
+    with pytest.raises(launcher.LauncherError, match="recovery service binding failed"):
+        launcher.validate_recovery_service(source, launcher.PRODUCTION_SYSTEMD_UNIT)
+    module.chmod(0o666)
+    with pytest.raises(launcher.LauncherError, match="verifier is unsafe"):
+        launcher.validate_recovery_service(source, launcher.PRODUCTION_SYSTEMD_UNIT)
+
+
 @pytest.mark.parametrize(
     ("key", "value"),
     (
         ("NEXPOLY_GPU_DEVICE", "1"),
         ("MONOMER_MD_CUDA_VISIBLE_DEVICES", "1"),
         ("MONOMER_MD_GPU_BROKER_ENABLED", "true"),
+        ("MONOMER_MD_RECOVERY_SYSTEMD_UNIT", "unrelated.service"),
         ("MONOMER_MD_MAX_ACTIVE_JOBS", "1"),
         ("MONOMER_MD_MAX_CONCURRENT_JOBS", "2"),
     ),
