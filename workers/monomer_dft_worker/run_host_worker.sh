@@ -14,7 +14,7 @@ if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" && \
   # reviewed inode remains pinned across exec.  BASH_SOURCE consequently
   # names procfs, not the live checkout; production source authority is the
   # fixed repository root already verified by the launcher and controller.
-  REPO_ROOT="$PRODUCTION_REPO_ROOT"
+  REPO_ROOT="${NEXPOLY_PROD_WORKER_SOURCE_ROOT:-$PRODUCTION_REPO_ROOT}"
   SCRIPT_DIR="$REPO_ROOT/workers/monomer_dft_worker"
 else
   SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -468,8 +468,18 @@ unset PYTHONPATH
 [[ "$MONOMER_DFT_DEPLOYMENT" == "dev" || "$MONOMER_DFT_DEPLOYMENT" == "prod" ]] || \
   fail "MONOMER_DFT_DEPLOYMENT must be dev or prod"
 if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" ]]; then
-  [[ "$REPO_ROOT" == "$PRODUCTION_REPO_ROOT" ]] || \
-    fail "production Worker code root must be $PRODUCTION_REPO_ROOT"
+  if [[ -n "${NEXPOLY_PROD_WORKER_COHORT_FILE:-}" ]]; then
+    # The FD-pinned launcher already proved this release and cohort. Repeat
+    # the shared private-config/Git proof before any runtime or GPU mutation.
+    cohort_source="$(/usr/bin/python3 -I -B "$REPO_ROOT/scripts/production_worker_cohort.py" source-root)" || \
+      fail "production Worker cohort source is invalid"
+    [[ "$REPO_ROOT" == "$cohort_source" ]] || fail "production Worker cohort source differs"
+  else
+    [[ "$REPO_ROOT" == "$PRODUCTION_REPO_ROOT" ]] || \
+      fail "production Worker code root must be $PRODUCTION_REPO_ROOT"
+    [[ -z "${NEXPOLY_PROD_WORKER_SOURCE_ROOT:-}${NEXPOLY_PROD_WORKER_COHORT_SHA256:-}" ]] || \
+      fail "production Worker cohort configuration is incomplete"
+  fi
 else
   assert_not_production_path "Worker code root" "$REPO_ROOT"
 fi
@@ -532,7 +542,7 @@ if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" == "1" ]]; then
   MONOMER_DFT_GPU_BROKER_UDS="${NEXPOLY_DFT_GPU_AUTHORITY_ROOT}/broker.sock"
   MONOMER_DFT_GPU_MPS_PIPE_ROOT="$NEXPOLY_DFT_GPU_AUTHORITY_ROOT"
   MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS="$NEXPOLY_DFT_GPU_RESERVATIONS_AUTHORITY"
-  "$MONOMER_DFT_PYTHON" -I -S "$GPU_AUTHORITY_VALIDATOR" \
+  "$MONOMER_DFT_PYTHON" -I -B -S "$GPU_AUTHORITY_VALIDATOR" \
     --expected-reservations-file \
     "$REPO_ROOT/ops/config/gpu-external-reservations.json" \
     --expected-root "$RUNTIME_ROOT/gpu-resource" ||

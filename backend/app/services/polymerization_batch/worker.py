@@ -239,14 +239,15 @@ class BatchWorker:
             for row in imports:
                 shutil.rmtree(self.root / "imports" / row["id"], ignore_errors=False) if (self.root / "imports" / row["id"]).exists() else None
                 conn.execute("DELETE FROM polymerization_batch.imports WHERE id=%s", (row["id"],))
-            jobs = conn.execute("""SELECT id FROM polymerization_batch.jobs WHERE expires_at<now() AND status<>'expired'
-                AND execution_token IS NULL ORDER BY expires_at FOR UPDATE SKIP LOCKED LIMIT 50""").fetchall()
-            for row in jobs:
-                path = self.root / "jobs" / row["id"]
-                if path.exists():
-                    shutil.rmtree(path)
-                conn.execute("DELETE FROM polymerization_batch.chunks WHERE job_id=%s", (row["id"],))
-                conn.execute("UPDATE polymerization_batch.jobs SET status='expired',stage='finished',artifacts='{}',updated_at=now() WHERE id=%s", (row["id"],))
+            if self.config.retention_enabled:
+                jobs = conn.execute("""SELECT id FROM polymerization_batch.jobs WHERE expires_at<now() AND status<>'expired'
+                    AND execution_token IS NULL ORDER BY expires_at FOR UPDATE SKIP LOCKED LIMIT 50""").fetchall()
+                for row in jobs:
+                    path = self.root / "jobs" / row["id"]
+                    if path.exists():
+                        shutil.rmtree(path)
+                    conn.execute("DELETE FROM polymerization_batch.chunks WHERE job_id=%s", (row["id"],))
+                    conn.execute("UPDATE polymerization_batch.jobs SET status='expired',stage='finished',artifacts='{}',updated_at=now() WHERE id=%s", (row["id"],))
         # Crash-before-commit artifacts have no published references. Remove only
         # old orphan directories; current admissions are never touched.
         cutoff = time.time() - self.config.import_hours * 3600

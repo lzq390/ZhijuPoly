@@ -11,6 +11,9 @@ from .acceptance import IsolatedAcceptancePolicy, OWNERS, ORIGIN, LAB_DATABASES
 
 
 ISOLATED_AB_COOKIE_NAME = "nexpoly_dev_isolated_ab_session"
+PRODUCTION_HTTP_ORIGIN = "http://114.214.255.154:9000"
+PRODUCTION_HTTP_HOST = "114.214.255.154:9000"
+PRODUCTION_HTTP_COOKIE_NAME = "nexpoly_prod_http_session"
 
 
 @dataclass(frozen=True)
@@ -90,8 +93,20 @@ class AuthSettings:
     isolated_ab_session_policy: IsolatedABSessionPolicy | None = None
     isolated_acceptance_policy: IsolatedAcceptancePolicy | None = None
     acceptance_lab_dsns: tuple[str, str] | None = field(default=None, repr=False)
+    production_http_enabled: bool = False
 
     def __post_init__(self):
+        if type(self.production_http_enabled) is not bool:
+            raise ValueError("Production HTTP authentication requires an explicit boolean opt-in")
+        if self.production_http_enabled and (
+            self.runtime_environment != "prod" or self.cookie_secure is not False
+            or self.cookie_name != PRODUCTION_HTTP_COOKIE_NAME
+            or self.allowed_origins != (PRODUCTION_HTTP_ORIGIN,)
+            or self.isolated_ab_session_policy is not None
+            or self.isolated_acceptance_policy is not None
+            or self.acceptance_lab_dsns is not None
+        ):
+            raise ValueError("Production HTTP authentication requires the exact production origin and cookie")
         policy = self.isolated_ab_session_policy
         if policy is not None and (
             type(self.session_hours) is not int or self.session_hours != 12
@@ -137,6 +152,10 @@ class AuthSettings:
         origins = tuple(settings.allowed_origins_list)
         if "*" in origins:
             raise ValueError("Cookie authentication requires explicit allowed origins")
+        raw_production_http = os.getenv("AUTH_PROD_HTTP_ENABLED", "false")
+        if raw_production_http not in {"true", "false"}:
+            raise ValueError("AUTH_PROD_HTTP_ENABLED must be true or false")
+        production_http_enabled = raw_production_http == "true"
         secure = os.getenv("AUTH_COOKIE_SECURE", "true").lower() not in {"0", "false"}
         cookie_name = os.getenv("AUTH_COOKIE_NAME", "nexpoly_session" if secure else "nexpoly_dev_session")
         raw_policy = os.getenv("AUTH_ISOLATED_AB_SESSION_POLICY", "")
@@ -150,6 +169,8 @@ class AuthSettings:
         if policy is not None and os.getenv("FORWARDED_ALLOW_IPS") != "":
             raise ValueError("Isolated A/B sessions require explicitly disabled proxy-header trust")
         dev_http_origins = frozenset(value.strip() for value in os.getenv("AUTH_DEV_HTTP_ORIGINS", "").split(",") if value.strip())
+        if production_http_enabled and dev_http_origins:
+            raise ValueError("Production HTTP authentication cannot use development HTTP origins")
         if dev_http_origins:
             # Explicitly provisioned 9001 development access only. Production
             # keeps Secure cookies and never inherits a permissive wildcard.
@@ -165,6 +186,7 @@ class AuthSettings:
                     raise ValueError("Development HTTP origins must be exact allowed HTTP origins on port 9001")
         if not secure and any(urlsplit(origin).hostname not in {"localhost", "127.0.0.1", "::1", "testserver"}
                               and origin not in dev_http_origins
+                              and not (production_http_enabled and origin == PRODUCTION_HTTP_ORIGIN)
                               and (policy is None or origin != policy.origin) for origin in origins):
             raise ValueError("Non-Secure authentication cookies are restricted to loopback development origins")
         dsn = str(settings.app_postgres_dsn)
@@ -179,4 +201,5 @@ class AuthSettings:
             isolated_ab_session_policy=policy,
             isolated_acceptance_policy=acceptance,
             acceptance_lab_dsns=lab_dsns,
+            production_http_enabled=production_http_enabled,
         )

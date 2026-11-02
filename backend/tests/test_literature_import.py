@@ -465,3 +465,68 @@ def test_source_reader_really_uses_read_only_repeatable_snapshot(literature_sour
     assert data.summary["partial"] is False
     assert data.extracts[0]["created_at"].tzinfo is not None
     assert normalizer.select_snapshots(data.papers, data.extracts)[1]["ready_documents"] == 1
+
+
+def test_prepare_reuses_scientific_numbers_after_real_jsonb_roundtrip(literature_import_dsn, monkeypatch):
+    doi = "10.1234/scientific-jsonb-roundtrip"
+    raw = raw_english(doi=doi)
+    raw["numeric_probe"] = {"large": 1e25, "nested": [1e30, {"tiny": 1e-40}]}
+    raw["polymers"][0]["properties"][0]["value"]["singleValue"] = "1e25"
+    data = SourceDataset(
+        [paper("810", doi)],
+        [extract("811", "810", raw=raw, created_at=datetime(2026, 1, 1, tzinfo=timezone.utc))],
+        {}, {"partial": False, "source_read_only": True},
+    )
+    monkeypatch.setattr(import_literature, "read_source", lambda *a, **kw: data)
+    first = import_literature.prepare_generation("readonly-source", literature_import_dsn)
+    with psycopg.connect(literature_import_dsn, row_factory=dict_row) as connection:
+        stored = connection.execute(
+            "SELECT s.raw_json,s.normalized_json FROM knowledge.literature_snapshots s "
+            "JOIN knowledge.literature_catalog c USING(snapshot_uid) WHERE c.generation_id=%s",
+            (first["generation_id"],),
+        ).fetchone()
+    actual = stored["normalized_json"]["samples"][0]["properties"][0]["value"]["single_value"]
+    assert isinstance(actual, int) and actual == 10**25
+    assert actual != 1e25  # The previous Python body comparison rejected reuse.
+    assert stored["raw_json"]["numeric_probe"]["nested"][0] == 10**30
+    second = import_literature.prepare_generation("readonly-source", literature_import_dsn)
+    assert second["status"] == "ready"
+    assert second["report"]["new_snapshots"] == 0
+    assert second["report"]["reused_snapshots"] == 1
+
+
+@pytest.mark.parametrize("column", ["raw_json", "normalized_json", "assets", "quality_flags"])
+def test_existing_snapshot_rejects_real_jsonb_body_drift(literature_import_dsn, column):
+    from copy import deepcopy
+
+    doi = "10.1234/immutable-jsonb-" + column
+    raw = raw_english(doi=doi)
+    raw["boolean_probe"] = True
+    raw["polymers"][0]["properties"][0]["value"]["singleValue"] = "1e25"
+    snapshot = normalizer.normalize_extraction(
+        paper("820", doi), extract("821", "820", raw=raw),
+        assets=[{"asset_uid": "opaque", "role": "pdf", "status": "available", "etag": "opaque", "size_bytes": 10}],
+    )
+    forged = deepcopy(snapshot)
+    if column == "raw_json":
+        # Python equality treats True and 1 as equal; JSONB correctly does not.
+        forged[column]["boolean_probe"] = 1
+    elif column == "normalized_json":
+        forged[column]["samples"][0]["properties"][0]["value"]["single_value"] = 10**25 + 1
+    elif column == "assets":
+        forged[column][0]["size_bytes"] = 11
+    else:
+        forged[column].append("different_flag")
+    with psycopg.connect(literature_import_dsn, row_factory=dict_row) as connection:
+        assert import_literature._insert_snapshot(connection, snapshot) is True
+        before = connection.execute(
+            "SELECT raw_json,normalized_json,assets,quality_flags FROM knowledge.literature_snapshots WHERE snapshot_uid=%s",
+            (snapshot["snapshot_uid"],),
+        ).fetchone()
+        with pytest.raises(import_literature.ImportStateError, match="IMMUTABLE_SNAPSHOT_CONFLICT"):
+            import_literature._insert_snapshot(connection, forged)
+        after = connection.execute(
+            "SELECT raw_json,normalized_json,assets,quality_flags FROM knowledge.literature_snapshots WHERE snapshot_uid=%s",
+            (snapshot["snapshot_uid"],),
+        ).fetchone()
+        assert after == before

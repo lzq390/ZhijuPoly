@@ -1189,7 +1189,7 @@ def apply_polytao_contract_migration(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Apply PolyProp Postgres governance migrations.")
-    parser.add_argument("--dsn", default=Settings().app_postgres_dsn)
+    parser.add_argument("--dsn", default=None)
     parser.add_argument("--migrations-dir", type=Path, default=MIGRATIONS_DIR)
     parser.add_argument(
         "--contract-guard-json",
@@ -1209,6 +1209,7 @@ def main() -> None:
             "contract-0012",
             "polymer-md-dev-0023",
             "literature-dev-0024",
+            "literature-prod-0024",
         ),
         default="expand",
         help=(
@@ -1219,29 +1220,46 @@ def main() -> None:
             "exposed destructive operation and is checksum-pinned."
         ),
     )
-    parser.add_argument("--dsn-env", help="Maintenance DSN environment variable; required only for literature-dev-0024.")
+    parser.add_argument("--dsn-env", help="Name of the existing maintenance DSN environment variable for explicit literature maintenance.")
     parser.add_argument("--backup-receipt", type=Path)
     parser.add_argument("--maintenance-evidence", type=Path)
     parser.add_argument("--writers-stopped", action="store_true")
     parser.add_argument("--audit-output", type=Path)
+    parser.add_argument("--operation-id", help="Exact production-copy maintenance operation ID.")
+    parser.add_argument("--target-sha", help="Full production candidate SHA; must match BUILD_REVISION.")
+    parser.add_argument("--production-source-system-identifier", help="Original production cluster identity; the candidate must differ.")
     args = parser.parse_args()
 
-    if args.mode == "literature-dev-0024":
+    production_literature = args.mode == "literature-prod-0024"
+    if not production_literature and any((args.operation_id, args.target_sha, args.production_source_system_identifier)):
+        parser.error("Production candidate bindings require --mode literature-prod-0024")
+    if args.mode in {"literature-dev-0024", "literature-prod-0024"}:
         if (not args.dsn_env or not args.backup_receipt or not args.maintenance_evidence
                 or not args.writers_stopped or not args.audit_output):
-            parser.error("literature-dev-0024 requires --dsn-env, --backup-receipt, --maintenance-evidence, --writers-stopped and --audit-output")
+            parser.error("Explicit literature maintenance requires --dsn-env, --backup-receipt, --maintenance-evidence, --writers-stopped and --audit-output")
+        if production_literature and (
+                not args.operation_id or not args.target_sha or not args.production_source_system_identifier
+                or args.dsn is not None):
+            parser.error("Production literature maintenance requires operation ID, target SHA and original cluster identity, with --dsn-env only")
+        if re.fullmatch(r"[A-Z_][A-Z0-9_]{0,127}", args.dsn_env) is None:
+            parser.error("Maintenance requires a DSN environment variable name")
         if args.contract_guard_json is not None or args.contract_guard_sha256 is not None:
             parser.error("Contract guard arguments require --mode contract-0012")
         import json
         import os
-        from app.services.literature_schema import apply_literature_dev_migration
+        from app.services.literature_schema import apply_literature_dev_migration, apply_literature_prod_migration
         # Reserve the private audit path before starting a transaction. Never
         # echo a DSN, credential or raw database exception in CLI diagnostics.
         descriptor = os.open(args.audit_output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(descriptor, "w") as output:
             try:
-                result = apply_literature_dev_migration(
-                    os.environ[args.dsn_env], environment=Settings().polymer_md_environment,
+                bindings = ({"environment": Settings().gpu_broker_environment,
+                             "operation_id": args.operation_id, "target_sha": args.target_sha,
+                             "production_source_system_identifier": args.production_source_system_identifier}
+                            if production_literature else {"environment": Settings().polymer_md_environment})
+                migrate = apply_literature_prod_migration if production_literature else apply_literature_dev_migration
+                result = migrate(
+                    os.environ[args.dsn_env], **bindings,
                     backup_receipt=args.backup_receipt, maintenance_evidence=args.maintenance_evidence,
                     writers_stopped=args.writers_stopped, migrations_dir=args.migrations_dir)
             except Exception as exc:
@@ -1256,13 +1274,15 @@ def main() -> None:
         return
 
     if any((args.dsn_env, args.backup_receipt, args.maintenance_evidence, args.writers_stopped, args.audit_output)):
-        parser.error("Literature maintenance arguments require --mode literature-dev-0024")
+        parser.error("Literature maintenance arguments require an explicit literature maintenance mode")
+
+    dsn = args.dsn if args.dsn is not None else Settings().app_postgres_dsn
 
     if args.mode == "polymer-md-dev-0023":
         if args.contract_guard_json is not None or args.contract_guard_sha256 is not None:
             parser.error("Contract guard arguments require --mode contract-0012")
         from app.services.polymer_md_schema import apply_polymer_md_dev_migration
-        result=apply_polymer_md_dev_migration(args.dsn,environment=Settings().polymer_md_environment,migrations_dir=args.migrations_dir)
+        result=apply_polymer_md_dev_migration(dsn,environment=Settings().polymer_md_environment,migrations_dir=args.migrations_dir)
         status="applied" if result.applied else "skipped"
         print(f"{result.version}\t{status}\t{result.checksum}")
         return
@@ -1274,7 +1294,7 @@ def main() -> None:
                 "--contract-guard-sha256"
             )
         results = apply_polytao_contract_migration(
-            args.dsn,
+            dsn,
             args.migrations_dir,
             guard_json=args.contract_guard_json,
             guard_sha256=args.contract_guard_sha256,
@@ -1292,7 +1312,7 @@ def main() -> None:
     else:
         allowed_kinds = {"expand"}
     results = apply_postgres_migrations(
-        args.dsn,
+        dsn,
         args.migrations_dir,
         allowed_kinds=allowed_kinds,
         allow_contract_on_fresh_database=args.mode == "bootstrap",

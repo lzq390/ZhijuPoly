@@ -26865,7 +26865,7 @@ class PullDeployController:
 
     @staticmethod
     def _validate_installed_dft_aimnet(
-        venv: Path, source_lock: Mapping[str, Any]
+        venv: Path, source_lock: Mapping[str, Any], *, wheel_path: Path | None = None
     ) -> None:
         source = source_lock.get("source")
         registry = source_lock.get("registry")
@@ -26889,15 +26889,53 @@ class PullDeployController:
         checked = 0
         if not rows or any(len(row) != 3 or not row[0] for row in rows):
             raise PullDeployError("installed AIMNet RECORD rows are invalid")
+        if len({row[0] for row in rows}) != len(rows):
+            raise PullDeployError("installed AIMNet RECORD rows are duplicated")
+        console_scripts: set[str] = set()
+        if wheel_path is not None:
+            wheel_lock = source_lock.get("wheel")
+            if not isinstance(wheel_lock, dict):
+                raise PullDeployError("AIMNet wheel lock is incomplete")
+            PullDeployController._validate_dft_aimnet_wheel(wheel_path, wheel_lock)
+            entry_points_path = str(PurePosixPath(wheel_lock["record_path"]).parent / "entry_points.txt")
+            try:
+                with zipfile.ZipFile(wheel_path) as archive:
+                    entry_points = archive.read(entry_points_path)
+                if (site / entry_points_path).read_bytes() != entry_points:
+                    raise PullDeployError("installed AIMNet entry points differ from its locked wheel")
+                parser = configparser.ConfigParser(interpolation=None, strict=True)
+                parser.optionxform = str
+                parser.read_string(entry_points.decode("utf-8"))
+                for name, target_name in parser.items("console_scripts"):
+                    if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) is None
+                            or re.fullmatch(r"[A-Za-z_]\w*(?:\.\w+)*:[A-Za-z_]\w*(?:\.\w+)*", target_name) is None):
+                        raise PullDeployError("locked AIMNet console entry point is unsafe")
+                    console_scripts.add(name)
+            except (OSError, UnicodeError, KeyError, configparser.Error) as exc:
+                raise PullDeployError("AIMNet console entry points are invalid") from exc
+        seen_console_scripts: set[str] = set()
         for relative, hash_value, size_value in rows:
             member = PurePosixPath(relative)
-            if (
-                member.is_absolute()
-                or ".." in member.parts
-                or "\0" in relative
-            ):
+            if member.is_absolute() or "\0" in relative or "\\" in relative:
                 raise PullDeployError("installed AIMNet RECORD path is unsafe")
-            target = site.joinpath(*member.parts)
+            if ".." in member.parts:
+                name = member.name
+                if relative != f"../../../bin/{name}" or name not in console_scripts:
+                    raise PullDeployError("installed AIMNet RECORD path is unsafe")
+                target = venv / "bin" / name
+                try:
+                    metadata = target.lstat()
+                    if (target.resolve(strict=True) != target
+                            or venv.resolve(strict=True) != venv
+                            or not stat.S_ISREG(metadata.st_mode)
+                            or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1
+                            or metadata.st_mode & 0o022):
+                        raise PullDeployError("installed AIMNet console entry point is unsafe")
+                except OSError as exc:
+                    raise PullDeployError("installed AIMNet console entry point is unavailable") from exc
+                seen_console_scripts.add(name)
+            else:
+                target = site.joinpath(*member.parts)
             if target == record_path:
                 if hash_value or size_value:
                     raise PullDeployError("installed AIMNet RECORD self row differs")
@@ -26927,6 +26965,8 @@ class PullDeployController:
             ) != size_value:
                 raise PullDeployError("installed AIMNet RECORD entry changed")
             checked += 1
+        if seen_console_scripts != console_scripts:
+            raise PullDeployError("installed AIMNet console entry points are incomplete")
         registry_path = site / str(registry.get("path", ""))
         if (
             checked < 1
@@ -26935,18 +26975,34 @@ class PullDeployController:
         ):
             raise PullDeployError("installed AIMNet registry differs from source lock")
 
-    @staticmethod
-    def _validate_dft_pip_toolchain() -> None:
-        python_metadata = MONOMER_DFT_PYTHON.lstat()
+    def _dft_build_toolchain(self) -> dict[str, Any]:
+        # A build-only candidate facade may supply an independently observed
+        # seal. The deployed controller retains its original fixed pins.
+        return {
+            "python": str(MONOMER_DFT_PYTHON),
+            "python_sha256": MONOMER_DFT_PYTHON_SHA256,
+            "pip_root": str(MONOMER_DFT_PIP_ROOT),
+            "pip_inventory_sha256": MONOMER_DFT_PIP_INVENTORY_SHA256,
+            "uv": str(MONOMER_DFT_UV),
+            "uv_sha256": MONOMER_DFT_UV_SHA256,
+            "uv_uid": 0,
+            "uv_mode": 0o755,
+        }
+
+    def _validate_dft_pip_toolchain(self) -> None:
+        toolchain = self._dft_build_toolchain()
+        python_path = Path(toolchain["python"])
+        pip_root = Path(toolchain["pip_root"])
+        python_metadata = python_path.lstat()
         if (
             not stat.S_ISREG(python_metadata.st_mode)
-            or MONOMER_DFT_PYTHON.is_symlink()
+            or python_path.is_symlink()
             or python_metadata.st_uid != 0
             or python_metadata.st_mode & 0o022
-            or sha256_file(MONOMER_DFT_PYTHON) != MONOMER_DFT_PYTHON_SHA256
+            or sha256_file(python_path) != toolchain["python_sha256"]
         ):
             raise PullDeployError("monomer DFT base Python changed")
-        for path in MONOMER_DFT_PIP_ROOT.rglob("*"):
+        for path in pip_root.rglob("*"):
             metadata = path.lstat()
             if (
                 metadata.st_uid != 0
@@ -26959,8 +27015,8 @@ class PullDeployController:
             ):
                 raise PullDeployError("monomer DFT pip toolchain is unsafe")
         if directory_inventory_digest(
-            MONOMER_DFT_PIP_ROOT
-        ) != MONOMER_DFT_PIP_INVENTORY_SHA256:
+            pip_root
+        ) != toolchain["pip_inventory_sha256"]:
             raise PullDeployError("monomer DFT pip toolchain changed")
 
     @staticmethod
@@ -27065,6 +27121,7 @@ class PullDeployController:
         self,
         identity: dict[str, Any],
     ) -> dict[str, Any]:
+        toolchain = self._dft_build_toolchain()
         identity = _validate_dft_runtime_identity(identity)
         runtime_inventory = require_digest(
             identity.get("runtime_inventory_sha256"),
@@ -27087,7 +27144,7 @@ class PullDeployController:
             or not python.is_file()
             or python != root / "venv/bin/python"
             or not python.is_symlink()
-            or os.readlink(python) != str(MONOMER_DFT_PYTHON)
+            or os.readlink(python) != str(Path(toolchain["python"]))
             or not os.access(python, os.X_OK)
         ):
             raise PullDeployError("prepared monomer DFT runtime changed")
@@ -27098,10 +27155,10 @@ class PullDeployController:
             or manifest.get("source_tree") != identity["source_tree"]
             or manifest.get("python") != "3.12"
             or manifest.get("uv") != "0.11.21"
-            or manifest.get("uv_sha256") != MONOMER_DFT_UV_SHA256
-            or manifest.get("base_python_sha256") != MONOMER_DFT_PYTHON_SHA256
+            or manifest.get("uv_sha256") != toolchain["uv_sha256"]
+            or manifest.get("base_python_sha256") != toolchain["python_sha256"]
             or manifest.get("pip_inventory_sha256")
-            != MONOMER_DFT_PIP_INVENTORY_SHA256
+            != toolchain["pip_inventory_sha256"]
             or manifest.get("requirements_lock_sha256")
             != identity["requirements_lock_sha256"]
             or manifest.get("aimnet_source_lock_sha256")
@@ -27128,6 +27185,7 @@ class PullDeployController:
         target_tree: str,
     ) -> dict[str, Any]:
         self._require_deploy_lock_for_staging()
+        toolchain = self._dft_build_toolchain()
         operation_id = require_operation_id(operation_id)
         target_sha = require_sha(target_sha, "monomer DFT target SHA")
         target_tree = require_sha(target_tree, "monomer DFT target tree")
@@ -27239,30 +27297,30 @@ class PullDeployController:
         tools.mkdir(mode=0o700)
         sealed_uv = tools / "uv"
         self._seal_dft_artifact(
-            MONOMER_DFT_UV,
+            Path(toolchain["uv"]),
             sealed_uv,
-            expected_sha256=MONOMER_DFT_UV_SHA256,
-            expected_uid=0,
-            allowed_modes=frozenset({0o755}),
+            expected_sha256=toolchain["uv_sha256"],
+            expected_uid=toolchain["uv_uid"],
+            allowed_modes=frozenset({toolchain["uv_mode"]}),
             maximum_bytes=256 * 1024 * 1024,
         )
         os.chmod(sealed_uv, 0o700)
         uv_version = self.runner.run(
             [str(sealed_uv), "--version"], env=self.control_environment()
         )
-        uv_metadata = MONOMER_DFT_UV.lstat()
+        uv_metadata = Path(toolchain["uv"]).lstat()
         if (
             not stat.S_ISREG(uv_metadata.st_mode)
-            or MONOMER_DFT_UV.is_symlink()
-            or uv_metadata.st_uid != 0
+            or Path(toolchain["uv"]).is_symlink()
+            or uv_metadata.st_uid != toolchain["uv_uid"]
             or uv_metadata.st_mode & 0o022
-            or sha256_file(sealed_uv) != MONOMER_DFT_UV_SHA256
+            or sha256_file(sealed_uv) != toolchain["uv_sha256"]
             or not str(uv_version.stdout).startswith("uv 0.11.21 ")
         ):
             raise PullDeployError("monomer DFT uv toolchain differs")
         version = self.runner.run(
             [
-                str(MONOMER_DFT_PYTHON),
+                str(Path(toolchain["python"])),
                 "-I",
                 "-c",
                 "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
@@ -27320,7 +27378,7 @@ class PullDeployController:
             artifact_paths[artifact["name"]] = sealed
         self.runner.run(
             [
-                str(MONOMER_DFT_PYTHON),
+                str(Path(toolchain["python"])),
                 "-I",
                 "-m",
                 "pip",
@@ -27383,8 +27441,8 @@ class PullDeployController:
             {
                 **cache_owner,
                 "uv_version": "0.11.21",
-                "base_python_sha256": MONOMER_DFT_PYTHON_SHA256,
-                "pip_inventory_sha256": MONOMER_DFT_PIP_INVENTORY_SHA256,
+                "base_python_sha256": toolchain["python_sha256"],
+                "pip_inventory_sha256": toolchain["pip_inventory_sha256"],
                 "wheelhouse_inventory_sha256": wheelhouse_inventory_sha256,
                 "prefetched_at": utc_now(),
             },
@@ -27406,7 +27464,7 @@ class PullDeployController:
                 str(sealed_uv),
                 "venv",
                 "--python",
-                str(MONOMER_DFT_PYTHON),
+                str(Path(toolchain["python"])),
                 "--link-mode",
                 "copy",
                 "--offline",
@@ -27458,7 +27516,7 @@ class PullDeployController:
         )
         if self._dft_wheelhouse_inventory(wheelhouse) != wheelhouse_inventory_sha256:
             raise PullDeployError("monomer DFT wheelhouse changed")
-        self._validate_installed_dft_aimnet(venv, parsed["document"])
+        self._validate_installed_dft_aimnet(venv, parsed["document"], wheel_path=aimnet_wheel)
         model_root = staging / "aimnet-cache"
         model_root.mkdir(mode=0o700)
         models: dict[str, str] = {}
@@ -27480,9 +27538,9 @@ class PullDeployController:
             "created_at": utc_now(),
             "python": "3.12",
             "uv": "0.11.21",
-            "uv_sha256": MONOMER_DFT_UV_SHA256,
-            "base_python_sha256": MONOMER_DFT_PYTHON_SHA256,
-            "pip_inventory_sha256": MONOMER_DFT_PIP_INVENTORY_SHA256,
+            "uv_sha256": toolchain["uv_sha256"],
+            "base_python_sha256": toolchain["python_sha256"],
+            "pip_inventory_sha256": toolchain["pip_inventory_sha256"],
             "wheelhouse_inventory_sha256": wheelhouse_inventory_sha256,
             "requirements_lock_sha256": requirements_digest,
             "aimnet_source_lock_sha256": source_lock_digest,

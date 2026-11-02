@@ -195,6 +195,22 @@ def test_retention_and_open_download_survive_unlink(batch):
     assert client.get(f"{BASE_PATH}/jobs/{job_id}").json()["status"] == "expired"
 
 
+def test_disabled_retention_preserves_past_due_history_and_downloads(batch):
+    service, worker, client = batch
+    service.config = replace(service.config, retention_enabled=False)
+    worker.config = replace(worker.config, retention_enabled=False)
+    job_id = submit(client, import_pair(client)).json()["job_id"]
+    finish(worker, job_id)
+    with admin_connection(service) as conn:
+        conn.execute("UPDATE polymerization_batch.jobs SET expires_at=now()-interval '90 days' WHERE id=%s", (job_id,))
+    worker.cleanup()
+    detail = client.get(f"{BASE_PATH}/jobs/{job_id}").json()
+    assert detail["status"] == "completed_with_errors" and detail["expires_at"] is None
+    assert client.get(f"{BASE_PATH}/jobs/{job_id}/artifacts/results.zip").content[:2] == b"PK"
+    assert client.get(f"{BASE_PATH}/jobs/{job_id}/results").json()["total"] == 2
+    assert (service.root / "jobs" / job_id).is_dir()
+
+
 def test_xlsx_mapping_formulas_and_numeric_ids(tmp_path):
     path = tmp_path / "input.xlsx"
     workbook = Workbook()

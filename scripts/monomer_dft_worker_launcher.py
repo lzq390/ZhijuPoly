@@ -215,9 +215,9 @@ def _runtime_inventory(root: Path) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def _git_identity() -> tuple[str, str]:
+def _git_identity(source_root: Path = SOURCE_ROOT) -> tuple[str, str]:
     result = subprocess.run(
-        ["/usr/bin/git", "-C", str(SOURCE_ROOT), "rev-parse", "HEAD", "HEAD^{tree}"],
+        ["/usr/bin/git", "-C", str(source_root), "rev-parse", "HEAD", "HEAD^{tree}"],
         check=True,
         capture_output=True,
         text=True,
@@ -234,15 +234,27 @@ def _git_identity() -> tuple[str, str]:
     return values[0], values[1]
 
 
-def validate(environment: Mapping[str, str]) -> int:
+def validate(environment: Mapping[str, str], *, source_root: Path = SOURCE_ROOT) -> int:
+    cohort = None
+    base_python_sha256, uv_sha256, pip_inventory_sha256 = BASE_PYTHON_SHA256, UV_SHA256, PIP_INVENTORY_SHA256
+    if source_root != SOURCE_ROOT or any(key in environment for key in (
+            "NEXPOLY_PROD_WORKER_COHORT_FILE", "NEXPOLY_PROD_WORKER_COHORT_SHA256",
+            "NEXPOLY_PROD_WORKER_SOURCE_ROOT")):
+        from scripts.production_worker_cohort import from_environment
+        cohort = from_environment(environment)
+        if cohort is None or cohort.source_root != source_root:
+            raise LauncherError("production monomer DFT source requires a sealed cohort")
+        tools = cohort.toolchain()
+        base_python_sha256, uv_sha256, pip_inventory_sha256 = (
+            tools["python_sha256"], tools["uv_sha256"], tools["pip_inventory_sha256"])
     release = environment.get("MONOMER_DFT_RELEASE_SHA", "")
     if RELEASE_RE.fullmatch(release) is None:
         raise LauncherError("production monomer DFT release identity is invalid")
     runtime_root = RUNTIME_ROOT / "worker-venvs/dft" / release
     manifest = runtime_root / "runtime.json"
     python = Path(environment.get("MONOMER_DFT_PYTHON", ""))
-    script = SOURCE_ROOT / "workers/monomer_dft_worker/run_host_worker.sh"
-    for path in (SOURCE_ROOT, runtime_root):
+    script = source_root / "workers/monomer_dft_worker/run_host_worker.sh"
+    for path in (source_root, runtime_root):
         metadata = path.lstat()
         if (
             not stat.S_ISDIR(metadata.st_mode)
@@ -280,7 +292,7 @@ def validate(environment: Mapping[str, str]) -> int:
             not stat.S_ISREG(pinned_python_metadata.st_mode)
             or pinned_python_metadata.st_uid != 0
             or pinned_python_metadata.st_mode & 0o022
-            or python_digest != BASE_PYTHON_SHA256
+            or python_digest != base_python_sha256
         ):
             raise LauncherError("production monomer DFT Python target is unsafe")
         if (
@@ -294,7 +306,7 @@ def validate(environment: Mapping[str, str]) -> int:
             raise LauncherError(
                 "production monomer DFT runtime contract is invalid"
             ) from exc
-        source_sha, source_tree = _git_identity()
+        source_sha, source_tree = _git_identity() if source_root == SOURCE_ROOT else _git_identity(source_root)
         wheelhouse_inventory = (
             contract.get("wheelhouse_inventory_sha256")
             if isinstance(contract, dict)
@@ -313,9 +325,9 @@ def validate(environment: Mapping[str, str]) -> int:
             or contract.get("source_tree") != source_tree
             or contract.get("python") != "3.12"
             or contract.get("uv") != "0.11.21"
-            or contract.get("base_python_sha256") != BASE_PYTHON_SHA256
-            or contract.get("uv_sha256") != UV_SHA256
-            or contract.get("pip_inventory_sha256") != PIP_INVENTORY_SHA256
+            or contract.get("base_python_sha256") != base_python_sha256
+            or contract.get("uv_sha256") != uv_sha256
+            or contract.get("pip_inventory_sha256") != pip_inventory_sha256
             or not isinstance(wheelhouse_inventory, str)
             or DIGEST_RE.fullmatch(wheelhouse_inventory) is None
             or DIGEST_RE.fullmatch(runtime_inventory) is None

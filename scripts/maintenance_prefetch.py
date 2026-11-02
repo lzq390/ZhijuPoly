@@ -25,7 +25,7 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import secrets
 import shutil
@@ -579,11 +579,28 @@ def wheel_archive_evidence(path: Path) -> dict[str, Any]:
         raise MaintenancePrefetchError(f"wheel cache has a non-wheel file: {path}")
     try:
         with zipfile.ZipFile(path) as archive:
-            names = archive.namelist()
+            entries = archive.infolist()
+            names = [entry.filename for entry in entries]
+            for entry in entries:
+                member = PurePosixPath(entry.filename)
+                canonical = member.as_posix() + ('/' if entry.is_dir() else '')
+                if (member.is_absolute() or '..' in member.parts
+                        or '\\' in entry.filename or '\x00' in entry.filename
+                        or member.as_posix() in {'', '.'}
+                        or entry.filename != canonical
+                        or stat.S_ISLNK(entry.external_attr >> 16)):
+                    raise MaintenancePrefetchError(
+                        f"wheel member path is unsafe: {path.name}"
+                    )
+            # ZIP directories have no payload and are not distribution files.
+            # A vendored dependency's RECORD is an ordinary outer-wheel file;
+            # only the wheel's one top-level dist-info owns its file inventory.
+            file_names = [entry.filename for entry in entries if not entry.is_dir()]
             records = [
                 name
-                for name in names
+                for name in file_names
                 if name.endswith(".dist-info/RECORD")
+                and len(PurePosixPath(name).parts) == 2
             ]
             if len(records) != 1 or len(names) != len(set(names)):
                 raise MaintenancePrefetchError(
@@ -597,9 +614,9 @@ def wheel_archive_evidence(path: Path) -> dict[str, Any]:
                 raise MaintenancePrefetchError(
                     f"wheel RECORD rows are invalid: {path.name}"
                 )
-            by_name = {name: archive.read(name) for name in names}
+            by_name = {name: archive.read(name) for name in file_names}
             recorded_paths = {row[0] for row in rows}
-            if recorded_paths != set(names):
+            if recorded_paths != set(file_names) or len(recorded_paths) != len(rows):
                 raise MaintenancePrefetchError(
                     f"wheel RECORD paths are incomplete: {path.name}"
                 )

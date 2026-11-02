@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
+import csv
+import io
 import fcntl
 import hashlib
 import json
@@ -12,6 +15,7 @@ import tempfile
 import unittest
 from unittest import mock
 import zipfile
+import warnings
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -56,6 +60,75 @@ def image_record(
 
 
 class MaintenancePrefetchPrimitiveTests(unittest.TestCase):
+    def wheel_with_directory_entries(self, root, *, directories=None, duplicate_record_row=False):
+        path = root / 'fixture-1.0-py3-none-any.whl'
+        files = {'fixture/__init__.py': b'__version__ = "1.0"\n',
+                 'fixture-1.0.dist-info/METADATA': b'Name: fixture\nVersion: 1.0\n',
+                 'fixture-1.0.dist-info/licenses/LICENSE': b'fixture license\n',
+                 'fixture/_vendor/example-2.0.dist-info/RECORD': b'vendored record bytes\n'}
+        record = 'fixture-1.0.dist-info/RECORD'
+        rows = [[name, 'sha256=' + base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b'=').decode(), str(len(payload))]
+                for name, payload in files.items()]
+        if duplicate_record_row:
+            rows.append(rows[0])
+        rows.append([record, '', ''])
+        output = io.StringIO()
+        csv.writer(output, lineterminator='\n').writerows(rows)
+        files[record] = output.getvalue().encode()
+        if directories is None:
+            directories = ('fixture/', 'fixture/_vendor/', 'fixture-1.0.dist-info/', 'fixture-1.0.dist-info/licenses/')
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', UserWarning)
+            with zipfile.ZipFile(path, 'w') as archive:
+                for directory in directories:
+                    archive.writestr(directory, b'')
+                for name, payload in files.items():
+                    archive.writestr(name, payload)
+        path.chmod(0o600)
+        return path
+
+    def test_wheel_record_covers_files_with_explicit_zip_directories_and_vendored_record(self):
+        with tempfile.TemporaryDirectory() as raw:
+            wheel = self.wheel_with_directory_entries(Path(raw))
+            evidence = PREFETCH.wheel_archive_evidence(wheel)
+            self.assertEqual(evidence['record_path'], 'fixture-1.0.dist-info/RECORD')
+            self.assertEqual(evidence['member_count'], 9)
+            self.assertEqual(evidence['sha256'], PREFETCH.sha256_file(wheel))
+
+    def test_wheel_directory_members_cannot_escape_or_alias_paths(self):
+        with tempfile.TemporaryDirectory() as raw:
+            for directory in ('../escape/', '/absolute/', 'fixture/../escape/', 'fixture\\escape/', 'fixture//alias/'):
+                with self.subTest(directory=directory):
+                    wheel = self.wheel_with_directory_entries(Path(raw), directories=(directory,))
+                    with self.assertRaisesRegex(PREFETCH.MaintenancePrefetchError, 'unsafe'):
+                        PREFETCH.wheel_archive_evidence(wheel)
+
+    def test_wheel_duplicate_directory_or_record_row_remains_rejected(self):
+        with tempfile.TemporaryDirectory() as raw:
+            wheel = self.wheel_with_directory_entries(Path(raw), directories=('fixture/', 'fixture/'))
+            with self.assertRaisesRegex(PREFETCH.MaintenancePrefetchError, 'inventory'):
+                PREFETCH.wheel_archive_evidence(wheel)
+            wheel = self.wheel_with_directory_entries(Path(raw), duplicate_record_row=True)
+            with self.assertRaisesRegex(PREFETCH.MaintenancePrefetchError, 'incomplete'):
+                PREFETCH.wheel_archive_evidence(wheel)
+
+    def test_wheel_extra_unrecorded_file_and_payload_drift_remain_rejected(self):
+        with tempfile.TemporaryDirectory() as raw:
+            wheel = self.wheel_with_directory_entries(Path(raw))
+            with zipfile.ZipFile(wheel, 'a') as archive:
+                archive.writestr('fixture/unrecorded.py', b'unrecorded source')
+            with self.assertRaisesRegex(PREFETCH.MaintenancePrefetchError, 'incomplete'):
+                PREFETCH.wheel_archive_evidence(wheel)
+            wheel = self.wheel_with_directory_entries(Path(raw))
+            with zipfile.ZipFile(wheel) as archive:
+                files = {item.filename: archive.read(item.filename) for item in archive.infolist()}
+            files['fixture/__init__.py'] = b'modified source'
+            with zipfile.ZipFile(wheel, 'w') as archive:
+                for name, payload in files.items():
+                    archive.writestr(name, payload)
+            with self.assertRaisesRegex(PREFETCH.MaintenancePrefetchError, 'content differs'):
+                PREFETCH.wheel_archive_evidence(wheel)
+
     def test_image_evidence_separates_oci_digest_from_local_image_id(self) -> None:
         reference = (
             f"{PREFETCH.ROLE_IMAGE_ROOTS['backend']}@{DIGEST_A}"

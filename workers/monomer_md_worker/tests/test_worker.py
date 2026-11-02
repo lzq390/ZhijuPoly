@@ -446,6 +446,29 @@ def test_production_runtime_identity_uses_live_checkout_and_active_slot(
     assert identity.python_executable == str(Path(sys.executable).resolve())
 
 
+def test_candidate_runtime_identity_retains_complete_production_slot_binding(tmp_path, monkeypatch):
+    from scripts import production_worker_cohort
+    source, module, venv = _production_runtime_paths(tmp_path)
+    cohort = SimpleNamespace(source_root=source.resolve(), md_runtime_root=tmp_path / 'cohort-md')
+    monkeypatch.setattr(production_worker_cohort, 'from_environment', lambda: cohort)
+    calls = []
+
+    def binding(**kwargs):
+        calls.append(kwargs)
+        return _fake_runtime_binding(venv)
+
+    monkeypatch.setattr(worker_main, 'verify_runtime_binding', binding)
+    identity = worker_main._load_runtime_identity(module_path=module,
+        python_prefix=venv, python_executable=venv / 'bin/python')
+    assert calls == [{'source_root': cohort.source_root, 'runtime_root': cohort.md_runtime_root}]
+    assert identity.source_sha == RELEASE_SHA and identity.venv_slot == 'a'
+    assert identity.slot_record_sha256 == DIGEST
+    cohort.source_root = tmp_path / 'different-source'
+    with pytest.raises(RuntimeError, match='sealed release'):
+        worker_main._load_runtime_identity(module_path=module,
+            python_prefix=venv, python_executable=venv / 'bin/python')
+
+
 def test_production_runtime_identity_rejects_invalid_slot_binding(
     tmp_path: Path, monkeypatch
 ):

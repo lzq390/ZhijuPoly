@@ -1,4 +1,4 @@
-"""Explicit offline development opt-in for the pinned 0023/0024 expansion.
+"""Explicit offline maintenance for the pinned 0023/0024 expansion.
 
 This is never called by ordinary bootstrap, expansion or application startup.
 The operator stops every writer first; locks and restored-backup seals then
@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 
 import psycopg
@@ -25,6 +26,22 @@ TABLES = ("literature_generations", "literature_catalog", "literature_snapshots"
 # Catalog signature of the unchanged 0024 SQL on PostgreSQL 16. Ownership OIDs
 # are deliberately excluded; columns, keys, indexes, trigger bodies and ACLs are not.
 CATALOG_SHA256 = "00869e95e41d7489f1fdd1fcb01b346d626d8417f1cd143c8fc7538ca5d8655c"
+_EVIDENCE_FIELDS = frozenset({
+    "version", "purpose", "database_identity", "backup_receipt_sha256",
+    "writers_stopped", "submission_disabled", "active_jobs", "active_leases", "writer_states",
+})
+_PRODUCTION_FIELDS = frozenset({
+    "operation_id", "target_sha", "database_system_identifier", "production_source_system_identifier",
+})
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Maintenance JSON keys must be unique")
+        result[key] = value
+    return result
 
 
 def _private_json(path: Path) -> tuple[dict, str]:
@@ -38,8 +55,16 @@ def _private_json(path: Path) -> tuple[dict, str]:
                 or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
                 or info.st_size > 16 * 1024 * 1024):
             raise ValueError("Maintenance inputs must be private, owned 0600 regular files")
-        data = handle.read()
-    value = json.loads(data)
+        data = handle.read(16 * 1024 * 1024 + 1)
+        final_info = os.fstat(handle.fileno())
+        path_info = path.lstat()
+        fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if (len(data) != info.st_size
+                or any(getattr(info, key) != getattr(final_info, key)
+                       or getattr(info, key) != getattr(path_info, key) for key in fields)
+                or any(part.is_symlink() for part in (path, *path.parents))):
+            raise ValueError("Maintenance inputs changed during validation")
+    value = json.loads(data, object_pairs_hook=_unique_object)
     if not isinstance(value, dict):
         raise ValueError("Maintenance inputs must be JSON objects")
     return value, hashlib.sha256(data).hexdigest()
@@ -150,6 +175,42 @@ def apply_literature_dev_migration(dsn: str, *, environment: str, backup_receipt
                                   migrations_dir: Path | None = None) -> dict:
     if environment != "dev" or writers_stopped is not True:
         raise ValueError("Literature maintenance requires dev and explicit stopped writers")
+    return _apply_literature_migration(
+        dsn, backup_receipt=backup_receipt, maintenance_evidence=maintenance_evidence,
+        migrations_dir=migrations_dir, purpose="literature-dev-0024")
+
+
+def apply_literature_prod_migration(dsn: str, *, environment: str, operation_id: str,
+                                   target_sha: str, production_source_system_identifier: str,
+                                   backup_receipt: Path, maintenance_evidence: Path,
+                                   writers_stopped: bool, migrations_dir: Path | None = None) -> dict:
+    """Maintain only an explicitly identified production copy, never its source.
+
+    BUILD_REVISION is the immutable Backend image's release binding. This entry
+    neither discovers a database nor grants an ordinary deployment new authority.
+    """
+    if environment != "prod" or writers_stopped is not True:
+        raise ValueError("Production literature maintenance requires prod and explicit stopped writers")
+    if (not isinstance(operation_id, str)
+            or re.fullmatch(r"[a-z0-9][a-z0-9._-]{7,127}", operation_id) is None):
+        raise ValueError("Production maintenance requires a valid operation ID")
+    if (not isinstance(target_sha, str) or re.fullmatch(r"[0-9a-f]{40}", target_sha) is None
+            or os.environ.get("BUILD_REVISION") != target_sha):
+        raise ValueError("Production maintenance requires the exact executing release SHA")
+    if (not isinstance(production_source_system_identifier, str)
+            or re.fullmatch(r"[1-9][0-9]{0,19}", production_source_system_identifier) is None
+            or int(production_source_system_identifier) >= 2**64):
+        raise ValueError("Production maintenance requires the original cluster identity")
+    return _apply_literature_migration(
+        dsn, backup_receipt=backup_receipt, maintenance_evidence=maintenance_evidence,
+        migrations_dir=migrations_dir, purpose="literature-prod-0024",
+        production={"operation_id": operation_id, "target_sha": target_sha,
+                    "production_source_system_identifier": production_source_system_identifier})
+
+
+def _apply_literature_migration(dsn: str, *, backup_receipt: Path,
+                               maintenance_evidence: Path, migrations_dir: Path | None,
+                               purpose: str, production: dict | None = None) -> dict:
     from app.postgres_migrations import MIGRATIONS_DIR, validate_migration_manifest_entries
     from app.auth.cutover import (validate_backup_receipt, backup_tables, backup_state_seal,
                                   private_data_seal, auth_metadata_seal)
@@ -163,7 +224,16 @@ def apply_literature_dev_migration(dsn: str, *, environment: str, backup_receipt
 
     receipt_document, receipt_sha = _private_json(backup_receipt)
     evidence, evidence_sha = _private_json(maintenance_evidence)
-    if (evidence.get("version") != 1 or evidence.get("purpose") != "literature-dev-0024"
+    if production is not None and (
+            set(evidence) != _EVIDENCE_FIELDS | _PRODUCTION_FIELDS
+            or type(evidence.get("version")) is not int
+            or any(evidence.get(key) != value for key, value in production.items())
+            or not isinstance(evidence.get("database_system_identifier"), str)
+            or re.fullmatch(r"[1-9][0-9]{0,19}", evidence["database_system_identifier"]) is None
+            or int(evidence["database_system_identifier"]) >= 2**64
+            or evidence["database_system_identifier"] == production["production_source_system_identifier"]):
+        raise ValueError("Production maintenance evidence does not identify the exact candidate operation")
+    if (evidence.get("version") != 1 or evidence.get("purpose") != purpose
             or evidence.get("backup_receipt_sha256") != receipt_sha
             or evidence.get("writers_stopped") is not True
             or evidence.get("submission_disabled") is not True
@@ -194,7 +264,7 @@ def apply_literature_dev_migration(dsn: str, *, environment: str, backup_receipt
             sources[entry.version] = data.decode()
     with psycopg.connect(dsn, row_factory=dict_row, connect_timeout=5) as connection:
         if connection.info.server_version // 10000 != 16:
-            raise ValueError("Literature development maintenance requires PostgreSQL 16")
+            raise ValueError("Literature maintenance requires PostgreSQL 16")
         connection.execute("SET LOCAL lock_timeout='5s'")
         connection.execute("SET LOCAL statement_timeout='10min'")
         # Share 0023's advisory lock and block concurrent ledger insertions.
@@ -204,6 +274,15 @@ def apply_literature_dev_migration(dsn: str, *, environment: str, backup_receipt
         source = dict(connection.execute("SELECT current_database() name,system_identifier::text system_id FROM pg_control_system()").fetchone())
         if source != receipt["source"] or identity != evidence.get("database_identity"):
             raise ValueError("Maintenance evidence belongs to a different database identity")
+        if production is not None:
+            if source["system_id"] != evidence["database_system_identifier"]:
+                raise ValueError("Production maintenance cluster differs from the candidate evidence")
+            drain = connection.execute("""SELECT drain_enabled, activated_by, release_sha
+                FROM governance.deployment_control WHERE control_key='production' FOR UPDATE""").fetchone()
+            if (drain is None or drain["drain_enabled"] is not True
+                    or drain["activated_by"] != production["operation_id"]
+                    or drain["release_sha"] != production["target_sha"]):
+                raise ValueError("Production maintenance requires the candidate operation's persistent drain")
         role = connection.execute("SELECT rolsuper,rolcreaterole FROM pg_roles WHERE rolname=current_user").fetchone()
         owner = connection.execute("SELECT pg_has_role(current_user,datdba,'USAGE') AS owner FROM pg_database WHERE datname=current_database()").fetchone()
         if not role["rolcreaterole"] or not owner["owner"]:
@@ -233,6 +312,10 @@ def apply_literature_dev_migration(dsn: str, *, environment: str, backup_receipt
         # native jobs/leases and the stopped-writer evidence govern admission.
         nonterminal_usage = connection.execute("SELECT count(*) AS n FROM usage.attempts WHERE status IN ('queued','running')").fetchone()["n"]
         validate_assets(receipt["assets"], verify_source=True)
+        if production is not None and (
+                _private_json(backup_receipt)[1] != receipt_sha
+                or _private_json(maintenance_evidence)[1] != evidence_sha):
+            raise ValueError("Production maintenance inputs changed before migration")
         if boundary == LITERATURE_MIGRATION:
             validate_polymer_md_schema(connection)
             validate_literature_schema(connection)
@@ -258,7 +341,12 @@ def apply_literature_dev_migration(dsn: str, *, environment: str, backup_receipt
             validate_service_members(connection)
             validate_polymer_md_schema(connection)
             validate_literature_schema(connection)
+        if production is not None and (
+                _private_json(backup_receipt)[1] != receipt_sha
+                or _private_json(maintenance_evidence)[1] != evidence_sha):
+            raise ValueError("Production maintenance inputs changed before commit")
         return {"version": LITERATURE_MIGRATION, "checksum": LITERATURE_MIGRATION_SHA256,
                 "previous_boundary": boundary, "applied": applied, "database_identity": identity,
                 "nonterminal_usage_observations": nonterminal_usage,
-                "backup_receipt_sha256": receipt_sha, "maintenance_evidence_sha256": evidence_sha}
+                "backup_receipt_sha256": receipt_sha, "maintenance_evidence_sha256": evidence_sha,
+                **({**production, "database_system_identifier": source["system_id"]} if production is not None else {})}

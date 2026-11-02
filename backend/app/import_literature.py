@@ -72,10 +72,24 @@ def _insert_snapshot(connection, snapshot: dict) -> bool:
         return True
     # An existing UID may be reused, never updated. Verify the immutable body
     # rather than assuming an ON CONFLICT is an identical content snapshot.
-    existing = connection.execute("SELECT " + ",".join(columns) + " FROM knowledge.literature_snapshots WHERE snapshot_uid=%s", (snapshot["snapshot_uid"],)).fetchone()
+    json_columns = ("raw_json", "normalized_json", "assets", "quality_flags")
+    scalar_columns = tuple(key for key in columns if key not in json_columns)
+    # JSONB preserves decimal number semantics, not Python's binary float type.
+    # For example, a scientific float can return as a large integer whose
+    # Python comparison differs despite representing the same JSON number.
+    comparisons = ",".join(f"({key} = %s::jsonb) AS {key}_matches" for key in json_columns)
+    existing = connection.execute(
+        "SELECT " + ",".join(scalar_columns) + "," + comparisons
+        + " FROM knowledge.literature_snapshots WHERE snapshot_uid=%s",
+        tuple(Jsonb(snapshot[key]) for key in json_columns) + (snapshot["snapshot_uid"],),
+    ).fetchone()
     if existing is None:
         raise ImportStateError("SNAPSHOT_INSERT_FAILED")
     for key in columns:
+        if key in json_columns:
+            if existing[key + "_matches"] is not True:
+                raise ImportStateError("IMMUTABLE_SNAPSHOT_CONFLICT")
+            continue
         expected = snapshot[key]
         actual = existing[key]
         if key == "source_extract_created_at":

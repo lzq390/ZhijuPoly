@@ -5,6 +5,11 @@ Actions validates every candidate and publishes the Backend and Web images, but
 it never contacts or mutates the production host. An operator runs the stable
 deployment command during an authorized maintenance window.
 
+The account-enabled rebuild retaining HTTP 9000 uses the separate
+[production upgrade procedure](production-9000-upgrade.md). Its cloned-database
+maintenance entry and independent worker cohort are outside the historical
+ordinary-deployment controller described below.
+
 The final read-only F/B admission report and its strict evidence contract are
 documented in [production-readiness.md](production-readiness.md).
 

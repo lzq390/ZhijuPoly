@@ -53,6 +53,25 @@ SQL、manifest、`app.literature_contract` 与审计工具中的登记必须一�
 
 兼容包是之后代码回滚的最低版本。功能回滚优先关闭开关，数据回滚切换历史 generation，不删表、不删除快照、不改旧 migration 账本。
 
+### 显式生产副本维护
+
+`literature-prod-0024` 只用于独立生产候选副本。旧生产集群保持原账本；开发入口仍拒绝生产，普通 `expand` 仍跳过 0023/0024。迁移 SQL 和校验和保持原值。
+
+在候选自身完成 0022 备份及实际空库恢复后，使用与开发维护相同的停止写入证据，并将 `purpose` 改为 `literature-prod-0024`，增加 `operation_id`、完整 `target_sha`、候选 `database_system_identifier` 和旧库 `production_source_system_identifier`。两个集群身份必须不同。候选的 `governance.deployment_control` 必须已排空，`activated_by`、`release_sha` 分别匹配操作 ID 和目标 SHA；此状态必须在备份前设置。
+
+```bash
+GPU_BROKER_ENVIRONMENT=prod BUILD_REVISION="$TARGET_SHA" \
+python -m app.postgres_migrations --mode literature-prod-0024 \
+  --dsn-env AUTH_ADMIN_POSTGRES_DSN --operation-id "$OPERATION_ID" \
+  --target-sha "$TARGET_SHA" \
+  --production-source-system-identifier "$OLD_SYSTEM_IDENTIFIER" \
+  --backup-receipt /private/candidate-backup/receipt.json \
+  --maintenance-evidence /private/production-maintenance.json \
+  --writers-stopped --audit-output /private/production-migration-result.json
+```
+
+备份收据必须属于该候选本身，不得修改旧收据来适配副本。入口在同一事务内校验数据库、排空记录、完整 seals、原 0023/0024 及权限；证据变更、身份不匹配或真实活动任务都会阻止提交。审计中的提交结果不确定时，先检查账本再决定下一步。
+
 ### 显式开发库维护
 
 先封闭提交入口、排空任务和租约，正常停止 Backend、batch、monomer MD/DFT、polymer MD 和文献同步进程；未部署的组件也要明确登记。使用受控 owner 身份运行 `app.auth.backup`，完成私有整库 dump、空库恢复、数据及资产校验。不要复用运行中取得、之后又发生写入的备份。数据库/MinIO 密钥只通过私有环境注入，不放入命令参数。

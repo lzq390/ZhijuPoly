@@ -163,6 +163,8 @@ jobs:
               ! -name 'test_polymer_md_backend_full.py' \
               ! -name 'test_polymer_md_backup_dev.py' \
               ! -name 'test_polymer_md_worker_dev.py' \
+              ! -name 'test_polymer_md_prod.py' \
+              ! -name 'test_production_worker_cohort.py' \
               ! -name 'test_polymer_md_analysis_release.py' \
               ! -name 'test_polymer_md_acceptance_registry_cli.py' -print | sort
           )
@@ -347,7 +349,7 @@ jobs:
           [[ "${#tests[@]}" -gt 0 ]]
           python -m pytest "${tests[@]}" --assert=plain --tb=short --junitxml=multiuser-backend.xml
           if [[ "$SHARD" == "0" ]]; then
-            python -m pytest scripts/tests/test_user_isolation_release_contract.py scripts/tests/test_monomer_usage_hooks.py --assert=plain --tb=short
+            python -m pytest scripts/tests/test_user_isolation_release_contract.py scripts/tests/test_monomer_usage_hooks.py scripts/tests/test_production_worker_cohort.py --assert=plain --tb=short
           fi
 
       - name: Install locked trajectory analysis test dependencies
@@ -376,6 +378,7 @@ jobs:
               scripts/tests/test_polymer_md_backend_full.py \
               scripts/tests/test_polymer_md_backup_dev.py \
               scripts/tests/test_polymer_md_worker_dev.py \
+              scripts/tests/test_polymer_md_prod.py \
               --deselect=workers/polymer_md_worker/tests/test_process_control.py::test_real_scope_contains_and_kills_detached_descendants \
               --deselect=workers/polymer_md_worker/tests/test_manager.py::test_real_scope_execution_gate_requires_durable_scope_membership
 

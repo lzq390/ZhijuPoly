@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import socket
 import stat
@@ -24,6 +25,9 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from workers.polymer_md_worker.app.release_contract import verify_release
+from scripts.polymer_md_prod_contract import (
+    PRODUCTION_FIELDS, reject_production_from_dev, validate_production_binding, verify_source_binding,
+)
 
 FIELDS = {"schema_version", "runtime_root", "release_root", "runtime_manifest",
           "runner_python", "worker_python", "job_root", "socket_path",
@@ -78,23 +82,40 @@ class Configuration:
         return Path(self.values[key])
 
 
-def load_configuration(path):
+def load_configuration(path, *, _production=False):
     path = absolute_path(str(path))
     if owned(path, 0o600).st_size > 16 * 1024:
         raise ValueError("Worker configuration is too large")
     values = read_private_json(path)
-    if (not isinstance(values, dict) or set(values) != FIELDS
-            or type(values["schema_version"]) is not int or values["schema_version"] != 1):
+    expected = FIELDS | PRODUCTION_FIELDS if _production else FIELDS
+    if _production and "retention_enabled" in values:
+        expected = expected | {"retention_enabled"}
+    if (not isinstance(values, dict) or set(values) != expected
+            or type(values["schema_version"]) is not int or values["schema_version"] != (2 if _production else 1)):
         raise ValueError("Worker configuration fields or schema version are invalid")
-    paths = {key: absolute_path(values[key]) for key in PATH_FIELDS}
+    paths = {key: absolute_path(values[key]) for key in PATH_FIELDS | ({"source_root", "socket_root"} if _production else set())}
     runtime, release = paths["runtime_root"], paths["release_root"]
-    legacy = Path.home() / ".local/share/nexpoly/polymer-md-dev"
+    if _production:
+        validate_production_binding(values)
+        if type(values.get("retention_enabled", False)) is not bool:
+            raise ValueError("production retention_enabled must be a boolean")
+        owned(paths["socket_root"], 0o700, directory=True)
+        for directory in (runtime / "tmp", runtime / "home"):
+            owned(directory, 0o700, directory=True)
+    else:
+        reject_production_from_dev(runtime)
+    # Production deliberately gives its process an isolated HOME inside this
+    # runtime. Legacy separation must use the account's real home, otherwise
+    # the derived legacy path would always be a child of the new runtime.
+    legacy_home = Path(pwd.getpwuid(os.getuid()).pw_dir) if _production else Path.home()
+    legacy = legacy_home / ".local/share/nexpoly/polymer-md-dev"
     if (runtime.is_relative_to(ROOT) or ROOT.is_relative_to(runtime)
             or runtime.is_relative_to(legacy) or legacy.is_relative_to(runtime)
             or runtime.is_relative_to(release) or release.is_relative_to(runtime)):
         raise ValueError("Worker runtime must be external and separate from source, release and legacy runtime")
     owned(runtime, 0o700, directory=True)
-    if paths["job_root"] != runtime / "jobs" or paths["socket_path"] != runtime / "socket/worker.sock":
+    socket_parent = paths["socket_root"] if _production else runtime / "socket"
+    if paths["job_root"] != runtime / "jobs" or paths["socket_path"] != socket_parent / "worker.sock":
         raise ValueError("Worker jobs and socket must use this runtime's private layout")
     for key in ("runtime_manifest", "start_authorization_token_file"):
         if not paths[key].is_relative_to(runtime):
@@ -138,6 +159,8 @@ def verify_configuration(config):
     if any(path.name == "__pycache__" or path.suffix in {".pyc", ".pyo"} for path in release.rglob("*")):
         raise ValueError("Worker release must not contain compiled Python caches")
     manifest = verify_release(release)
+    if config.values.get("environment") == "prod":
+        verify_source_binding(config.values, manifest["files"])
     if manifest["source_digest"] != release.name:
         raise ValueError("Worker release directory differs from its content identity")
     for target in (release / "release.json", *(release / item["path"] for item in manifest["files"])):
@@ -148,6 +171,10 @@ def verify_configuration(config):
     module_path = "workers/polymer_md_worker/app/runtime.py"
     if not {module_path, "workers/polymer_md_worker/app/main.py"} <= names:
         raise ValueError("Worker release lacks its runtime or HTTP entry point")
+    if config.values.get("environment") == "prod" and not {
+        "scripts/polymer_md_worker_dev.py", "scripts/polymer_md_worker_prod.py", "scripts/polymer_md_prod_contract.py"
+    } <= names:
+        raise ValueError("production Worker release lacks its pinned production entry points")
     # The selected release's adapter fingerprint must be used, even when this
     # operator entry point is running from a newer checkout.
     spec = importlib.util.spec_from_file_location("_polymer_md_frozen_runtime", release / module_path)
@@ -180,6 +207,11 @@ def clean_environment(config):
         POLYMER_MD_RUNNER_PYTHON=str(config.path("runner_python")), POLYMER_MD_START_DRAINED="true",
         POLYMER_MD_START_AUTHORIZATION_URL=config.values["start_authorization_url"],
         POLYMER_MD_START_AUTHORIZATION_TOKEN=config.token)
+    if config.values.get("environment") == "prod":
+        environment.update(POLYMER_MD_ENVIRONMENT="prod", USAGE_ENTITLEMENTS_ENABLED="false",
+            NEXPOLY_OPERATION_ID=config.values["operation_id"], POLYMER_MD_SOURCE_SHA=config.values["source_sha"],
+            POLYMER_MD_RETENTION_ENABLED="true" if config.values.get("retention_enabled", False) else "false",
+            HOME=str(config.path("runtime_root") / "home"), TMPDIR=str(config.path("runtime_root") / "tmp"))
     return environment
 
 
@@ -225,8 +257,14 @@ def run_worker(config, runtime):
         os.set_inheritable(descriptor, True)
         python = str(config.path("worker_python"))
         os.chdir(config.path("release_root"))
-        os.execve(python, [python, "-m", "uvicorn", "workers.polymer_md_worker.app.main:app",
-                         "--fd", str(listener.fileno()), "--workers", "1", "--no-access-log"], clean_environment(config))
+        arguments = [python, "-m", "uvicorn", "workers.polymer_md_worker.app.main:app",
+                     "--fd", str(listener.fileno()), "--workers", "1", "--no-access-log"]
+        if config.values.get("environment") == "prod":
+            from scripts.polymer_md_prod_contract import sandbox_worker_command
+            executable, arguments = sandbox_worker_command(config.values, arguments)
+        else:
+            executable = python
+        os.execve(executable, arguments, clean_environment(config))
     finally:
         if listener is not None:
             listener.close()

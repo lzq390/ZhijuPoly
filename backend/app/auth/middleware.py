@@ -14,6 +14,7 @@ from starlette.exceptions import HTTPException
 from .context import user_context, service_context
 from .policy import route_policy
 from .service import csrf_token
+from .settings import PRODUCTION_HTTP_HOST, PRODUCTION_HTTP_ORIGIN
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,19 @@ class AuthenticationMiddleware:
         async def reject(status, message, code):
             await JSONResponse({'detail': message, 'code': code}, status_code=status,
                                headers={'Cache-Control': 'private, no-store'})(scope, receive, send)
+
+        if getattr(self.auth.settings, 'production_http_enabled', False) and path != '/health':
+            # The approved public HTTP entry is deliberately separate from
+            # development exceptions. Forwarded headers cannot establish its
+            # Host identity, and duplicate entry headers are ambiguous.
+            raw_headers = scope.get('headers', ())
+            hosts = [value for name, value in raw_headers if name.lower() == b'host']
+            if hosts != [PRODUCTION_HTTP_HOST.encode('ascii')]:
+                return await reject(403, '请求入口未获授权。', 'untrusted_host')
+            if method not in {'GET', 'HEAD', 'OPTIONS'}:
+                origins = [value for name, value in raw_headers if name.lower() == b'origin']
+                if origins != [PRODUCTION_HTTP_ORIGIN.encode('ascii')]:
+                    return await reject(403, '请求来源未获授权。', 'untrusted_origin')
 
         if policy == 'public' and method not in {'GET','HEAD','OPTIONS'} and headers.get('origin') not in self.auth.settings.allowed_origins:
             return await reject(403, '请求来源未获授权。', 'untrusted_origin')

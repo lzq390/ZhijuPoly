@@ -275,6 +275,77 @@ class DftRuntimeInventoryTests(unittest.TestCase):
 
 
 class DftAimnetRecordTests(unittest.TestCase):
+    def installed_fixture(self, root):
+        import base64
+        import hashlib
+        import csv
+        import io
+        import zipfile
+        venv = root / 'venv'
+        site = venv / 'lib/python3.12/site-packages'
+        dist = 'aimnet-fixture.dist-info'
+        record = dist + '/RECORD'
+        points = b'[console_scripts]\naimnet = aimnet.cli:cli\naimnet2pysis = aimnet.calculators.aimnet2pysis:run_pysis\n'
+        files = {'aimnet/registry.json': b'{"fixture":true}\n',
+                 'aimnet/cli.py': b'def cli(): pass\n', dist + '/entry_points.txt': points}
+        def rows_for(values):
+            return [[name, 'sha256=' + base64.urlsafe_b64encode(hashlib.sha256(value).digest()).rstrip(b'=').decode(), str(len(value))]
+                    for name, value in values.items()]
+        def csv_bytes(rows):
+            output = io.StringIO();csv.writer(output, lineterminator='\n').writerows(rows)
+            return output.getvalue().encode()
+        files[record] = csv_bytes(rows_for(files) + [[record, '', '']])
+        wheel = root / 'aimnet-fixture-py3-none-any.whl'
+        with zipfile.ZipFile(wheel, 'w') as archive:
+            for name, payload in files.items(): archive.writestr(name, payload)
+        wheel.chmod(0o600)
+        inventory = [{'path': name, 'size': len(payload), 'sha256': hashlib.sha256(payload).hexdigest()}
+                     for name, payload in sorted(files.items())]
+        lock = {'source': {}, 'registry': {'path': 'aimnet/registry.json', 'sha256': hashlib.sha256(files['aimnet/registry.json']).hexdigest()},
+            'wheel': {'filename': wheel.name, 'sha256': controller_module.sha256_file(wheel).removeprefix('sha256:'),
+                'file_count': len(files), 'record_path': record,
+                'record_sha256': hashlib.sha256(files[record]).hexdigest(),
+                'inventory_sha256': controller_module.canonical_json_digest(inventory).removeprefix('sha256:')}}
+        installed = {name: payload for name, payload in files.items() if name != record}
+        for name in ('aimnet', 'aimnet2pysis'):
+            installed['../../../bin/' + name] = b'#!/usr/bin/python3\n# generated console wrapper\n'
+        for name, payload in installed.items():
+            target = site / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload);target.chmod(0o700 if name.startswith('../') else 0o600)
+        (site / record).write_bytes(csv_bytes(rows_for(installed) + [[record, '', '']]))
+        (site / record).chmod(0o600)
+        return venv, wheel, lock, site / record
+
+    def test_declared_console_scripts_are_strictly_contained_in_the_new_venv(self):
+        with tempfile.TemporaryDirectory(prefix='dft-console-') as raw:
+            venv, wheel, lock, _ = self.installed_fixture(Path(raw))
+            controller_module.PullDeployController._validate_installed_dft_aimnet(venv, lock, wheel_path=wheel)
+
+    def test_record_cannot_relocate_or_invent_a_console_script(self):
+        for replacement in ('../../../bin/evil', '../../../../escape', '../../../bin/../escape', '/tmp/escape'):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory(prefix='dft-console-') as raw:
+                venv, wheel, lock, record = self.installed_fixture(Path(raw))
+                record.write_text(record.read_text().replace('../../../bin/aimnet,', replacement + ','))
+                with self.assertRaisesRegex(controller_module.PullDeployError, 'path is unsafe'):
+                    controller_module.PullDeployController._validate_installed_dft_aimnet(venv, lock, wheel_path=wheel)
+
+    def test_console_script_metadata_hash_and_single_owner_inode_are_required(self):
+        for tamper in ('entry-point', 'script-bytes', 'symlink', 'hardlink'):
+            with self.subTest(tamper=tamper), tempfile.TemporaryDirectory(prefix='dft-console-') as raw:
+                root = Path(raw);venv, wheel, lock, record = self.installed_fixture(root)
+                target = venv / 'bin/aimnet'
+                if tamper == 'entry-point':
+                    (record.parent / 'entry_points.txt').write_text('[console_scripts]\naimnet = attacker:execute\n')
+                elif tamper == 'script-bytes':
+                    target.write_bytes(b'modified console wrapper')
+                else:
+                    target.unlink();other = root / 'outside';other.write_bytes(b'outside source')
+                    if tamper == 'symlink': target.symlink_to(other)
+                    else: os.link(other, target)
+                with self.assertRaises(controller_module.PullDeployError):
+                    controller_module.PullDeployController._validate_installed_dft_aimnet(venv, lock, wheel_path=wheel)
+
     def test_malformed_csv_record_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory(prefix="dft-record-") as raw:
             venv = Path(raw) / "venv"

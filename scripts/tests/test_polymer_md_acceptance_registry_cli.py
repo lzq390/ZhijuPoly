@@ -75,6 +75,84 @@ def test_actual_cli_publication_and_revocation_roundtrip_remain_scoped(synthetic
     assert summary["registry_status"] == "revoked" and summary["accepted_protocols"] == []
 
 
+def test_production_retention_binding_matches_real_status_and_cli_roundtrip(synthetic, tmp_path, capsys):
+    from types import SimpleNamespace
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.routers import polymer_md
+
+    data = synthetic
+    binding, _, protocol = cli.binding_from_manifest(data["manifest_path"], retention_enabled=False)
+    assert binding != data["review"]["binding"]
+    assert protocol["retention"]["enabled"] is False
+    assert protocol["retention"]["artifact_days"] is None and protocol["retention"]["metadata_days"] is None
+    review = deepcopy(data["review"])
+    review["binding"] = binding
+    save(data["review_path"], review)
+    with pytest.raises(ValueError, match="does not bind"):
+        cli.prepare_approval(data["review_path"], data["manifest_path"])
+    approval = cli.prepare_approval(data["review_path"], data["manifest_path"], retention_enabled=False)
+    with pytest.raises(ValueError, match="selected retention policy"):
+        cli.publish(data["root"], approval)
+    assert not data["root"].exists()
+    assert cli.main(["publish", "--registry", str(data["root"]), "--review", str(data["review_path"]),
+        "--manifest", str(data["manifest_path"]), "--retention-enabled", "false"]) == 0
+    assert json.loads(capsys.readouterr().out)["written"]
+    assert cli.main(["inspect", "--registry", str(data["root"]), "--manifest", str(data["manifest_path"]),
+        "--retention-enabled", "false"]) == 0
+    inspected = json.loads(capsys.readouterr().out)
+    assert inspected["registry_status"] == "verified"
+
+    app = FastAPI()
+    app.include_router(polymer_md.router)
+    app.state.settings = SimpleNamespace(polymer_md_enabled=True, polymer_md_dev_enabled=False,
+        polymer_md_retention_enabled=False, polymer_md_submit_enabled=False, polymer_md_acceptance_root=str(data["root"]))
+    app.state.polymer_md_repository = SimpleNamespace(schema_ready=lambda: True)
+    async def health():
+        return {"ready": True, "runtime": data["manifest"]}
+    app.state.polymer_md_worker_client = SimpleNamespace(health=health)
+    app.state.polymer_md_analysis_client = None
+    with TestClient(app) as client:
+        status = client.get("/api/v1/polymer-md/status").json()
+    assert status["scientific_protocol"] == protocol
+    assert status["acceptance_summary"] == inspected
+    assert inspected["binding"]["scientific_protocol_sha256"] == canonical_sha256(status["scientific_protocol"])
+    assert inspected["accepted_protocols"] == ["synthetic-test-only-v1"]
+    assert cli.main(["inspect", "--registry", str(data["root"]), "--manifest", str(data["manifest_path"])]) == 0
+    assert json.loads(capsys.readouterr().out)["registry_status"] == "mismatch"
+
+    revocation = save(tmp_path / "production-synthetic-revoke.json", {"decision": "revoked",
+        "reviewer": "PRIVATE_SYNTHETIC_REVIEWER", "reviewed_at": "2026-11-02T10:00:00Z",
+        "receipt_id": approval["receipt_id"], "receipt_sha256": approval["receipt_sha256"]})
+    assert cli.main(["revoke", "--registry", str(data["root"]), "--review", str(revocation),
+        "--retention-enabled", "false"]) == 0
+    assert json.loads(capsys.readouterr().out)["written"]
+    assert acceptance_summary(str(data["root"]), data["manifest"], protocol)["registry_status"] == "revoked"
+
+
+def test_production_retention_binding_still_requires_real_review_and_evidence(synthetic):
+    data = synthetic
+    binding, _, _ = cli.binding_from_manifest(data["manifest_path"], retention_enabled=False)
+    review = deepcopy(data["review"])
+    review["binding"] = binding
+    review["decision"] = "pending"
+    save(data["review_path"], review)
+    with pytest.raises(ValueError, match="explicit approved"):
+        cli.prepare_approval(data["review_path"], data["manifest_path"], retention_enabled=False)
+    review["decision"] = "approved"
+    review["evidence"][0]["sha256"] = "f" * 64
+    save(data["review_path"], review)
+    with pytest.raises(ValueError, match="evidence bytes"):
+        cli.prepare_approval(data["review_path"], data["manifest_path"], retention_enabled=False)
+    assert not data["root"].exists()
+
+
+@pytest.mark.parametrize("invalid", ["false", None, 0])
+def test_retention_binding_requires_a_boolean_policy_in_programmatic_calls(synthetic, invalid):
+    with pytest.raises(ValueError, match="explicit boolean"):
+        cli.binding_from_manifest(synthetic["manifest_path"], retention_enabled=invalid)
+
+
 @pytest.mark.parametrize("change", ["pending", "binding", "evidence_hash", "missing_evidence", "noncanonical_scope", "unfixed_seed"])
 def test_incomplete_or_changed_review_never_publishes(synthetic, change):
     data = synthetic

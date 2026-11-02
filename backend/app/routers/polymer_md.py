@@ -22,7 +22,7 @@ from fastapi.routing import APIRoute
 from app.auth.context import current_owner_id
 from task_usage import entitlements
 from app.postgres_database import PostgresUnavailableError
-from app.services.polymer_md_repository import PolymerMdError, public_job, submit_request
+from app.services.polymer_md_repository import PolymerMdError, public_job, public_results, submit_request
 from app.services.polymer_md_acceptance_registry import acceptance_summary
 from app.services.polymer_md_analysis_client import ANALYSIS_TIMEOUT_SECONDS
 from app.services.polymer_md_logs import read_stage_logs
@@ -73,20 +73,25 @@ def _repository(request):
 def _worker(request):
     value = request.app.state.polymer_md_worker_client
     if value is None:
-        raise PolymerMdError("worker_unavailable", "开发计算服务尚未配置。", 503)
+        raise PolymerMdError("worker_unavailable", "计算服务尚未配置。", 503)
     return value
 
 
 async def _ready(request):
-    if not request.app.state.settings.polymer_md_dev_enabled:
-        raise PolymerMdError("feature_disabled", "真实聚合物 MD 尚未在开发环境启用。", 503)
+    settings = request.app.state.settings
+    if not getattr(settings, "polymer_md_enabled", getattr(settings, "polymer_md_dev_enabled", False)):
+        raise PolymerMdError("feature_disabled", "真实聚合物 MD 尚未启用。", 503)
     if not await asyncio.to_thread(_repository(request).schema_ready):
-        raise PolymerMdError("schema_not_ready", "需显式准备开发环境 0023 数据结构。", 503)
+        raise PolymerMdError("schema_not_ready", "需显式准备聚合物 MD 数据结构。", 503)
 
 
 async def _owned(request, job_id):
     await _ready(request)
     return await asyncio.to_thread(_repository(request).get_job, _job_id(job_id), owner_user_id=current_owner_id())
+
+
+def _present_job(request, job):
+    return public_job(job, retention_enabled=getattr(request.app.state.settings, "polymer_md_retention_enabled", True))
 
 
 def _kick(request):
@@ -164,8 +169,8 @@ def _admission_reason(*, enabled, schema_ready, submit_enabled, worker_ready, he
     return None if worker_ready else "worker_not_ready"
 
 
-def _scientific_protocol():
-    return {"version":1,"polymer_type":"neutral_linear_polymers_and_blends",
+def _scientific_protocol(*, retention_enabled=True):
+    protocol = {"version":1,"polymer_type":"neutral_linear_polymers_and_blends",
             "model_configuration_source":"scientific_request.model_configuration; absent uses legacy homopolymer",
             "forcefield":"scientific_request.forcefield",
             "forcefield_default":"GAFF2_mod",
@@ -191,13 +196,16 @@ def _scientific_protocol():
                   "legacy_defaults_apply":"only_when_native_configuration_is_absent",
                   "molecular_only":"selected QM targets skip polymer construction and MD"},
             "retention":{"artifact_days":7,"metadata_days":30,"clock":"server_terminal_finished_at","requires_confirmed_cleanup":True}}
+    if not retention_enabled:
+        protocol["retention"].update(enabled=False, artifact_days=None, metadata_days=None)
+    return protocol
 
 
 @router.get("/capabilities")
 @router.get("/status")
 async def capabilities(request: Request):
     settings = request.app.state.settings
-    enabled = settings.polymer_md_dev_enabled
+    enabled = getattr(settings, "polymer_md_enabled", getattr(settings, "polymer_md_dev_enabled", False))
     schema_ready = enabled and await asyncio.to_thread(_repository(request).schema_ready)
     async def execution_health():
         if not enabled or not request.app.state.polymer_md_worker_client:
@@ -225,7 +233,7 @@ async def capabilities(request: Request):
     if analysis_ready:
         analysis["status"] = "busy" if analysis_health_value.get("active", 0) else "ready"
     runtime = _public_runtime(health)
-    protocol = _scientific_protocol()
+    protocol = _scientific_protocol(retention_enabled=getattr(settings, "polymer_md_retention_enabled", True))
     acceptance = await asyncio.to_thread(acceptance_summary,
         getattr(settings, "polymer_md_acceptance_root", ""), runtime, protocol)
     admission_reason = _admission_reason(enabled=enabled, schema_ready=schema_ready,
@@ -262,7 +270,7 @@ async def create_job(request: Request, payload: ScientificRequest, idempotency_k
         raise PolymerMdError("invalid_idempotency_key", "请提供有效的幂等请求标识。", 422)
     existing=await asyncio.to_thread(_repository(request).find_idempotent_job,payload,owner_user_id=current_owner_id(),idempotency_key=idempotency_key)
     if existing is not None:
-        return {**public_job(existing),"created":False}
+        return {**_present_job(request, existing),"created":False}
     if entitlements.enabled():
         raise PolymerMdError("entitlements_unsupported", "当前额度策略下暂不能提交聚合物 MD 计算。", 503)
     health=await _worker(request).health()
@@ -270,25 +278,29 @@ async def create_job(request: Request, payload: ScientificRequest, idempotency_k
         raise PolymerMdError("worker_not_ready", "开发计算环境尚未就绪。", 503)
     job, created = await asyncio.to_thread(_repository(request).create_job, payload, owner_user_id=current_owner_id(), idempotency_key=idempotency_key)
     _kick(request)
-    return {**public_job(job), "created": created}
+    return {**_present_job(request, job), "created": created}
 
 
 @router.get("/jobs")
 async def list_jobs(request: Request, page: int = Query(1, ge=1, le=10000), page_size: int = Query(20, ge=1, le=100)):
     await _ready(request)
-    return await asyncio.to_thread(_repository(request).list_jobs, owner_user_id=current_owner_id(), page=page, page_size=page_size)
+    result = await asyncio.to_thread(_repository(request).list_jobs, owner_user_id=current_owner_id(), page=page, page_size=page_size)
+    if not getattr(request.app.state.settings, "polymer_md_retention_enabled", True):
+        result = {**result, "items": [_present_job(request, item) for item in result["items"]]}
+    return result
 
 
 @router.get("/jobs/{job_id}")
 async def get_job(request: Request, job_id: str):
-    return public_job(await _owned(request, job_id))
+    return _present_job(request, await _owned(request, job_id))
 
 
 @router.get("/jobs/{job_id}/results")
 async def get_results(request: Request, job_id: str):
     job=await _owned(request,job_id)
     return {"job_id":job["job_id"],"snapshot_revision":job["snapshot_revision"],"status":job["status"],
-            "quality_status":job["quality_status"],"results":job["results"]}
+            "quality_status":job["quality_status"],"results":public_results(job["results"],
+                retention_enabled=getattr(request.app.state.settings, "polymer_md_retention_enabled", True))}
 
 
 @router.get("/jobs/{job_id}/stages")
@@ -315,7 +327,7 @@ async def cancel_job(request: Request, job_id: str):
     await _owned(request, job_id)
     job = await asyncio.to_thread(_repository(request).request_cancel, _job_id(job_id), owner_user_id=current_owner_id())
     _kick(request)
-    return public_job(job)
+    return _present_job(request, job)
 
 
 @router.get("/jobs/{job_id}/artifacts")

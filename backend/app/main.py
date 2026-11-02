@@ -347,15 +347,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.polymer_md_download_limiter = anyio.CapacityLimiter(2)
     app.state.polymer_md_worker_client = (
         PolymerMdWorkerClient(app_settings.polymer_md_worker_uds)
-        if app_settings.polymer_md_dev_enabled and app_settings.polymer_md_worker_uds else None
+        if app_settings.polymer_md_enabled and app_settings.polymer_md_worker_uds else None
     )
     app.state.polymer_md_analysis_client = (
         PolymerMdAnalysisClient(app_settings.polymer_md_analysis_uds)
-        if app_settings.polymer_md_dev_enabled and app_settings.polymer_md_analysis_uds else None
+        if app_settings.polymer_md_enabled and app_settings.polymer_md_analysis_uds else None
     )
     app.state.polymer_md_reconciler = (
-        PolymerMdReconciler(app.state.polymer_md_repository, app.state.polymer_md_worker_client)
-        if app_settings.polymer_md_dev_enabled and app.state.polymer_md_worker_client else None
+        PolymerMdReconciler(
+            app.state.polymer_md_repository, app.state.polymer_md_worker_client,
+            retention_enabled=app_settings.polymer_md_retention_enabled,
+        )
+        if app_settings.polymer_md_enabled and app.state.polymer_md_worker_client else None
     )
     app.state.monomer_dft_validation_limiter = anyio.CapacityLimiter(
         app_settings.monomer_dft_validation_concurrency
@@ -393,6 +396,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             repository=app.state.monomer_dft_repository,
             worker=app.state.monomer_dft_worker_client,
             interval_seconds=app_settings.monomer_dft_reconcile_interval_seconds,
+            artifact_retention_enabled=app_settings.monomer_dft_artifact_retention_enabled,
             artifact_retention_days=app_settings.monomer_dft_artifact_retention_days,
         )
         app.state.monomer_dft_readiness_controller = MonomerDftReadinessController(
@@ -715,7 +719,7 @@ def _run_database_startup_preflight(api_app: FastAPI, *, required: bool) -> None
             schema_target=SCHEMA_TARGET_CURRENT_ISOLATION,
         )
         errors = preflight_blockers(report)
-        if (getattr(api_app.state.settings, "polymer_md_dev_enabled", False)
+        if (getattr(api_app.state.settings, "polymer_md_enabled", getattr(api_app.state.settings, "polymer_md_dev_enabled", False))
                 and report.get("schema_target") not in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE}):
             errors.append("Polymer MD requires a validated current 0023/0024 migration boundary")
         api_app.state.auth.assert_application_ready()
@@ -725,7 +729,7 @@ def _run_database_startup_preflight(api_app: FastAPI, *, required: bool) -> None
     if not errors:
         return
     message = "Backend database preflight failed: " + "; ".join(errors)
-    if required or getattr(api_app.state.settings, "polymer_md_dev_enabled", False):
+    if required or getattr(api_app.state.settings, "polymer_md_enabled", getattr(api_app.state.settings, "polymer_md_dev_enabled", False)):
         raise RuntimeError(message)
     logger.warning(message)
 

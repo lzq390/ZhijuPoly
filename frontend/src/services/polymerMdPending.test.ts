@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PolymerMdRequest, PolymerMdModelConfiguration } from "../types/polymerMd";
 import { POLYMER_MD_DEFAULTS } from "../components/polymer-md/config";
 import { defaultPolymerMdUserConfiguration, mapPolymerMdUserConfiguration } from "../components/polymer-md/userConfiguration";
@@ -16,6 +16,20 @@ function nativeRequest(): PolymerMdRequest {
 }
 
 describe("durable native polymer submissions", () => {
+  it("persists a submission on HTTP without the secure-context randomUUID API", () => {
+    const getRandomValues = crypto.getRandomValues.bind(crypto);
+    vi.stubGlobal("crypto", { getRandomValues });
+    try {
+      expect(crypto.randomUUID).toBeUndefined();
+      const request = nativeRequest();
+      const pending = createPolymerMdPending(request);
+      expect(pending.key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(readPolymerMdPending()).toEqual(pending);
+      expect(readPolymerMdPending()?.request).toEqual(request);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("stores and restores all five forcefields with exact native methods and property subsets", () => {
     for (const forcefield of POLYMER_MD_FORCEFIELDS) {
       const request = { ...nativeRequest(), forcefield };

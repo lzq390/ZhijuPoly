@@ -24,7 +24,10 @@ from app.auth.cutover import apply_identity_cutover, private_data_seal, auth_met
 from app.auth.middleware import AuthenticationMiddleware
 from app.auth.router import router
 from app.auth.service import AuthService, csrf_token
-from app.auth.settings import AuthSettings, ISOLATED_AB_COOKIE_NAME, IsolatedABSessionPolicy
+from app.auth.settings import (
+    AuthSettings, ISOLATED_AB_COOKIE_NAME, IsolatedABSessionPolicy,
+    PRODUCTION_HTTP_COOKIE_NAME, PRODUCTION_HTTP_ORIGIN,
+)
 from app.postgres_database import postgres_connection
 from app.postgres_migrations import apply_postgres_migrations
 from app.task_control import authorize_start
@@ -118,6 +121,40 @@ def activate(client,user):
     login(client,user)
     assert client.post('/api/v1/auth/password',json={'current_password':'initial-test-password','new_password':'changed-test-password'}).status_code == 204
     return login(client,user,'changed-test-password')
+
+
+def test_production_http_entry_preserves_native_owner_and_revocation(auth_app):
+    app, user, _ = auth_app
+    app.state.auth.settings = replace(app.state.auth.settings,
+        runtime_environment='prod', cookie_name=PRODUCTION_HTTP_COOKIE_NAME,
+        allowed_origins=(PRODUCTION_HTTP_ORIGIN,), production_http_enabled=True)
+    with TestClient(app, base_url=PRODUCTION_HTTP_ORIGIN) as client:
+        def sign_in(password):
+            response = client.post('/api/v1/auth/login',
+                json={'username': user['username'], 'password': password},
+                headers={'Origin': PRODUCTION_HTTP_ORIGIN})
+            assert response.status_code == 200
+            session = response.json()
+            client.headers.update({'Origin': PRODUCTION_HTTP_ORIGIN,
+                'X-Session-Context': session['session_id'], 'X-CSRF-Token': session['csrf_token']})
+            return session
+
+        sign_in('initial-test-password')
+        assert client.post('/api/v1/auth/password', json={
+            'current_password': 'initial-test-password', 'new_password': 'changed-test-password'}).status_code == 204
+        assert client.get('/api/v1/private').status_code == 401
+        session = sign_in('changed-test-password')
+        response = client.get('/api/v1/private')
+        assert response.status_code == 200
+        assert response.json() == {'owner': str(user['user_id']), 'rows': 0}
+        assert client.post('/api/v1/upload', json={}, headers={
+            'Origin': 'http://114.214.255.154:9001'}).status_code == 403
+        assert client.post('/api/v1/upload', json={}, headers={'X-CSRF-Token': 'wrong'}).status_code == 403
+        assert not app.state.parsed
+        assert client.post('/api/v1/auth/logout').status_code == 204
+        assert client.get('/api/v1/private').status_code == 401
+        assert client.get('/api/v1/auth/session').json()['authenticated'] is False
+        assert session['user']['id'] == str(user['user_id'])
 
 
 def test_guest_rejected_before_body_parse(auth_app):

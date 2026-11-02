@@ -33,7 +33,7 @@ NOW = datetime(2026, 10, 16, 3, 0, tzinfo=timezone.utc)
 def clean_public_auth_parameters(monkeypatch):
     for key in ('AUTH_COOKIE_SECURE', 'AUTH_COOKIE_NAME', 'AUTH_DEV_HTTP_ORIGINS',
                 'AUTH_ISOLATED_AB_SESSION_POLICY', 'AUTH_POSTGRES_DSN', 'APP_SERVICE_POSTGRES_DSN',
-                'FORWARDED_ALLOW_IPS'):
+                'AUTH_PROD_HTTP_ENABLED', 'FORWARDED_ALLOW_IPS'):
         monkeypatch.delenv(key, raising=False)
 
 

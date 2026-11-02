@@ -92,6 +92,7 @@ async def create_fenced_subprocess_exec(
                 # before the Broker has registered this exact host PID.
                 sys.executable,
                 "-I",
+                "-B",
                 "-S",
                 str(exec_gate),
                 "--",

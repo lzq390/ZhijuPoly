@@ -1,4 +1,5 @@
 import { getSession, sessionIsReady } from "../auth/session";
+import { randomId } from "../auth/randomId";
 import type { PolymerMdRequest } from "../types/polymerMd";
 import { POLYMER_MD_API_BASE } from "./polymerMdApi";
 import { POLYMER_MD_FORCEFIELDS, validPolymerMdNativeConfiguration, validPolymerMdModelRequest, validPolymerMdPostEquilibriumRequest } from "./polymerMdNativeConfiguration";
@@ -84,7 +85,7 @@ export function writePolymerMdPending(value: PolymerMdPendingSubmission) {
 }
 export function createPolymerMdPending(request: PolymerMdRequest): PolymerMdPendingSubmission {
   if (!validRequest(request)) throw new Error("提交配置不符合当前原生选项，请核对配置后重试。");
-  const value: PolymerMdPendingSubmission = { version: 1, scope: scope(), request: JSON.parse(JSON.stringify(request)) as PolymerMdRequest, key: crypto.randomUUID(), createdAt: Date.now(), conflict: false };
+  const value: PolymerMdPendingSubmission = { version: 1, scope: scope(), request: JSON.parse(JSON.stringify(request)) as PolymerMdRequest, key: randomId(), createdAt: Date.now(), conflict: false };
   writePolymerMdPending(value);
   return value;
 }
