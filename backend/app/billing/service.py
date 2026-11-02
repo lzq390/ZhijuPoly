@@ -171,4 +171,3 @@ class BillingService:
         payment = self.gateway.verify_notification(provider, headers, body)
         if payment["status"] == "paid":
             self.repository.fulfill(payment)
-

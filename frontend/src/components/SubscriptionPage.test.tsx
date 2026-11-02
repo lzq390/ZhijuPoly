@@ -129,3 +129,47 @@ it("does not expose the simulation QR or confirmation link after expiry", async 
   await screen.findByText("模拟订单已过期，请读取订单确认状态。");
   expect(screen.queryByRole("img")).toBeNull(); expect(screen.queryByRole("link")).toBeNull(); expect(mocks.simulate).not.toHaveBeenCalled();
 });
+
+it.each([
+  ["wechat", "paid"], ["alipay", "paid"], ["wechat", "closed"], ["alipay", "closed"]
+] as const)("retires a completed %s purchase key restored as %s before starting a new purchase", async (provider, status) => {
+  const storageKey = `nexpoly.billing.purchase.user-a.${provider}`;
+  const otherProvider = provider === "wechat" ? "alipay" : "wechat";
+  const otherKey = `nexpoly.billing.purchase.user-a.${otherProvider}`;
+  sessionStorage.setItem(storageKey, JSON.stringify({ key: "previous-request", orderId: pending.id }));
+  sessionStorage.setItem(otherKey, JSON.stringify({ key: "another-request", orderId: "unconfirmed-order" }));
+  mocks.plans.mockResolvedValue({ enabled: true, simulation: false, monthly_price_fen: 9900, providers: [provider], registration_enabled: true });
+  mocks.orders.mockResolvedValue([{ ...pending, provider, status }]);
+  mocks.create.mockResolvedValue({ ...pending, id: "new-order", provider });
+  if (status === "paid") mocks.subscription.mockResolvedValue({ ...subscription, account_type: "member", source: "subscription", expires_at: "2027-01-01T00:00:00Z" });
+  render(<SubscriptionPage />);
+  fireEvent.click(await screen.findByRole("button", { name: status === "paid" ? "续费一个月" : "开通一个月" }));
+  await screen.findByRole("heading", { name: "等待支付" });
+  expect(mocks.create).toHaveBeenCalledOnce();
+  expect(mocks.create.mock.calls[0][1]).not.toBe("previous-request");
+  expect(JSON.parse(sessionStorage.getItem(storageKey)!).orderId).toBe("new-order");
+  expect(JSON.parse(sessionStorage.getItem(otherKey)!)).toEqual({ key: "another-request", orderId: "unconfirmed-order" });
+});
+
+it("retires only terminal keys while preserving pending and uncertain purchases on restore", async () => {
+  sessionStorage.setItem("nexpoly.billing.purchase.user-a.wechat", JSON.stringify({ key: "pending-key", orderId: pending.id }));
+  sessionStorage.setItem("nexpoly.billing.purchase.user-a.alipay", JSON.stringify({ key: "uncertain-key" }));
+  mocks.orders.mockResolvedValue([pending, { ...pending, id: "other-completed", provider: "alipay", status: "paid" }]);
+  render(<SubscriptionPage />);
+  await screen.findByRole("heading", { name: "等待支付" });
+  expect(JSON.parse(sessionStorage.getItem("nexpoly.billing.purchase.user-a.wechat")!)).toEqual({ key: "pending-key", orderId: pending.id });
+  expect(JSON.parse(sessionStorage.getItem("nexpoly.billing.purchase.user-a.alipay")!)).toEqual({ key: "uncertain-key" });
+  expect(mocks.create).not.toHaveBeenCalled();
+});
+
+it("recovers each channel independently when another channel has an uncertain request", async () => {
+  sessionStorage.setItem("nexpoly.billing.purchase.user-a.wechat", JSON.stringify({ key: "uncertain-wechat" }));
+  sessionStorage.setItem("nexpoly.billing.purchase.user-a.alipay", JSON.stringify({ key: "completed-alipay", orderId: "paid-alipay" }));
+  mocks.orders.mockResolvedValue([{ ...pending, id: "paid-alipay", provider: "alipay", status: "paid" }]);
+  render(<SubscriptionPage />);
+  await screen.findByRole("button", { name: "确认原订单" });
+  expect(JSON.parse(sessionStorage.getItem("nexpoly.billing.purchase.user-a.wechat")!)).toEqual({ key: "uncertain-wechat" });
+  expect(sessionStorage.getItem("nexpoly.billing.purchase.user-a.alipay")).toBeNull();
+  expect((screen.getByRole("radio", { name: "微信支付" }) as HTMLInputElement).checked).toBe(true);
+  expect(mocks.create).not.toHaveBeenCalled();
+});

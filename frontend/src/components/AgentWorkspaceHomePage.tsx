@@ -12,10 +12,9 @@ const researchPrompts = [
   { title: "结构与设计", icon: Atom, prompt: "设计耐高温聚合物时，可以从哪些结构特征入手？" }
 ];
 
-function GuestConversation() {
+function GuestConversation({ draft, setDraft }: { draft: string; setDraft: (value: string) => void }) {
   const ordinaryAccount = useAuth()?.session?.account_type === "free";
   const [tab, setTab] = useState<"chat" | "skills">("chat");
-  const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const id = useId();
@@ -97,37 +96,77 @@ type AgentWorkspaceHomePageProps = {
   reloadKey?: number;
 };
 
-export function AgentWorkspaceHomePage({
-  iframeRef,
-  onLoad,
-  src = agentWorkspaceUrl(),
-  reloadKey = 0
-}: AgentWorkspaceHomePageProps) {
-  const auth = useAuth();
-  if (isLocalOnly(auth)) {
-    return <GuestConversation />;
-  }
-  const workspaceUrl = resolveAgentWorkspaceUrl(src);
-  if (!workspaceUrl) {
-    return (
-      <div
-        role="status"
-        aria-live="polite"
-        className="flex h-full w-full items-center justify-center bg-white text-sm text-slate-500"
-      >
-        正在同步
-      </div>
-    );
+function PreservedQuestion({ draft, onClear }: { draft: string; onClear: () => void }) {
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [copyStatus, setCopyStatus] = useState("");
+
+  async function copyDraft() {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(draft);
+        setCopyStatus("已复制，可粘贴到对话输入框。");
+        return;
+      } catch { /* Plain HTTP and browser permissions may prevent clipboard access. */ }
+    }
+    inputRef.current?.focus();
+    inputRef.current?.select();
+    setCopyStatus("已选中草稿，请手动复制后粘贴到对话输入框。");
   }
 
   return (
-    <iframe
-      key={reloadKey}
-      ref={iframeRef}
-      onLoad={onLoad}
-      title="智聚万物智能体工作台"
-      src={workspaceUrl}
-      className="block h-full w-full border-0 bg-white"
-    />
+    <aside className="np-preserved-question" aria-label="保留的问题草稿">
+      <details open>
+        <summary>已保留升级前的问题草稿</summary>
+        <p>复制后粘贴到下方对话输入框，草稿不会自动发送。</p>
+        <textarea ref={inputRef} aria-label="保留的问题草稿" value={draft} readOnly rows={2} />
+        <div className="np-preserved-question__actions">
+          <button type="button" onClick={() => { void copyDraft(); }}>复制草稿</button>
+          <button type="button" onClick={onClear}>清除草稿</button>
+          <span role="status">{copyStatus}</span>
+        </div>
+      </details>
+    </aside>
   );
+}
+
+function IdentityWorkspace({
+  iframeRef,
+  onLoad,
+  src = agentWorkspaceUrl(),
+  reloadKey = 0,
+  localOnly
+}: AgentWorkspaceHomePageProps & { localOnly: boolean }) {
+  const [draft, setDraft] = useState("");
+  if (localOnly) {
+    return <GuestConversation draft={draft} setDraft={setDraft} />;
+  }
+  const workspaceUrl = resolveAgentWorkspaceUrl(src);
+
+  return (
+    <div className="np-member-conversation">
+      {draft && <PreservedQuestion draft={draft} onClear={() => setDraft("")} />}
+      {workspaceUrl ? <iframe
+        key={reloadKey}
+        ref={iframeRef}
+        onLoad={onLoad}
+        title="智聚万物智能体工作台"
+        src={workspaceUrl}
+        className="np-member-conversation__workspace block w-full border-0 bg-white"
+      /> :
+      <div
+        role="status"
+        aria-live="polite"
+        className="np-member-conversation__workspace flex w-full items-center justify-center bg-white text-sm text-slate-500"
+      >
+        正在同步
+      </div>}
+    </div>
+  );
+}
+
+export function AgentWorkspaceHomePage(props: AgentWorkspaceHomePageProps) {
+  const auth = useAuth();
+  // Membership refresh keeps this key; logout or another identity discards its draft.
+  const identity = auth?.session?.user ? `${auth.session.user.id}:${auth.session.session_id}` : "guest";
+  return <IdentityWorkspace key={identity} {...props} localOnly={isLocalOnly(auth)} />;
 }

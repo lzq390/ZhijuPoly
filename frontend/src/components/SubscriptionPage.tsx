@@ -61,12 +61,21 @@ function SubscriptionContent({ onReturn }: { onReturn?: () => void }) {
         if (nextSubscription) clockOffset.current = new Date(nextSubscription.server_time).getTime() - Date.now();
         if (nextPlans) setProvider(current => nextPlans.providers.includes(current) ? current : nextPlans.providers[0] ?? "wechat");
         if (signedIn) {
+          let restoredUncertainProvider: PaymentProvider | null = null;
           for (const value of ["wechat", "alipay"] as const) {
             try {
-              const saved = JSON.parse(sessionStorage.getItem(`nexpoly.billing.purchase.${auth!.session.user!.id}.${value}`) ?? "null");
-              if (saved?.key && !saved.orderId) { setUncertainProvider(value); setProvider(value); break; }
+              const storageKey = `nexpoly.billing.purchase.${auth!.session.user!.id}.${value}`;
+              const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? "null");
+              // A phone payment or expiry may finish while this page is closed.
+              // Retire only the exact order confirmed terminal by this owner read.
+              if (saved?.orderId && nextOrders?.some(item => item.id === saved.orderId && item.provider === value && item.status !== "pending")) {
+                sessionStorage.removeItem(storageKey);
+                continue;
+              }
+              if (saved?.key && !saved.orderId && !restoredUncertainProvider) restoredUncertainProvider = value;
             } catch { /* New purchases fail before dispatch if safe persistence is unavailable. */ }
           }
+          if (restoredUncertainProvider) { setUncertainProvider(restoredUncertainProvider); setProvider(restoredUncertainProvider); }
         }
         if (nextOrders) {
           setOrders(nextOrders);
