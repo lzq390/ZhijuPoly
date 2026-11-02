@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../auth/access";
 import { useAuth } from "../auth/AuthProvider";
 import { requestServiceAccess } from "../auth/guestAccess";
 import { createPrivateObjectURL, revokePrivateObjectURL } from "../auth/objectUrls";
@@ -351,7 +352,7 @@ function loadConsent(): "unknown" | "granted" | "denied" {
 }
 
 export function useTgAssistant() {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const identityEpoch = useRef(getSessionEpoch());
   const [initial] = useState(loadSession);
   const [initialImagePreviewSessionId] = useState(loadImagePreviewSessionId);

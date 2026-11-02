@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../auth/access";
 import { useStructureImport } from "../structure-library/StructureLibraryProvider";
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { useAuth } from "../auth/AuthProvider";
@@ -91,7 +92,7 @@ export function MonomerRetrosynthesisPage({ structure, onEditStructure, initialI
         <main className="np-sw-workspace">
           <div className="np-mr-content">
             {selection.source && <small>来自：{selection.source}</small>}
-            <MonomerRetrosynthesisForm form={form} guest={auth ? auth.status === "guest" : !getSession().authenticated}
+            <MonomerRetrosynthesisForm form={form} guest={auth ? isLocalOnly(auth) : !getSession().authenticated || getSession().account_type === "free"}
               loading={retro.loading} importing={importing} targetRef={targetRef}
               targetError={attempted ? targetError : null} countError={attempted ? countError : null} notice={notice}
               onChange={updateForm} onImport={importSharedStructure} onSubmit={submit} onEdit={() => {

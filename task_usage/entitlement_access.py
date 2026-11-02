@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import UUID
 from psycopg.rows import dict_row
 from task_usage.entitlements import MIGRATION_VERSION, EntitlementPolicyError
+from task_usage.billing_contract import BILLING_VERSION, BILLING_CHECKSUM
 
 def release_contract():
     path=Path(__file__).with_name("entitlement_release.json")
@@ -28,7 +29,8 @@ LITERATURE_MIGRATION = {"version": "0024_literature_projection", "checksum": "2a
 def accepted_release_ledgers():
     base = release_contract()["ledger"]
     polymer = [*base, dict(OPTIONAL_MIGRATION)]
-    return [base, polymer, [*polymer, dict(LITERATURE_MIGRATION)]]
+    literature = [*polymer, dict(LITERATURE_MIGRATION)]
+    return [base, polymer, literature, [*literature, {"version": BILLING_VERSION, "checksum": BILLING_CHECKSUM}]]
 
 
 def resolve_access_tier(connection,*,owner_user_id):
@@ -48,6 +50,25 @@ def resolve_access_tier(connection,*,owner_user_id):
             return "member"  # Preserve pre-cutover authentication initialization.
         if ledger not in accepted_release_ledgers():
             raise EntitlementPolicyError("Access tiers require the exact release-known migration ledger")
+        if ledger[-1]["version"] == BILLING_VERSION:
+            # Authority is evaluated on every HTTP admission and first start;
+            # expiration does not depend on a scheduler or the collection flag.
+            cursor.execute("""SELECT count(*) AS n,bool_and(c.relkind='r' AND c.relrowsecurity AND c.relforcerowsecurity) AS protected
+                FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                WHERE n.nspname='billing' AND c.relname IN ('accounts','subscriptions')""")
+            schema = cursor.fetchone()
+            if schema["n"] != 2 or not schema["protected"]:
+                raise EntitlementPolicyError("Membership access-tier isolation is invalid")
+            cursor.execute("""SELECT CASE WHEN a.override_tier IS NOT NULL THEN a.override_tier
+                  WHEN a.legacy_member OR s.paid_through>clock_timestamp() THEN 'member' ELSE 'free' END AS tier
+                FROM billing.accounts a LEFT JOIN billing.subscriptions s USING(owner_user_id)
+                WHERE a.owner_user_id=%s""", (owner,))
+            row = cursor.fetchone()
+            if row is None:
+                return "free"
+            if row["tier"] not in {"member", "free"}:
+                raise EntitlementPolicyError("Unrecognized membership access tier")
+            return row["tier"]
         cursor.execute("SELECT relkind,relrowsecurity,relforcerowsecurity FROM pg_class WHERE oid=%s::regclass",("usage_entitlements.owner_entitlements",))
         table=cursor.fetchone()
         if table is None or table["relkind"]!="r" or not table["relrowsecurity"] or not table["relforcerowsecurity"]:

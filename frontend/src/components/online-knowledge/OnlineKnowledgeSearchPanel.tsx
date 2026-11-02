@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../../auth/access";
 import { useAuth } from "../../auth/AuthProvider";
 import { requestServiceAccess } from "../../auth/guestAccess";
 import { createPrivateObjectURL, revokePrivateObjectURL } from "../../auth/objectUrls";
@@ -262,7 +263,7 @@ function OnlineProgress({ state }: { state: ReturnType<typeof useOnlineKnowledge
 }
 
 export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigation, toolbarActions }: OnlineKnowledgeSearchPanelProps) {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const searchState = useOnlineKnowledgeSearch();
   const [material, setMaterial] = useState(initialMaterial.trim());
   const [mode, setMode] = useState<OnlineKnowledgeMode>("property");

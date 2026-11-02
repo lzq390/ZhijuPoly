@@ -15,7 +15,8 @@ from psycopg.rows import dict_row
 from app.migration_policy import validate_migration_manifest_entries
 from app.postgres_migrations import MIGRATIONS_DIR
 from app.literature_contract import optional_literature_tables
-from .isolation_ledger import (CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, expected_isolation_ledger, validate_service_members, validate_application_migration_ledger)
+from app.billing_contract import optional_billing_tables
+from .isolation_ledger import (CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION, expected_isolation_ledger, validate_service_members, validate_application_migration_ledger)
 
 VERSION = '0018_user_isolation_cutover'
 TABLES = ('online_knowledge.history','online_knowledge.jobs','md.monomer_md_jobs',
@@ -33,7 +34,7 @@ def backup_tables(connection):
     # Preserve old receipts while including every new private record after 0020.
     present = connection.execute("SELECT to_regclass('structure_library.records') IS NOT NULL AS present").fetchone()["present"]
     return (*BACKUP_TABLES, *(("structure_library.records",) if present else ()), *optional_polymer_tables(connection),
-            *optional_literature_tables(connection))
+            *optional_literature_tables(connection), *optional_billing_tables(connection))
 
 
 def backup_state_seal(connection):
@@ -101,7 +102,7 @@ def apply_identity_cutover(dsn: str, owner_user_id: str, *, expected_business_da
         connection.execute("SET LOCAL statement_timeout='10min'")
         connection.execute("SELECT pg_advisory_xact_lock(hashtextextended('nexpoly-identity-cutover',0))")
         rows = [dict(row) for row in connection.execute('SELECT version,checksum FROM governance.schema_migrations ORDER BY version')]
-        if rows in tuple(expected_isolation_ledger(boundary) for boundary in (CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION)):
+        if rows in tuple(expected_isolation_ledger(boundary) for boundary in (CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION)):
             # Do not run historical 0018 grants or read any data seal on 0019.
             from .schema import validate_isolation_schema
             boundary = rows[-1]["version"]

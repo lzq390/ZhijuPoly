@@ -179,8 +179,10 @@ def apply_literature_dev_migration(dsn: str, *, environment: str, backup_receipt
     directory = migrations_dir or MIGRATIONS_DIR
     entries = validate_migration_manifest_entries(directory)
     canonical = registered_literature_ledger()
+    from app.billing_contract import registered_billing_ledger
+    release_ledger = [{"version": entry.version, "checksum": entry.checksum} for entry in entries]
     if (expected_isolation_ledger(LITERATURE_MIGRATION) != canonical
-            or [{"version": entry.version, "checksum": entry.checksum} for entry in entries] != canonical):
+            or release_ledger not in (canonical, registered_billing_ledger())):
         raise ValueError("Maintenance requires the complete canonical release manifest")
     required = {POLYMER_VERSION: (8, CHECKSUM), LITERATURE_MIGRATION: (9, LITERATURE_MIGRATION_SHA256)}
     sources = {}

@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../auth/access";
 import { useAuth } from "../auth/AuthProvider";
 import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
@@ -76,7 +77,7 @@ export const ConditionalGenerationPage = forwardRef<
   StructureCanvasOwnerHandle,
   ConditionalGenerationPageProps
 >(function ConditionalGenerationPage({ structure }, forwardedRef) {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const generation = useConditionalGeneration();
   const {
     serviceStatus,

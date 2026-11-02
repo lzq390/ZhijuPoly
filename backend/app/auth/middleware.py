@@ -31,6 +31,12 @@ class AuthenticationMiddleware:
         policy = route_policy(path, method)
         if method == 'OPTIONS':
             return await self.app(scope, receive, send)
+        if policy == 'payment_webhook':
+            # Exact provider endpoints authenticate their raw body cryptographically.
+            # They carry no browser session and still pass through drain admission.
+            scope.setdefault('state', {})['auth_session'] = None
+            scope['state']['auth_token'] = None
+            return await self.app(scope, receive, send)
         if policy == 'internal':
             if path.startswith(('/internal/monomer-dft/', '/internal/polymer-md/')):
                 token_setting = 'polymer_md_start_authorization_token' if path.startswith('/internal/polymer-md/') else 'monomer_dft_start_authorization_token'

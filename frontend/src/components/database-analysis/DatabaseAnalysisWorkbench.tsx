@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../../auth/access";
 import { useAuth } from "../../auth/AuthProvider";
 import { requestServiceAccess } from "../../auth/guestAccess";
 import { BrowsingRecordingControls } from "../browsing-recording/BrowsingRecording";
@@ -260,7 +261,7 @@ function focusableElements(container: HTMLElement) {
 }
 
 export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const summaryState = useDatasetSummary(!guest);
   const analyticsState = useDatabaseAnalytics(!guest);
   const [datasetPopoverOpen, setDatasetPopoverOpen] = useState(false);

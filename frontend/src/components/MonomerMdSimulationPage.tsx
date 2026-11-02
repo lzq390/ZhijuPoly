@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../auth/access";
 import { getSessionEpoch } from "../auth/session";
 import { useAuth } from "../auth/AuthProvider";
 import { requestServiceAccess } from "../auth/guestAccess";
@@ -99,7 +100,7 @@ export function MonomerMdSimulationPage({
   onJobIdChange,
   onEditStructure
 }: MonomerMdSimulationPageProps) {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const identityEpoch = useRef(getSessionEpoch());
   const saveMonomerMdSession = (...args: Parameters<typeof persistPrivateDraft>) => {
     if (identityEpoch.current === getSessionEpoch()) persistPrivateDraft(...args);

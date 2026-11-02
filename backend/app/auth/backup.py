@@ -16,7 +16,7 @@ from psycopg.rows import dict_row
 from .cutover import private_data_seal, auth_metadata_seal, backup_state_seal
 from .assets import archive_assets, file_sha256
 from .isolation_ledger import (PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, LIBRARY_VERSION,
-                               USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, validate_application_migration_ledger,
+                               USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION, validate_application_migration_ledger,
                                validate_service_migration_ledger, validate_service_members)
 from .usage_backup import usage_backup_seal
 from .entitlement_backup import entitlement_backup_seal
@@ -25,28 +25,31 @@ from .entitlement_backup import entitlement_backup_seal
 def validate_backup_schema(connection):
     row = connection.execute("SELECT max(version) AS version FROM governance.schema_migrations").fetchone()
     version = row["version"]
-    if version not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION}:
-        raise ValueError("Identity backup requires exact release-known 0017/0018/0019/0020/0021/0022/0023/0024 boundary")
-    ledger = (validate_application_migration_ledger(connection, require_usage=True, require_entitlements=version in {ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION})
-              if version in {USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION} else validate_service_migration_ledger(connection, version))
+    if version not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION}:
+        raise ValueError("Identity backup requires exact release-known 0017/0018/0019/0020/0021/0022/0023/0024/0025 boundary")
+    ledger = (validate_application_migration_ledger(connection, require_usage=True, require_entitlements=version in {ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION})
+              if version in {USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION} else validate_service_migration_ledger(connection, version))
     if version != PREPARE_VERSION:
         from .schema import validate_isolation_schema
         validate_isolation_schema(connection, version)
-    current = version in {CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION}
+    current = version in {CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION}
     privileges = validate_service_members(connection) if current else None
     result = {"migration_ledger": ledger, "current_readiness": current,
               "service_auth_privileges": privileges}
-    if version in {USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION}:
+    if version in {USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION}:
         result["usage_schema"] = {"version": USAGE_VERSION, "validated": True}
-    if version in {ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION}:
+    if version in {ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION}:
         result["entitlement_schema"] = {"version": ENTITLEMENT_VERSION, "validated": True}
-    if version in {POLYMER_VERSION, LITERATURE_VERSION}:
+    if version in {POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION}:
         result["polymer_md_schema"] = {"version": POLYMER_VERSION, "validated": True}
-    if version == LITERATURE_VERSION:
+    if version in {LITERATURE_VERSION, BILLING_VERSION}:
         from app.literature_contract import optional_literature_tables
         if not optional_literature_tables(connection):
             raise ValueError("Literature backup requires its complete registered table set")
         result["literature_schema"] = {"version": LITERATURE_VERSION, "validated": True}
+    if version == BILLING_VERSION:
+        from app.services.billing_schema import validate_billing_schema
+        result["billing_schema"] = validate_billing_schema(connection)
     return result
 
 

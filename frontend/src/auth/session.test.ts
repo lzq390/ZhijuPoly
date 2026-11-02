@@ -7,6 +7,20 @@ function account(id: string): AuthSession {
 function switchTo(id: string) { retireSession(); installSession(account(id)); observeUsageEnabled({enabled:false}); }
 afterEach(() => vi.unstubAllGlobals());
 describe("browser account fence", () => {
+  it("lets ordinary accounts manage their subscription while rejecting member services", async () => {
+    retireSession(); installSession({ ...account("ordinary"), account_type: "free" });
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response("{}"))); vi.stubGlobal("fetch", fetch);
+    await privateFetch("/api/v1/billing/subscription");
+    await privateFetch("/api/v1/billing/orders", { method: "POST", body: "{}" });
+    await privateFetch("/api/v1/billing/orders/own-order");
+    await privateFetch("/api/v1/billing/orders/own-order/simulate-payment", { method: "POST" });
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(fetch.mock.calls[3][1].headers.get("X-CSRF-Token")).toBe("csrf-ordinary");
+    await expect(privateFetch("/api/v1/predict", { method: "POST" })).rejects.toMatchObject({ code: "membership_required" });
+    await expect(privateFetch("/api/v1/billing/admin" )).rejects.toMatchObject({ code: "membership_required" });
+    await expect(privateFetch("/api/v1/billing/orders/own-order/refund", { method: "POST" })).rejects.toMatchObject({ code: "membership_required" });
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
   it("rejects guest requests before the transport is invoked", async () => {
     retireSession(); installSession(GUEST_SESSION); const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
     await expect(privateFetch("/api/v1/predict", { method: "POST" })).rejects.toThrow("请登录账号。");

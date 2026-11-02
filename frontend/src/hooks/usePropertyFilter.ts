@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../auth/access";
 import { useAuth } from "../auth/AuthProvider";
 import { requestServiceAccess } from "../auth/guestAccess";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -150,7 +151,7 @@ function optionsCatalogRevision(cache: { etag: string | null; cachedAt: number }
 }
 
 export function usePropertyFilter() {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const recording = useKnowledgeRecording();
   const track = recording?.track;
   const isRecording = recording?.isRecording;

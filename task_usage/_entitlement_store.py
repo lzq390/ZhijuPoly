@@ -130,7 +130,17 @@ def set_owner_tier(connection,*,owner_user_id,tier):
     row=_one(connection,"""INSERT INTO usage_entitlements.owner_entitlements(owner_user_id,tier)
       VALUES(%s,%s) ON CONFLICT(owner_user_id) DO UPDATE SET tier=EXCLUDED.tier,updated_at=clock_timestamp()
       WHERE usage_entitlements.owner_entitlements.tier<>EXCLUDED.tier RETURNING tier""",(owner,tier))
-    return {"changed":row is not None,"tier":tier}
+    billing = _one(connection,"SELECT to_regclass('billing.accounts') IS NOT NULL AS present")
+    override = None
+    if billing["present"]:
+        # Explicit administrator decisions remain authoritative over purchased
+        # access, including repeating set-free after a formerly free user paid.
+        from task_usage.entitlement_access import resolve_access_tier
+        resolve_access_tier(connection, owner_user_id=owner)  # exact release validation
+        override = _one(connection,"""INSERT INTO billing.accounts(owner_user_id,override_tier)
+            VALUES(%s,%s) ON CONFLICT(owner_user_id) DO UPDATE SET override_tier=EXCLUDED.override_tier,updated_at=clock_timestamp()
+            WHERE billing.accounts.override_tier IS DISTINCT FROM EXCLUDED.override_tier RETURNING owner_user_id""", (owner,tier))
+    return {"changed":row is not None or override is not None,"tier":tier}
 
 def lookup(connection,*,owner_user_id,module,idempotency_key,request_fingerprint):
     owner,key_hash=_identity(owner_user_id,module,idempotency_key,request_fingerprint)
