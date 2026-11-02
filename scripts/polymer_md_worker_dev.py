@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import socket
 import stat
@@ -103,7 +104,11 @@ def load_configuration(path, *, _production=False):
             owned(directory, 0o700, directory=True)
     else:
         reject_production_from_dev(runtime)
-    legacy = Path.home() / ".local/share/nexpoly/polymer-md-dev"
+    # Production deliberately gives its process an isolated HOME inside this
+    # runtime. Legacy separation must use the account's real home, otherwise
+    # the derived legacy path would always be a child of the new runtime.
+    legacy_home = Path(pwd.getpwuid(os.getuid()).pw_dir) if _production else Path.home()
+    legacy = legacy_home / ".local/share/nexpoly/polymer-md-dev"
     if (runtime.is_relative_to(ROOT) or ROOT.is_relative_to(runtime)
             or runtime.is_relative_to(legacy) or legacy.is_relative_to(runtime)
             or runtime.is_relative_to(release) or release.is_relative_to(runtime)):

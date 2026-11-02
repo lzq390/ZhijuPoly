@@ -110,6 +110,14 @@ def test_production_worker_binds_operation_source_frozen_release_and_read_only_e
         worker.load_configuration(path)
 
 
+def test_production_configuration_can_be_reloaded_after_home_is_isolated(deployment, monkeypatch):
+    path, values, _ = deployment
+    config = worker.load_configuration(path, _production=True)
+    monkeypatch.setenv("HOME", worker.clean_environment(config)["HOME"])
+    reloaded = worker.load_configuration(path, _production=True)
+    assert reloaded.values == values
+
+
 @pytest.mark.parametrize("field,value", [("source_sha", "abc123"), ("environment", "dev"),
     ("operation_id", "other-operation"), ("operation_id", True), ("source_sha", True),
     ("socket_root", "/tmp/shared"), ("job_root", "/tmp/old-jobs")])

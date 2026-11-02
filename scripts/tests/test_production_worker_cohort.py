@@ -233,6 +233,43 @@ def test_sealed_build_proxy_only_reaches_real_hash_locked_pip_downloads(monkeypa
     assert builder.validate_build_proxy('http://[::1]:17891') == 'http://[::1]:17891'
 
 
+@pytest.mark.parametrize('unsafe', [None, 'symlink', 'hardlink', 'foreign-operation'])
+def test_candidate_venv_only_normalizes_new_owned_activation_outputs(tmp_path, monkeypatch, unsafe):
+    operation = 'p9000-20261102r'
+    runtime = tmp_path / 'md-runtime'
+    venv = runtime / 'worker-venvs/md-a/venv'
+    (venv / 'bin').mkdir(parents=True, mode=0o700)
+    write_private(venv.parent / '.preparing.json', json.dumps({'schema_version': 1,
+        'operation_id': 'p9000-other' if unsafe == 'foreign-operation' else operation, 'slot': 'a'}).encode())
+    for name in ('activate', 'activate.csh', 'activate.fish', 'Activate.ps1'):
+        target = venv / 'bin' / name
+        target.write_bytes(b'copied activation output')
+        target.chmod(0o664)
+    if unsafe in {'symlink', 'hardlink'}:
+        target = venv / 'bin/activate'
+        target.unlink()
+        original = tmp_path / 'unchanged-base-activate'
+        original.write_bytes(b'original base activation')
+        original.chmod(0o664)
+        if unsafe == 'symlink':
+            target.symlink_to(original)
+        else:
+            os.link(original, target)
+    monkeypatch.setattr(builder.core.SystemRunner, 'run',
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0))
+    python = '/sealed/md/python'
+    runner = builder.BuildOnlyRunner(None, {python}, md_runtime=runtime, operation_id=operation)
+    command = [python, '-I', '-m', 'venv', '--system-site-packages', str(venv)]
+    if unsafe:
+        with pytest.raises((module.CohortError, OSError)):
+            runner.run(command, env={})
+        if unsafe in {'symlink', 'hardlink'}:
+            assert original.stat().st_mode & 0o777 == 0o664
+    else:
+        runner.run(command, env={})
+        assert all(path.stat().st_mode & 0o777 == 0o644 for path in (venv / 'bin').iterdir())
+
+
 @pytest.mark.parametrize('change', ['worktree', 'dirty', 'wrong-sha', 'wrong-tree'])
 def test_build_facade_requires_fixed_clean_standalone_clone(cohort_files, monkeypatch, change):
     _, source, _, _, _ = cohort_files

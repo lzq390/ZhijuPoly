@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import pwd
 import re
+import stat
 import sys
 from urllib.parse import urlsplit
 
@@ -45,9 +46,10 @@ def validate_build_proxy(value):
 class BuildOnlyRunner(core.SystemRunner):
     """Apply a sealed proxy solely to hash-locked pip downloads."""
 
-    def __init__(self, proxy, download_pythons):
+    def __init__(self, proxy, download_pythons, *, md_runtime=None, operation_id=None):
         self.proxy = validate_build_proxy(proxy)
         self.download_pythons = frozenset(download_pythons)
+        self.md_runtime, self.operation_id = md_runtime, operation_id
 
     def run(self, command, *, env=None, **kwargs):
         environment = {key: value for key, value in (env or {}).items()
@@ -57,7 +59,34 @@ class BuildOnlyRunner(core.SystemRunner):
                 and command[1:5] == ['-I', '-m', 'pip', 'download']
                 and '--require-hashes' in command and '--only-binary=:all:' in command):
             environment.update(HTTP_PROXY=self.proxy, HTTPS_PROXY=self.proxy)
-        return super().run(command, env=environment, **kwargs)
+        result = super().run(command, env=environment, **kwargs)
+        if (result.returncode == 0 and self.md_runtime is not None and len(command) == 6
+                and command[0] in self.download_pythons
+                and command[1:5] == ['-I', '-m', 'venv', '--system-site-packages']):
+            venv = Path(command[5])
+            expected = {self.md_runtime / f'worker-venvs/md-{slot}/venv': slot for slot in ('a', 'b')}
+            if venv not in expected or venv.resolve(strict=True) != venv:
+                raise cohorts.CohortError('Candidate MD venv output is outside its sealed operation')
+            owner = core.load_private_json(venv.parent / '.preparing.json')
+            if owner != {'schema_version': 1, 'operation_id': self.operation_id, 'slot': expected[venv]}:
+                raise cohorts.CohortError('Candidate MD venv has different operation ownership')
+            # CPython copies activation script modes from the base installation
+            # independently of umask. Normalize only these unused new outputs;
+            # the original complete inventory check still runs afterwards.
+            for name in ('activate', 'activate.csh', 'activate.fish', 'Activate.ps1'):
+                path = venv / 'bin' / name
+                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                try:
+                    metadata = os.fstat(descriptor)
+                    observed = path.lstat()
+                    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
+                            or metadata.st_nlink != 1
+                            or (metadata.st_dev, metadata.st_ino) != (observed.st_dev, observed.st_ino)):
+                        raise cohorts.CohortError('Candidate MD activation script is unsafe')
+                    os.fchmod(descriptor, stat.S_IMODE(metadata.st_mode) & ~0o022)
+                finally:
+                    os.close(descriptor)
+        return result
 
 
 def _bytes(document):
@@ -195,6 +224,7 @@ def prepare(*, cohort_root: Path, sha: str, tree: str, operation_id: str,
         'source_root': str(source), 'source_sha': sha, 'source_tree': tree,
         'callback_base_url': callback_base_url, 'guard_mode': guard_mode,
         'build_proxy': build_proxy,
+        'md_activation_mode_policy': 'clear-group-world-write-v1',
         'md_base_python_identity': base, 'md_worker_env_sha256': md_env_digest,
         'dft_start_authorization_token_sha256': token_digest,
         'dft_toolchain_sha256': toolchain_digest, 'md_assets_inventory_sha256': asset_digest,
@@ -217,7 +247,8 @@ def prepare(*, cohort_root: Path, sha: str, tree: str, operation_id: str,
     _lock_file(md_runtime / 'state/deploy.lock')
     builder = CandidateBuildController(source, md_runtime, sha=sha, tree=tree,
         toolchain_path=toolchain_path, toolchain_digest=toolchain_digest,
-        runner=BuildOnlyRunner(build_proxy, {base['resolved_path'], str(tools.PYTHON)}))
+        runner=BuildOnlyRunner(build_proxy, {base['resolved_path'], str(tools.PYTHON)},
+            md_runtime=md_runtime, operation_id=operation_id))
     result_path = cohort_root / 'config/worker-build-result.json'
     # The original lock serializes writes to the shared immutable DFT release store.
     global_lock = core.PullDeployController(core.PRODUCTION_ROOT, cohorts.PRODUCTION_RUNTIME_ROOT)
