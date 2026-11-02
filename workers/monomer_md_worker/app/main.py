@@ -1163,6 +1163,9 @@ async def _release_execution_lease_safely(
     job_id: str,
 ) -> bool:
     if execution_lease is None:
+        if (getattr(settings, 'mode', None) == 'real'
+                and getattr(settings, 'recovery_systemd_unit', None)):
+            return await _execution_resources_released()
         return not getattr(runner, "gpu_admission_uncertain", False)
     if getattr(execution_lease, "termination_unsafe", False):
         execution_lease.abandon()

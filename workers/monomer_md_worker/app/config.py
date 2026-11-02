@@ -108,6 +108,7 @@ class WorkerSettings:
     gpu_scope_memory_swap_max_bytes: int | None = None
     gpu_scope_tasks_max: int | None = None
     acceptance_attachment_id: str | None = None
+    recovery_systemd_unit: str | None = None
 
     @property
     def gpu_scope_resources(self) -> ScopeResourceLimits:
@@ -119,6 +120,16 @@ class WorkerSettings:
         )
 
     def __post_init__(self) -> None:
+        if self.recovery_systemd_unit is not None:
+            from .recovery_resources import RecoveryResourceError, validate_unit_name
+            try:
+                validate_unit_name(self.recovery_systemd_unit)
+            except RecoveryResourceError as exc:
+                raise ValueError('Systemd recovery requires a plain service unit name') from exc
+            if (self.mode != 'real' or self.gpu_broker_enabled
+                    or self.gpu_broker_environment != 'prod'
+                    or self.acceptance_cancel_recovery_scoped):
+                raise ValueError('Systemd recovery requires a non-Broker production worker')
         limits = self.gpu_scope_resources
         if limits.configured and (not self.gpu_broker_enabled or self.gpu_broker_environment != "dev"):
             raise ValueError("GPU scope resource limits require the native development Broker")
@@ -271,6 +282,7 @@ def load_settings() -> WorkerSettings:
         worker_id=os.getenv("MONOMER_MD_WORKER_ID", "monomer-md-worker"),
         worker_version=os.getenv("MONOMER_MD_WORKER_VERSION", "0.1.0"),
         acceptance_attachment_id=os.getenv('MONOMER_MD_ACCEPTANCE_ATTACHMENT_ID') or None,
+        recovery_systemd_unit=os.getenv('MONOMER_MD_RECOVERY_SYSTEMD_UNIT', '').strip() or None,
         byteff2_openmm_dir=(
             Path(byteff2_openmm_dir) if byteff2_openmm_dir else None
         ),

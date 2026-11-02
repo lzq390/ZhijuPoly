@@ -191,6 +191,7 @@ def test_candidate_has_independent_state_and_scrubbed_native_environments(cohort
     assert md['APP_SERVICE_POSTGRES_DSN'].endswith(':55433/nexpoly')
     assert md['USAGE_METERING_ENABLED'] == 'true' and md['USAGE_ENTITLEMENTS_ENABLED'] == 'false'
     assert md['MONOMER_MD_GPU_BROKER_ENVIRONMENT'] == 'prod'
+    assert md['MONOMER_MD_RECOVERY_SYSTEMD_UNIT'] == 'nexpoly-p9000-20261102-md-worker.service'
     assert md['MONOMER_MD_WORKER_UDS'] == str(root / 'md-runtime/state/monomer-md-worker-socket/worker.sock')
     assert md['MONOMER_MD_JOB_ROOT'] == str(root / 'md-runtime/state/monomer-md-worker-runs')
     assert 'LD_PRELOAD' not in md and 'APP_POSTGRES_DSN' not in md

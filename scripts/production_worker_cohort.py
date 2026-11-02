@@ -106,6 +106,10 @@ class ProductionWorkerCohort:
         return self.root / 'config/md-worker.env'
 
     @property
+    def md_systemd_unit(self):
+        return f'nexpoly-{self.root.name}-md-worker.service'
+
+    @property
     def dft_runtime_env(self):
         return self.root / 'config/dft-runtime.env'
 
@@ -216,7 +220,7 @@ def md_environment(cohort: ProductionWorkerCohort, inherited=None):
     sealed_payload(cohort.md_worker_env, cohort.md_worker_env_sha256)
     environment = monomer_worker_env.build_worker_process_environment(values, inherited=inherited,
         overrides=monomer_md_worker_launcher.expected_environment(source_root=cohort.source_root,
-            runtime_root=cohort.md_runtime_root))
+            runtime_root=cohort.md_runtime_root, systemd_unit=cohort.md_systemd_unit))
     environment.update(cohort.environment())
     return environment
 

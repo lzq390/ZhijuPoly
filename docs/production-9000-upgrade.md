@@ -57,6 +57,15 @@ to the candidate units, backend project and GPU identity; the old monitor's
 hard-coded service identities cannot classify the new stack. Keep the sealed
 guard mode and wait for unrelated GPU processes without signalling them.
 
+The Broker-disabled MD launcher pins `MONOMER_MD_RECOVERY_SYSTEMD_UNIT` to
+`nexpoly-<operation_id>-md-worker.service`. Its actual ExecStart process must be
+that unit's MainPID with `KillMode=control-group` and no delegation. Recovery
+uses the kernel cgroup membership to prove no previous MD execution remains;
+any additional process, child cgroup or unavailable proof keeps admission closed.
+Check recovery and admission after runtime readiness: a successful CUDA probe
+alone does not establish that the worker can accept jobs. Run these checks on
+the rehearsal stack before the final maintenance window.
+
 Polymer MD uses the production runtime contract and a separate jobs root, 16 CPU,
 32 GiB, no GPU and one execution slot. Render the analysis service with
 `scripts/polymer_md_analysis_container.py`, using the fixed image built from

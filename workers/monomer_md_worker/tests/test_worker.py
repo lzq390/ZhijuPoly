@@ -1603,7 +1603,7 @@ def test_successful_compute_logs_release_failure_before_cleanup_wait(
 def test_md_recovery_requires_complete_broker_absence(snapshot):
     from workers.monomer_md_worker.app.runner import MonomerMdRunner
     runner = object.__new__(MonomerMdRunner)
-    runner._settings = SimpleNamespace(mode='real',gpu_broker_environment='dev',acceptance_attachment_id=None)
+    runner._settings = SimpleNamespace(mode='real',gpu_broker_enabled=True,gpu_broker_environment='dev',acceptance_attachment_id=None)
     runner._gpu_admission_uncertain = False
     runner._gpu_broker_client = SimpleNamespace(status=lambda: {'schema_version':1,'broker_instance_id':'test-broker','quarantined_gpus':{},**snapshot})
     assert not runner.recovery_resources_released()

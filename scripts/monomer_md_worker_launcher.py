@@ -74,6 +74,7 @@ PRODUCTION_BYTEFF2_PYTHON = Path(
 PRODUCTION_BYTEFF2_OPENMM_DIR = Path(
     "/home/devuser/miniconda3/envs/byteff2-repro/byteff2_openmm/openmm"
 )
+PRODUCTION_SYSTEMD_UNIT = "nexpoly-monomer-md-worker.service"
 
 
 class LauncherError(RuntimeError):
@@ -108,6 +109,7 @@ def expected_environment(
     *,
     source_root: Path = PRODUCTION_SOURCE_ROOT,
     runtime_root: Path = PRODUCTION_RUNTIME_ROOT,
+    systemd_unit: str = PRODUCTION_SYSTEMD_UNIT,
 ) -> dict[str, str]:
     asset_root, job_root, socket, gpu_state_root = runtime_paths(runtime_root)
     return {
@@ -125,6 +127,7 @@ def expected_environment(
         "MONOMER_MD_TRANSPORT_CUDA_SMOKE_ENABLED": "true",
         "NEXPOLY_GPU_DEVICE": "2",
         "MONOMER_MD_GPU_BROKER_ENABLED": "false",
+        "MONOMER_MD_RECOVERY_SYSTEMD_UNIT": systemd_unit,
         "MONOMER_MD_GPU_SCOPE_LAUNCHER": "systemd-user-scope",
         "MONOMER_MD_GPU_BROKER_ENVIRONMENT": "prod",
         "MONOMER_MD_GPU_BROKER_SOCKET_PATH": str(gpu_state_root / "broker.sock"),
@@ -141,12 +144,14 @@ def validate_environment(
     *,
     source_root: Path = PRODUCTION_SOURCE_ROOT,
     runtime_root: Path = PRODUCTION_RUNTIME_ROOT,
+    systemd_unit: str = PRODUCTION_SYSTEMD_UNIT,
 ) -> None:
     if environment.get(SANITIZED_MARKER) != "1":
         raise LauncherError("Worker environment was not produced by the stable sanitizer")
     for key, expected in expected_environment(
         source_root=source_root,
         runtime_root=runtime_root,
+        systemd_unit=systemd_unit,
     ).items():
         if environment.get(key) != expected:
             raise LauncherError(f"production Worker setting {key} is not pinned")
@@ -237,6 +242,26 @@ def worker_argv(python: Path, socket: Path) -> list[str]:
     ]
 
 
+def validate_recovery_service(source_root: Path, unit: str) -> None:
+    """Load the stdlib-only verifier from the already verified release tree."""
+    path = source_root / "workers/monomer_md_worker/app/recovery_resources.py"
+    try:
+        metadata = path.lstat()
+        if (path.resolve(strict=True) != path or not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o022):
+            raise LauncherError("production Worker recovery verifier is unsafe")
+        spec = importlib.util.spec_from_file_location("_nexpoly_md_recovery_resources", path)
+        if spec is None or spec.loader is None:
+            raise LauncherError("production Worker recovery verifier is unavailable")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.validate_recovery_systemd_unit(unit)
+    except LauncherError:
+        raise
+    except Exception as exc:
+        raise LauncherError("production Worker recovery service binding failed") from exc
+
+
 def launch(
     environment: Mapping[str, str] | None = None,
     *,
@@ -246,6 +271,7 @@ def launch(
     change_directory: Callable[[Path], object] = os.chdir,
 ) -> None:
     child_environment = dict(os.environ if environment is None else environment)
+    systemd_unit = PRODUCTION_SYSTEMD_UNIT
     # A cohort changes only the explicit source/state authority. The complete
     # existing A/B, environment, toolchain and singleton verification follows.
     if (any(key in child_environment for key in ("NEXPOLY_PROD_WORKER_COHORT_FILE",
@@ -254,10 +280,15 @@ def launch(
         cohort = from_environment(child_environment)
         if cohort is None or source_root != cohort.source_root or runtime_root != cohort.md_runtime_root:
             raise LauncherError("production Worker cohort paths differ")
+        systemd_unit = cohort.md_systemd_unit
+    # Existing stable worker.env files predate this key. The trusted launcher
+    # supplies its fixed unit; an explicitly different value still fails below.
+    child_environment.setdefault("MONOMER_MD_RECOVERY_SYSTEMD_UNIT", systemd_unit)
     validate_environment(
         child_environment,
         source_root=source_root,
         runtime_root=runtime_root,
+        systemd_unit=systemd_unit,
     )
     asset_root, job_root, socket, _gpu_state_root = runtime_paths(runtime_root)
     _require_directory(runtime_root)
@@ -274,6 +305,7 @@ def launch(
         raise LauncherError(str(exc)) from exc
     singleton = acquire_worker_singleton(runtime_root)
     try:
+        validate_recovery_service(source_root, systemd_unit)
         prepare_socket(socket)
         change_directory(source_root)
         argv = worker_argv(python, socket)
