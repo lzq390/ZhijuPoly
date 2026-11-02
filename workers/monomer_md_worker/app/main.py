@@ -257,6 +257,14 @@ def _load_runtime_identity(
         resolved_production_root = production_source_root.resolve(strict=True)
     except OSError:
         resolved_production_root = production_source_root
+    from scripts.production_worker_cohort import from_environment
+    cohort = from_environment()
+    if cohort is not None:
+        if source_root != cohort.source_root:
+            raise RuntimeError("production cohort Worker source differs from its sealed release")
+        resolved_production_root = cohort.source_root
+        production_source_root = cohort.source_root
+        runtime_root = cohort.md_runtime_root
     if source_root == resolved_production_root:
         try:
             checkout, selection, selected_python = verify_runtime_binding(

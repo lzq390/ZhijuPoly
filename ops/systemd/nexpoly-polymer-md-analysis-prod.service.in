@@ -1,0 +1,33 @@
+[Unit]
+Description=NexPoly production read-only polymer MD analysis (@OPERATION_ID@ / @SOURCE_SHA@)
+
+[Service]
+Type=simple
+UMask=0077
+WorkingDirectory=@ANALYSIS_RELEASE@/source
+ExecStart=@WORKER_PYTHON@ -I -B @ANALYSIS_RELEASE@/source/scripts/polymer_md_analysis_prod.py run --config @RUNTIME_ROOT@/analysis.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillMode=control-group
+CPUQuota=100%
+CPUWeight=10
+MemoryMax=2147483648
+MemorySwapMax=0
+TasksMax=64
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadOnlyPaths=@JOB_ROOT@ @SOURCE_ROOT@ @SCIENTIFIC_ROOT@
+ReadWritePaths=@SPOOL_ROOT@ @SOCKET_ROOT@
+Environment=HOME=@RUNTIME_ROOT@/home
+Environment=POLYMER_MD_ENVIRONMENT=prod
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=CUDA_VISIBLE_DEVICES=
+Environment=NVIDIA_VISIBLE_DEVICES=none
+StandardOutput=journal
+StandardError=inherit
+
+[Install]
+WantedBy=default.target

@@ -11,9 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 class PolymerMdReconciler:
-    def __init__(self, repository, worker, *, interval_seconds=3.0):
+    def __init__(self, repository, worker, *, interval_seconds=3.0, retention_enabled=True):
         self.repository, self.worker = repository, worker
         self.interval = interval_seconds
+        self.retention_enabled = retention_enabled
         self.task = None
         self.wake = asyncio.Event()
         self.stopping = False
@@ -54,7 +55,8 @@ class PolymerMdReconciler:
                 except PolymerMdError as exc:
                     await asyncio.to_thread(self.repository.record_error, job["job_id"], job["attempt_token"], exc.code, str(exc))
                     break
-            await asyncio.to_thread(self.repository.mark_expired)
+            if self.retention_enabled:
+                await asyncio.to_thread(self.repository.mark_expired)
             for job in await asyncio.to_thread(self.repository.list_deletions):
                 try:
                     await self.worker.delete(submit_request(job),entire_job=job["delete_job_requested"])

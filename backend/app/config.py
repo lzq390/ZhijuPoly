@@ -133,6 +133,7 @@ class Settings:
         monomer_dft_submit_enabled: bool | None = None,
         monomer_dft_max_active_jobs: int | None = None,
         monomer_dft_reconcile_interval_seconds: float | None = None,
+        monomer_dft_artifact_retention_enabled: bool | None = None,
         monomer_dft_artifact_retention_days: int | None = None,
         monomer_dft_job_retention_enabled: bool | None = None,
         monomer_dft_job_retention_days: int | None = None,
@@ -140,6 +141,8 @@ class Settings:
         monomer_dft_download_max_concurrent: int | None = None,
         monomer_dft_download_spool_root: str | None = None,
         polymer_md_dev_enabled: bool | None = None,
+        polymer_md_prod_enabled: bool | None = None,
+        polymer_md_retention_enabled: bool | None = None,
         polymer_md_submit_enabled: bool | None = None,
         polymer_md_worker_uds: str | None = None,
         polymer_md_analysis_uds: str | None = None,
@@ -147,6 +150,7 @@ class Settings:
         polymer_md_environment: str | None = None,
         polymer_md_artifact_root: str | None = None,
         polymer_md_acceptance_root: str | None = None,
+        auth_prod_http_enabled: bool | None = None,
         allowed_origins: str | None = None,
         dev_gpu_operator_enabled: bool | None = None,
         dev_gpu_operator_frontend_port: int | None = None,
@@ -1005,6 +1009,12 @@ class Settings:
         self.monomer_dft_reconcile_interval_seconds = max(
             0.25, float(raw_monomer_dft_reconcile_interval_seconds)
         )
+        self.monomer_dft_artifact_retention_enabled = _strict_bool(
+            "MONOMER_DFT_ARTIFACT_RETENTION_ENABLED",
+            monomer_dft_artifact_retention_enabled
+            if monomer_dft_artifact_retention_enabled is not None
+            else os.getenv("MONOMER_DFT_ARTIFACT_RETENTION_ENABLED", str(env_values.get("MONOMER_DFT_ARTIFACT_RETENTION_ENABLED", "true"))),
+        )
         self.monomer_dft_artifact_retention_days = max(
             1, int(raw_monomer_dft_artifact_retention_days)
         )
@@ -1040,7 +1050,15 @@ class Settings:
                 "MONOMER_DFT_SUBMIT_ENABLED is true"
             )
         self.allowed_origins = raw_allowed_origins
+        self.auth_prod_http_enabled = _strict_bool(
+            "AUTH_PROD_HTTP_ENABLED",
+            auth_prod_http_enabled if auth_prod_http_enabled is not None
+            else os.getenv("AUTH_PROD_HTTP_ENABLED", "false"),
+        )
         self.polymer_md_dev_enabled = _strict_bool("POLYMER_MD_DEV_ENABLED", polymer_md_dev_enabled if polymer_md_dev_enabled is not None else os.getenv("POLYMER_MD_DEV_ENABLED", "false"))
+        self.polymer_md_prod_enabled = _strict_bool("POLYMER_MD_PROD_ENABLED", polymer_md_prod_enabled if polymer_md_prod_enabled is not None else os.getenv("POLYMER_MD_PROD_ENABLED", "false"))
+        self.polymer_md_retention_enabled = _strict_bool("POLYMER_MD_RETENTION_ENABLED", polymer_md_retention_enabled if polymer_md_retention_enabled is not None else os.getenv("POLYMER_MD_RETENTION_ENABLED", "true"))
+        self.polymer_md_enabled = self.polymer_md_dev_enabled or self.polymer_md_prod_enabled
         self.polymer_md_submit_enabled = _strict_bool("POLYMER_MD_SUBMIT_ENABLED", polymer_md_submit_enabled if polymer_md_submit_enabled is not None else os.getenv("POLYMER_MD_SUBMIT_ENABLED", "false"))
         self.polymer_md_environment = polymer_md_environment or os.getenv("POLYMER_MD_ENVIRONMENT", "disabled")
         self.polymer_md_worker_uds = polymer_md_worker_uds or os.getenv("POLYMER_MD_WORKER_UDS", "")
@@ -1055,8 +1073,15 @@ class Settings:
         self.polymer_md_start_authorization_token = polymer_md_start_authorization_token or os.getenv("POLYMER_MD_START_AUTHORIZATION_TOKEN", "")
         if self.polymer_md_dev_enabled and self.polymer_md_environment != "dev":
             raise ValueError("polymer MD is available only with POLYMER_MD_ENVIRONMENT=dev")
-        if self.polymer_md_submit_enabled and (not self.polymer_md_dev_enabled or not self.polymer_md_worker_uds or not self.polymer_md_start_authorization_token):
-            raise ValueError("polymer MD submission requires explicit development enablement, Unix socket and start authorization token")
+        if self.polymer_md_prod_enabled:
+            if self.polymer_md_dev_enabled or self.polymer_md_environment != "prod":
+                raise ValueError("POLYMER_MD_PROD_ENABLED requires POLYMER_MD_ENVIRONMENT=prod and POLYMER_MD_DEV_ENABLED=false")
+            if _strict_bool("USAGE_ENTITLEMENTS_ENABLED", os.getenv("USAGE_ENTITLEMENTS_ENABLED", "false")):
+                raise ValueError("production polymer MD requires USAGE_ENTITLEMENTS_ENABLED=false")
+        if self.polymer_md_worker_uds and not os.path.isabs(self.polymer_md_worker_uds):
+            raise ValueError("POLYMER_MD_WORKER_UDS must be an absolute Unix socket path")
+        if self.polymer_md_submit_enabled and (not self.polymer_md_enabled or not self.polymer_md_worker_uds or not self.polymer_md_start_authorization_token):
+            raise ValueError("polymer MD submission requires explicit environment enablement, Unix socket and start authorization token")
         self.monomer_dft_start_authorization_token = monomer_dft_start_authorization_token or os.getenv("MONOMER_DFT_START_AUTHORIZATION_TOKEN", "")
         self.dev_gpu_operator_enabled = bool(raw_dev_gpu_operator_enabled)
         self.dev_gpu_operator_frontend_port = int(

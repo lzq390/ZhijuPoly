@@ -1,0 +1,112 @@
+# Explicit account-enabled production deployment. Render with the base and
+# prod files. The historical pull-deploy controller must not use this overlay.
+# All mutable paths/PG data belong to a new project; migrations are manual.
+x-account-environment: &account-environment
+  ALLOWED_ORIGINS: http://114.214.255.154:9000
+  AUTH_PROD_HTTP_ENABLED: "true"
+  AUTH_COOKIE_SECURE: "false"
+  AUTH_COOKIE_NAME: nexpoly_prod_http_session
+  AUTH_DEV_HTTP_ORIGINS: ""
+  AUTH_ISOLATED_ACCEPTANCE_POLICY: ""
+  AUTH_ISOLATED_AB_SESSION_POLICY: ""
+  GPU_BROKER_ENVIRONMENT: prod
+  STRUCTURE_LIBRARY_ENABLED: "true"
+  MONOMER_POLYMERIZATION_BATCH_ENABLED: "true"
+  KNOWLEDGE_LITERATURE_ENABLED: "true"
+  USAGE_METERING_ENABLED: "true"
+  USAGE_ENTITLEMENTS_ENABLED: "false"
+  USAGE_ENTITLEMENTS_ALLOW_EXAMPLE: "false"
+  USAGE_ENTITLEMENTS_POLICY_FILE: ""
+  MONOMER_MD_JOB_RETENTION_ENABLED: "false"
+  MONOMER_DFT_JOB_RETENTION_ENABLED: "false"
+  MONOMER_DFT_ARTIFACT_RETENTION_ENABLED: "false"
+  POLYMER_MD_RETENTION_ENABLED: "false"
+  MONOMER_POLYMERIZATION_BATCH_RETENTION_ENABLED: "false"
+  POLYMER_MD_ENVIRONMENT: prod
+  POLYMER_MD_PROD_ENABLED: "true"
+  POLYMER_MD_DEV_ENABLED: "false"
+  POLYMER_MD_SUBMIT_ENABLED: "true"
+  POLYMER_MD_WORKER_UDS: /app/polymer-md-socket/worker.sock
+  POLYMER_MD_ANALYSIS_UDS: /app/polymer-md-socket/analysis.sock
+  POLYMER_MD_ARTIFACT_ROOT: /app/polymer-md-artifacts
+
+services:
+  postgres-init:
+    profiles: [manual-migration]
+  backend:
+    user: "${NEXPOLY_SERVICE_UID:?explicit file owner UID required}:${NEXPOLY_SERVICE_GID:?explicit file owner GID required}"
+    environment: *account-environment
+    ports: !override
+      - "127.0.0.1:18002:8000"
+    volumes:
+      - type: bind
+        source: ${NEXPOLY_MD_SOCKET_ROOT:?independent production MD socket required}
+        target: /app/monomer-md-worker
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NEXPOLY_DFT_SOCKET_ROOT:?independent production DFT socket required}
+        target: /app/monomer-dft-worker
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NEXPOLY_DFT_SPOOL_ROOT:?independent production DFT spool required}
+        target: /app/.runtime/monomer-dft-download-spool
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NEXPOLY_POLYMER_MD_SOCKET_ROOT:?separate production polymer MD socket root required}
+        target: /app/polymer-md-socket
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NEXPOLY_POLYMER_MD_RUNTIME_ROOT:?separate production polymer MD runtime required}/jobs
+        target: /app/polymer-md-artifacts
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -m app.postgres_preflight --strict --schema-target literature-0024 --service-context >/tmp/nexpoly-postgres-preflight.json &&
+          python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()" &&
+          python -m app.gpu_preflight --mode "$$(if [ "$$GPU_PRELOAD_MODE" = required ]; then echo ready; else echo configured; fi)" >/tmp/nexpoly-gpu-preflight.json
+  polymerization-batch-worker:
+    user: "${NEXPOLY_SERVICE_UID:?explicit file owner UID required}:${NEXPOLY_SERVICE_GID:?explicit file owner GID required}"
+    env_file: !override
+      - path: "${NEXPOLY_BATCH_ENV_FILE:?private batch service environment required}"
+        required: true
+    environment:
+      <<: *account-environment
+      APP_POSTGRES_DSN: "${NEXPOLY_BATCH_POSTGRES_DSN:?independent batch service DSN required}"
+      APP_SERVICE_POSTGRES_DSN: "${NEXPOLY_BATCH_POSTGRES_DSN:?independent batch service DSN required}"
+      AUTH_POSTGRES_DSN: ""
+      PI_POSTGRES_DSN: ""
+      LAB_DATA_POSTGRES_DSN: ""
+      POLYMER_MD_PROD_ENABLED: "false"
+      POLYMER_MD_SUBMIT_ENABLED: "false"
+      MONOMER_MD_SUBMIT_ENABLED: "false"
+      MONOMER_DFT_SUBMIT_ENABLED: "false"
+      GPU_PRELOAD_MODE: lazy
+      GPU_BROKER_ENABLED: "false"
+      NVIDIA_VISIBLE_DEVICES: none
+  nginx:
+    ports: !override
+      - "${NEXPOLY_WEB_BIND:-127.0.0.1}:${NEXPOLY_WEB_PORT:-19000}:80"
+  lab-postgres:
+    ports: !override
+      - "127.0.0.1:55433:5432"
+
+networks:
+  default:
+    # Let Docker allocate an unused subnet; never join the old production net.
+    ipam: !reset {}
+
+volumes:
+  app_postgres_data:
+    external: true
+    name: ${NEXPOLY_PROD_PG_VOLUME:?new candidate PG volume required}

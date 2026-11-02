@@ -23,6 +23,12 @@ FORBIDDEN_SOURCE_ROOTS = (
     Path("/data/cgy").resolve(),
     Path("/data/lzq/gith/aimnetcentral").resolve(),
 )
+
+
+def _production_source_allowed(source_root: Path) -> bool:
+    from scripts.production_worker_cohort import from_environment
+    cohort = from_environment()
+    return source_root == (cohort.source_root if cohort is not None else PRODUCTION_REPO_ROOT)
 GPU_UUID_BY_INDEX = {
     "1": "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
     "2": "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
@@ -385,7 +391,7 @@ class WorkerSettings:
             raise ValueError("GPU scope resource limits require the native development Broker")
         code_root = REPO_ROOT.resolve(strict=False)
         if self.deployment == "prod":
-            if code_root != PRODUCTION_REPO_ROOT:
+            if not _production_source_allowed(code_root):
                 raise ValueError(
                     f"production Worker code root must be {PRODUCTION_REPO_ROOT}"
                 )
@@ -557,6 +563,18 @@ class WorkerSettings:
             raise ValueError(
                 "NEXPOLY_DFT_GPU_GUARD_MODE must be enforce or observe"
             )
+        if self.deployment == 'prod':
+            from scripts.production_worker_cohort import from_environment
+            cohort = from_environment()
+            if cohort is not None and (
+                self.job_root != cohort.root / 'dft/jobs'
+                or self.uds != cohort.root / 'dft/socket/worker.sock'
+                or self.download_spool_root != cohort.root / 'dft/spool'
+                or self.release_sha != cohort.source_sha
+                or self.start_authorization_url != cohort.callback_base_url
+                or self.start_authorization_token != cohort.authorization_token()
+            ):
+                raise ValueError('production DFT state or authorization differs from its sealed cohort')
 
 
 def load_settings() -> WorkerSettings:
@@ -565,7 +583,7 @@ def load_settings() -> WorkerSettings:
     deployment = _deployment()
     code_root = REPO_ROOT.resolve(strict=False)
     if deployment == "prod":
-        if code_root != PRODUCTION_REPO_ROOT:
+        if not _production_source_allowed(code_root):
             raise ValueError(
                 f"production Worker code root must be {PRODUCTION_REPO_ROOT}"
             )

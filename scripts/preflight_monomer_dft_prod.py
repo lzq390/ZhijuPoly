@@ -113,7 +113,23 @@ def validate(
     repo_root: Path = PRODUCTION_REPO_ROOT,
     runtime_root: Path = PRODUCTION_RUNTIME_ROOT,
     environment: Mapping[str, str] | None = None,
+    runtime_environment_path: Path | None = None,
+    worker_state_root: Path | None = None,
 ) -> dict[str, Any]:
+    base_python_sha256, uv_sha256, pip_inventory_sha256 = BASE_PYTHON_SHA256, UV_SHA256, PIP_INVENTORY_SHA256
+    if (runtime_environment_path is not None or worker_state_root is not None
+            or any(key in (os.environ if environment is None else environment) for key in (
+                "NEXPOLY_PROD_WORKER_COHORT_FILE", "NEXPOLY_PROD_WORKER_COHORT_SHA256",
+                "NEXPOLY_PROD_WORKER_SOURCE_ROOT"))):
+        from scripts.production_worker_cohort import from_environment
+        cohort = from_environment(environment)
+        if (cohort is None or repo_root != cohort.source_root
+                or runtime_environment_path != cohort.dft_runtime_env
+                or worker_state_root != cohort.root / 'dft'):
+            raise PreflightError("production DFT candidate state requires its exact sealed cohort")
+        tools = cohort.toolchain()
+        base_python_sha256, uv_sha256, pip_inventory_sha256 = (
+            tools["python_sha256"], tools["uv_sha256"], tools["pip_inventory_sha256"])
     if repo_root.resolve(strict=True) != repo_root:
         raise PreflightError("production source root is not canonical")
     private_directory(runtime_root)
@@ -146,10 +162,10 @@ def validate(
     if (
         runtime_payload.get("python") != "3.12"
         or runtime_payload.get("uv") != "0.11.21"
-        or runtime_payload.get("uv_sha256") != UV_SHA256
-        or runtime_payload.get("base_python_sha256") != BASE_PYTHON_SHA256
+        or runtime_payload.get("uv_sha256") != uv_sha256
+        or runtime_payload.get("base_python_sha256") != base_python_sha256
         or runtime_payload.get("pip_inventory_sha256")
-        != PIP_INVENTORY_SHA256
+        != pip_inventory_sha256
         or not isinstance(
             runtime_payload.get("wheelhouse_inventory_sha256"), str
         )
@@ -164,7 +180,7 @@ def validate(
         raise PreflightError("DFT wheelhouse inventory identity is invalid")
     runtime_contract_sha256 = "sha256:" + sha256_file(runtime_manifest)
     runtime_environment = load_runtime_environment(
-        runtime_root / RUNTIME_ENV_RELATIVE
+        runtime_environment_path if runtime_environment_path is not None else runtime_root / RUNTIME_ENV_RELATIVE
     )
     process_environment = environment if environment is not None else os.environ
     guard_mode = runtime_environment.get("NEXPOLY_DFT_GPU_GUARD_MODE")
@@ -262,12 +278,16 @@ def validate(
     if actual_files != expected_files:
         raise PreflightError("AIMNet production cache inventory differs from the lock")
 
-    for relative in (
-        "state/monomer-dft-worker-socket",
-        "state/monomer-dft-worker-runs",
-        "state/monomer-dft-download-spool",
-    ):
-        private_directory(runtime_root / relative)
+    if worker_state_root is not None:
+        for relative in ('socket', 'jobs', 'spool'):
+            private_directory(worker_state_root / relative)
+    else:
+        for relative in (
+            "state/monomer-dft-worker-socket",
+            "state/monomer-dft-worker-runs",
+            "state/monomer-dft-download-spool",
+        ):
+            private_directory(runtime_root / relative)
     observed_uuid = run(
         "nvidia-smi",
         "--query-gpu=uuid",

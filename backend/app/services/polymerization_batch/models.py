@@ -38,16 +38,21 @@ class BatchSettings:
     job_seconds: int = 3600
     result_bytes: int = 512 * 1024**2
     import_hours: int = 24
+    retention_enabled: bool = True
     retention_days: int = 7
     lease_seconds: int = 90
 
     @classmethod
     def from_env(cls) -> BatchSettings:
         defaults = cls()
+        raw_retention_enabled = os.getenv("MONOMER_POLYMERIZATION_BATCH_RETENTION_ENABLED", "true").strip().lower()
+        if raw_retention_enabled not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
+            raise ValueError("MONOMER_POLYMERIZATION_BATCH_RETENTION_ENABLED must be a boolean")
         values: dict = {
             "enabled": os.getenv("MONOMER_POLYMERIZATION_BATCH_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
                 and os.getenv("SMIPOLY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
             "storage_root": Path(os.getenv("MONOMER_POLYMERIZATION_BATCH_STORAGE_ROOT", str(defaults.storage_root))).resolve(),
+            "retention_enabled": raw_retention_enabled in {"1", "true", "yes", "on"},
         }
         for name in cls.__dataclass_fields__:
             if name in values:

@@ -184,11 +184,12 @@ class BatchService:
         return {"job_id": job["id"], "status": job["status"], "stage": job["stage"],
                 "target_class": job["options"]["target_class"], "summary": job["summary"], "artifacts": artifacts,
                 "created_at": job["created_at"], "updated_at": job["updated_at"], "finished_at": job["finished_at"],
-                "expires_at": job["expires_at"], "error_code": job["error_code"], "message": job["message"]}
+                "expires_at": job["expires_at"] if self.config.retention_enabled else None,
+                "error_code": job["error_code"], "message": job["message"]}
 
     def artifact(self, job_id: str, name: str):
         job = self.repository.get_job(job_id, owner_user_id=current_owner_id())
-        if job["status"] == "expired" or (job["expires_at"] and job["expires_at"] <= datetime.now(timezone.utc)):
+        if job["status"] == "expired" or (self.config.retention_enabled and job["expires_at"] and job["expires_at"] <= datetime.now(timezone.utc)):
             raise BatchError("文件已过期。", "expired", 410)
         item = job["artifacts"].get(name)
         if not item:
@@ -203,7 +204,7 @@ class BatchService:
 
     def results(self, job_id: str, offset: int, limit: int) -> dict:
         job = self.repository.get_job(job_id, owner_user_id=current_owner_id())
-        if job["status"] == "expired" or (job["expires_at"] and job["expires_at"] <= datetime.now(timezone.utc)):
+        if job["status"] == "expired" or (self.config.retention_enabled and job["expires_at"] and job["expires_at"] <= datetime.now(timezone.utc)):
             raise BatchError("文件已过期。", "expired", 410)
         if not job["artifacts"]:
             return {"items": [], "total": 0, "next_offset": None}

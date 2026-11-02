@@ -31,6 +31,9 @@ def dependencies(python):
 
 def source_names(root):
     selected = {"scripts/polymer_md_analysis_dev.py"}
+    for name in ("scripts/polymer_md_prod_contract.py", "scripts/polymer_md_analysis_prod.py", "scripts/polymer_md_worker_dev.py"):
+        if (root / name).is_file():
+            selected.add(name)
     for package in ("polymer_md", "workers/polymer_md_analysis", "workers/polymer_md_worker/app"):
         for path in (root / package).rglob("*"):
             if path.is_file() and path.suffix in {".py", ".json"} and "__pycache__" not in path.parts and "tests" not in path.relative_to(root / package).parts:
@@ -84,6 +87,9 @@ def verify(release):
 
 
 def main():
+    sys.path.insert(0, str(ROOT))
+    from scripts.polymer_md_prod_contract import reject_production_from_dev
+    reject_production_from_dev(os.environ.get("POLYMER_MD_ANALYSIS_JOB_ROOT"))
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)

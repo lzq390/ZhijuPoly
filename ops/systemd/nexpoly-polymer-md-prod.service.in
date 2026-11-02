@@ -1,0 +1,30 @@
+[Unit]
+Description=NexPoly production polymer MD Worker (@OPERATION_ID@ / @SOURCE_SHA@)
+
+[Service]
+Type=simple
+UMask=0077
+WorkingDirectory=@WORKER_RELEASE@
+ExecStart=@WORKER_PYTHON@ -I -B @WORKER_RELEASE@/scripts/polymer_md_worker_prod.py run-worker --config @RUNTIME_ROOT@/worker.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=90
+KillMode=control-group
+CPUQuota=1600%
+MemoryMax=34359738368
+MemorySwapMax=0
+TasksMax=512
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadOnlyPaths=@SOURCE_ROOT@ @SCIENTIFIC_ROOT@
+ReadWritePaths=@RUNTIME_ROOT@ @SOCKET_ROOT@
+Environment=HOME=@RUNTIME_ROOT@/home
+Environment=POLYMER_MD_ENVIRONMENT=prod
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=CUDA_VISIBLE_DEVICES=
+Environment=NVIDIA_VISIBLE_DEVICES=none
+StandardOutput=journal
+StandardError=inherit
+
+[Install]
+WantedBy=default.target

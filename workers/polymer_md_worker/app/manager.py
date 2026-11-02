@@ -364,7 +364,9 @@ class JobManager:
                     worker_instance_id=self.instance_id, status="queued", results={
                         "worker_release_digest": self.release_digest,
                         "resource_limits": self.resource_limits(),
-                        "retention_policy": {"artifact_retention_days": 7, "metadata_retention_days": 30},
+                        "retention_policy": ({"artifact_retention_days": 7, "metadata_retention_days": 30}
+                            if self.settings.retention_enabled else
+                            {"enabled": False, "artifact_retention_days": None, "metadata_retention_days": None}),
                     }).model_dump(mode="json")}
 
     def get(self, job_id: str) -> dict:

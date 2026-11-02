@@ -21,6 +21,7 @@ class WorkerSettings:
     poll_seconds: float = 0.5
     cpu_count: int = 16
     memory_bytes: int = 32 * 1024**3
+    retention_enabled: bool = True
 
     def __post_init__(self):
         if self.cpu_count != 16 or self.memory_bytes != 32 * 1024**3:
@@ -32,6 +33,8 @@ class WorkerSettings:
             raise ValueError("invalid worker time budget")
         if not isinstance(self.start_drained, bool):
             raise ValueError("invalid worker startup maintenance policy")
+        if not isinstance(self.retention_enabled, bool):
+            raise ValueError("invalid worker retention policy")
 
 
 def load_settings() -> WorkerSettings:
@@ -39,6 +42,9 @@ def load_settings() -> WorkerSettings:
     startup = os.environ.get("POLYMER_MD_START_DRAINED", "true")
     if startup not in {"true", "false"}:
         raise ValueError("POLYMER_MD_START_DRAINED must be true or false")
+    retention = os.environ.get("POLYMER_MD_RETENTION_ENABLED", "true")
+    if retention not in {"true", "false"}:
+        raise ValueError("POLYMER_MD_RETENTION_ENABLED must be true or false")
     return WorkerSettings(
         job_root=Path(os.environ.get("POLYMER_MD_JOB_ROOT", str(repo / ".runtime/polymer-md/jobs"))),
         runner_python=os.environ.get("POLYMER_MD_RUNNER_PYTHON", str(repo / ".runtime/polymer-md/qm-environment/bin/python")),
@@ -47,4 +53,5 @@ def load_settings() -> WorkerSettings:
         runtime_manifest=os.environ.get("POLYMER_MD_RUNTIME_MANIFEST"),
         max_queued_jobs=int(os.environ.get("POLYMER_MD_MAX_QUEUED_JOBS", "8")),
         start_drained=startup == "true",
+        retention_enabled=retention == "true",
     )

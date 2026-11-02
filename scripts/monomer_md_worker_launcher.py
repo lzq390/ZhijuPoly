@@ -246,6 +246,14 @@ def launch(
     change_directory: Callable[[Path], object] = os.chdir,
 ) -> None:
     child_environment = dict(os.environ if environment is None else environment)
+    # A cohort changes only the explicit source/state authority. The complete
+    # existing A/B, environment, toolchain and singleton verification follows.
+    if (any(key in child_environment for key in ("NEXPOLY_PROD_WORKER_COHORT_FILE",
+            "NEXPOLY_PROD_WORKER_COHORT_SHA256", "NEXPOLY_PROD_WORKER_SOURCE_ROOT"))):
+        from scripts.production_worker_cohort import from_environment
+        cohort = from_environment(child_environment)
+        if cohort is None or source_root != cohort.source_root or runtime_root != cohort.md_runtime_root:
+            raise LauncherError("production Worker cohort paths differ")
     validate_environment(
         child_environment,
         source_root=source_root,

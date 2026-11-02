@@ -82,10 +82,20 @@ def safe_scientific_json(value):
     return value
 
 
-def public_job(job: dict) -> dict:
+def public_results(results, *, retention_enabled=True):
+    if retention_enabled or not isinstance(results, dict):
+        return results
+    return {**results, "retention_policy": {
+        "enabled": False, "artifact_retention_days": None, "metadata_retention_days": None,
+    }}
+
+
+def public_job(job: dict, *, retention_enabled=True) -> dict:
     forbidden = {"owner_user_id", "idempotency_key", "input_sha256", "request_sha256", "attempt_token", "attempt_fingerprint", "worker_instance_id", "dispatch_started_at", "enqueue_sequence"}
     result = {k: v for k, v in job.items() if k not in forbidden and not k.startswith("_")}
     result["artifacts"] = [{k:v for k,v in artifact.items() if k not in {"storage_ref","attempt_token"}} for artifact in job.get("artifacts",[])]
+    if "results" in result:
+        result["results"] = public_results(result["results"], retention_enabled=retention_enabled)
     # The caller has already verified ownership. Publish a stable evidence
     # identity without exposing the credential used for execution fencing.
     job_id, token = job.get("job_id"), job.get("attempt_token")

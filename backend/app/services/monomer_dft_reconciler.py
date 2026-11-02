@@ -43,11 +43,13 @@ class MonomerDftReconciler:
         repository: MonomerDftRepository,
         worker: MonomerDftWorkerClient,
         interval_seconds: float,
+        artifact_retention_enabled: bool = True,
         artifact_retention_days: int = 30,
     ) -> None:
         self._repository = repository
         self._worker = worker
         self._interval_seconds = max(0.25, float(interval_seconds))
+        self._artifact_retention_enabled = artifact_retention_enabled
         self._artifact_retention_days = max(1, int(artifact_retention_days))
         self._wake = asyncio.Event()
         self._stop = asyncio.Event()
@@ -170,7 +172,7 @@ class MonomerDftReconciler:
                         )
                         break
                 now = time.monotonic()
-                if now - self._last_sweep >= 60.0:
+                if self._artifact_retention_enabled and now - self._last_sweep >= 60.0:
                     await self._sweep_expired_artifacts()
                     self._last_sweep = now
                 await self._reconcile_artifact_deletions()
