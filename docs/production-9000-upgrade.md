@@ -51,6 +51,11 @@ their ordinary, owned, single-link files stay in this venv's `bin` with valid
 RECORD hashes and sizes. Existing runtimes and scientific inputs are not changed.
 Read-only Python identity/version probes use explicit `-B`, including under
 `-I`, so startup `.pth` imports cannot add bytecode to sealed runtimes.
+The candidate DFT worker reads GPU guard state from its own
+`<cohort-root>/dft/gpu2-guard.json`. Provide an operation-specific monitor bound
+to the candidate units, backend project and GPU identity; the old monitor's
+hard-coded service identities cannot classify the new stack. Keep the sealed
+guard mode and wait for unrelated GPU processes without signalling them.
 
 Polymer MD uses the production runtime contract and a separate jobs root, 16 CPU,
 32 GiB, no GPU and one execution slot. Render the analysis service with
@@ -81,6 +86,10 @@ read-only mounts: user systemd `ReadOnlyPaths` alone is insufficient on some hos
    and object store. Run the complete `dry-run`, then `prepare --verify-assets`,
    inspect the full report, and `publish`. Do not use a partial scan as a production
    generation. Verify object version retention or a separate asset backup.
+   Repeat a full preparation and verify native generation switching. Reused
+   immutable snapshot bodies must compare with PostgreSQL JSONB semantics;
+   numeric serialization round trips must not prevent an identical generation,
+   while changed content must still fail.
 
 Compare original columns in all original business tables and all original
 sequences before/after migration; separately verify approved owner backfill and

@@ -208,6 +208,23 @@ def test_candidate_has_independent_state_and_scrubbed_native_environments(cohort
     assert 'PYTHONPATH' not in dft and 'LD_PRELOAD' not in dft and 'APP_POSTGRES_DSN' not in dft
 
 
+def test_candidate_guard_cannot_inherit_legacy_state_or_change_sealed_mode(cohort_files):
+    root, _, path, sealed, _ = cohort_files
+    cohort = module.load_cohort(path, sealed)
+    legacy_state = str(module.PRODUCTION_RUNTIME_ROOT / 'state/gpu2-guard.json')
+    inherited = {'MONOMER_DFT_GPU_GUARD_STATE': legacy_state,
+                 'NEXPOLY_DFT_GPU_GUARD_MODE': 'enforce'}
+    candidate = module.dft_environment(cohort, inherited)
+    assert candidate['MONOMER_DFT_GPU_GUARD_STATE'] == str(root / 'dft/gpu2-guard.json')
+    assert candidate['NEXPOLY_DFT_GPU_GUARD_MODE'] == 'observe'
+    # The stable old-stack loader and its independently running timer keep
+    # their original authority. Only a sealed candidate cohort is retargeted.
+    values = monomer_dft_worker_env.load_runtime_environment(cohort.dft_runtime_env)
+    original = monomer_dft_worker_env.build_environment(values, inherited)
+    assert original['MONOMER_DFT_GPU_GUARD_STATE'] == legacy_state
+    assert original['NEXPOLY_DFT_GPU_GUARD_MODE'] == 'observe'
+
+
 @pytest.mark.parametrize('changes', [
     {'schema_version': True}, {'extra': 'unreviewed'}, {'source_sha': 'short'},
     {'source_root': '/data/lzq/gith/nexpoly'},

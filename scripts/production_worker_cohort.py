@@ -236,6 +236,7 @@ def dft_environment(cohort: ProductionWorkerCohort, inherited=None):
         'MONOMER_DFT_JOB_ROOT': str(cohort.root / 'dft/jobs'),
         'MONOMER_DFT_WORKER_UDS': str(cohort.root / 'dft/socket/worker.sock'),
         'MONOMER_DFT_DOWNLOAD_SPOOL_ROOT': str(cohort.root / 'dft/spool'),
+        'MONOMER_DFT_GPU_GUARD_STATE': str(cohort.root / 'dft/gpu2-guard.json'),
         'MONOMER_DFT_WORKER_INSTANCE': str(cohort.source_root),
         'MONOMER_DFT_START_AUTHORIZATION_URL': cohort.callback_base_url,
         'MONOMER_DFT_START_AUTHORIZATION_TOKEN': token,
