@@ -25,6 +25,7 @@ if not __package__:
 from scripts.worker_slot_runtime import inspect_git_checkout, require_private_directory
 
 PRODUCTION_RUNTIME_ROOT = Path('/data/lzq/gith/nexpoly-runtime')
+PRODUCTION_SOURCE_ROOT = Path('/data/lzq/gith/nexpoly-release-private')
 FILE_KEY = 'NEXPOLY_PROD_WORKER_COHORT_FILE'
 DIGEST_KEY = 'NEXPOLY_PROD_WORKER_COHORT_SHA256'
 SOURCE_KEY = 'NEXPOLY_PROD_WORKER_SOURCE_ROOT'
@@ -150,9 +151,9 @@ def load_cohort(path: Path, digest: str) -> ProductionWorkerCohort:
                 or path != root / 'config/worker-cohort.json'
                 or re.fullmatch(r'[0-9a-f]{40}', data['source_sha']) is None
                 or re.fullmatch(r'[0-9a-f]{40}', data['source_tree']) is None
-                or source != root / 'releases' / data['source_sha']):
+                or source != PRODUCTION_SOURCE_ROOT / root.name / data['source_sha']):
             raise CohortError('Production cohort source or root is outside the reviewed layout')
-        for directory in (root, root / 'config', root / 'releases'):
+        for directory in (root, root / 'config', PRODUCTION_SOURCE_ROOT, PRODUCTION_SOURCE_ROOT / root.name):
             require_private_directory(directory)
         url = urlsplit(data['callback_base_url'])
         if (url.scheme != 'http' or url.hostname != '127.0.0.1' or url.port is None

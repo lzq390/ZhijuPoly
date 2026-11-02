@@ -29,7 +29,10 @@ credentials or scientific worker launch tokens. Online services must not receive
 the migration administrator or literature source administrator credentials.
 
 Build monomer workers with `scripts/prepare_production_worker_cohort.py` from a
-complete clean Git clone at the frozen SHA. Its sealed cohort manifest is required
+complete clean Git clone at
+`/data/lzq/gith/nexpoly-release-private/<operation_id>/<full-SHA>`. Keep this code
+outside the runtime tree so the existing controller import boundary is preserved.
+Its sealed cohort manifest is required
 by the candidate launchers. It reuses the existing dependency/model build checks,
 but does not migrate databases, publish applications or switch services. A
 candidate toolchain seal does not replace actual scientific acceptance.
@@ -92,6 +95,9 @@ result tests for monomer MD/DFT, batch jobs, polymer MD and trajectory/distance
 analysis; verify metering replay does not double count and quotas remain disabled.
 Validate literature search, details, original files, generation switch and restore.
 Bind scientific evidence to the candidate runtime; pending evidence remains pending.
+When using `scripts/polymer_md_acceptance_registry.py`, pass
+`--retention-enabled false` to match this production stack's protocol binding;
+the default retains the development retention policy and is a different binding.
 
 After all acceptance gates pass and at least 15 minutes of observation, stop the
 old web ingress, render the new web binding as `0.0.0.0:9000`, and record durable

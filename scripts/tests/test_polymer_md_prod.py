@@ -64,8 +64,9 @@ def deployment(monkeypatch):
         base = home / "production"
         root = base / "state" / "p9000-20261102" / "pmd"
         root.parent.mkdir(parents=True, mode=0o700)
-        source_parent = root.parent / "releases"
-        source_parent.mkdir(mode=0o700)
+        source_base = home / "private-releases"
+        source_parent = source_base / "p9000-20261102"
+        source_parent.mkdir(mode=0o700, parents=True)
         moved_source = source_parent / sha
         source.rename(moved_source)
         source = moved_source
@@ -82,6 +83,7 @@ def deployment(monkeypatch):
         path = root / "worker.json"
         private_json(path, values)
         monkeypatch.setattr(contract, "PRODUCTION_RUNTIME_ROOT", base)
+        monkeypatch.setattr(contract, "PRODUCTION_SOURCE_ROOT", source_base)
         monkeypatch.setattr(contract, "PRODUCTION_SOCKET_PARENT", sockets.parent)
         yield path, values, runtime
 
@@ -129,6 +131,21 @@ def test_clean_committed_source_must_match_every_frozen_worker_byte(deployment):
     private_json(path, values)
     with pytest.raises(ValueError, match="differs from the configured source"):
         worker.verify_configuration(worker.load_configuration(path, _production=True))
+
+
+@pytest.mark.parametrize("layout", ["other-operation", "different-sha", "old-runtime-layout"])
+def test_production_source_requires_its_exact_operation_and_sha_outside_runtime(deployment, layout):
+    path, values, _ = deployment
+    source = Path(values["source_root"])
+    if layout == "other-operation":
+        invalid = source.parent.parent / "other-operation" / values["source_sha"]
+    elif layout == "different-sha":
+        invalid = source.with_name("a" * 40)
+    else:
+        invalid = Path(values["runtime_root"]).parent / "releases" / values["source_sha"]
+    private_json(path, {**values, "source_root": str(invalid)})
+    with pytest.raises(ValueError, match="private full-SHA"):
+        contract.validate_production_binding({**values, "source_root": str(invalid)})
 
 
 def test_development_entry_points_still_reject_production(monkeypatch):

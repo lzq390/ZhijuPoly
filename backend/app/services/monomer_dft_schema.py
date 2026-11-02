@@ -707,11 +707,19 @@ def monomer_dft_isolation_catalog_sha256(connection: Any) -> str:
     digest = hashlib.sha256(payload).hexdigest()
     # PG16 pg_dump/restore flattens the nested AND emitted for BETWEEN in
     # exactly three canonical CHECK constraints (artifact path, artifact name,
-    # idempotency key). This independently verified whole-catalog identity has
-    # identical ACLs, roles, policies and constraints. Accept no generic SQL
-    # rewrite and no arbitrary alternative; any other drift still fails closed.
+    # idempotency key). Each accepted profile independently binds the whole
+    # catalog, including its exact approved ACL ordering and privileges. Accept
+    # no generic SQL rewrite or arbitrary ACL alternative; other drift fails.
     restored_profiles = {
         "678ca700374848df366c661066ed4b44db3e0c18ef7bac4d92a9143de2b72321":
+            "fc701eb1acde52fa87a1c4d6728ea71fbd7142a7a5e44abd698a12ce45292941",
+        # Independently regenerated from checksum-exact 0015 plus the already
+        # approved mutable-audit ACL (official 0013 digest 8972b5...), a real
+        # PG16 dump/restore, then unchanged 0017/0018/0019 migrations. The audit
+        # principal precedes API/service in the raw ACL and retains sequence
+        # SELECT. This is one complete historical profile, never ACL sorting,
+        # privilege removal, or a fingerprint learned from a live database.
+        "8226e03379edb3ba70eb7721a8a2cc84f6accdf13412f93889d4da0663041fc9":
             "fc701eb1acde52fa87a1c4d6728ea71fbd7142a7a5e44abd698a12ce45292941",
     }
     return restored_profiles.get(digest, digest)

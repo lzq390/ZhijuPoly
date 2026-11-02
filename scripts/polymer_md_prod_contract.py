@@ -10,6 +10,7 @@ import subprocess
 BWRAP = "/usr/bin/bwrap"
 
 PRODUCTION_RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
+PRODUCTION_SOURCE_ROOT = Path("/data/lzq/gith/nexpoly-release-private")
 PRODUCTION_SOCKET_PARENT = Path(f"/run/user/{os.getuid()}")
 PRODUCTION_FIELDS = {"environment", "operation_id", "source_sha", "source_root", "socket_root"}
 
@@ -31,8 +32,8 @@ def validate_production_binding(values):
         raise ValueError("production PMD runtime must use its operation's independent state directory")
     if sockets.parent != PRODUCTION_SOCKET_PARENT or not sockets.name.startswith("nexpoly-"):
         raise ValueError("production sockets require a separate short owned runtime directory")
-    if source != runtime.parent / "releases" / values["source_sha"]:
-        raise ValueError("production frozen source must use the same operation's releases/full-SHA directory")
+    if source != PRODUCTION_SOURCE_ROOT / values["operation_id"] / values["source_sha"]:
+        raise ValueError("production frozen source must use its operation's private full-SHA directory")
 
 
 def verify_source_binding(values, files):

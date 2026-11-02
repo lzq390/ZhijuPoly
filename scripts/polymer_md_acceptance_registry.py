@@ -74,15 +74,22 @@ def json_document(path: Path) -> tuple[dict, str]:
     return value, hashlib.sha256(data).hexdigest()
 
 
-def binding_from_manifest(path: Path) -> tuple[dict, dict, dict]:
+def scientific_protocol(*, retention_enabled: bool = True) -> dict:
     from app.routers.polymer_md import _scientific_protocol
+
+    if type(retention_enabled) is not bool:
+        raise ValueError("retention policy must be an explicit boolean")
+    return _scientific_protocol(retention_enabled=retention_enabled)
+
+
+def binding_from_manifest(path: Path, *, retention_enabled: bool = True) -> tuple[dict, dict, dict]:
     from app.services.polymer_md_acceptance_registry import canonical_sha256
 
     manifest, _ = json_document(path)
     unsigned = {key: value for key, value in manifest.items() if key != "runtime_fingerprint"}
     if canonical_sha256(unsigned) != manifest.get("runtime_fingerprint"):
         raise ValueError("sealed runtime fingerprint does not match its bytes")
-    protocol = _scientific_protocol()
+    protocol = scientific_protocol(retention_enabled=retention_enabled)
     binding = {key: manifest.get(key) for key in ("runtime_fingerprint", "source_sha", "patch_version")}
     binding["scientific_protocol_sha256"] = canonical_sha256(protocol)
     return binding, manifest, protocol
@@ -113,14 +120,14 @@ def verify_evidence(entries: list[dict]):
             raise ValueError("evidence bytes changed or do not match the reviewed hash")
 
 
-def prepare_approval(review_path: Path, manifest_path: Path) -> dict:
+def prepare_approval(review_path: Path, manifest_path: Path, *, retention_enabled: bool = True) -> dict:
     from app.services.polymer_md_acceptance_registry import canonical_sha256, validate_receipt
 
     review, document_sha = json_document(review_path)
     expected = {"decision", "reviewer", "reviewed_at", "protocol_id", "binding", "scopes", "evidence"}
     if set(review) != expected or review["decision"] != "approved":
         raise ValueError("publish requires a complete existing explicit approved decision")
-    binding, _, _ = binding_from_manifest(manifest_path)
+    binding, _, _ = binding_from_manifest(manifest_path, retention_enabled=retention_enabled)
     if review["binding"] != binding:
         raise ValueError("review does not bind this sealed runtime and scientific protocol")
     body = {"schema_version": 1, "kind": "approval",
@@ -220,9 +227,8 @@ def immutable_publish(root: Path, document: dict) -> Path:
     return target
 
 
-def check_publication_budget(root: Path, document: dict):
-    from app.routers.polymer_md import _scientific_protocol
-    from app.services.polymer_md_acceptance_registry import acceptance_summary, MAX_EVENTS, MAX_TOTAL_BYTES
+def check_publication_budget(root: Path, document: dict, *, retention_enabled: bool = True):
+    from app.services.polymer_md_acceptance_registry import acceptance_summary, canonical_sha256, MAX_EVENTS, MAX_TOTAL_BYTES
 
     data = document_bytes(document)
     if document["kind"] == "approval":
@@ -230,7 +236,10 @@ def check_publication_budget(root: Path, document: dict):
     else:
         original, _ = json_document(root / "receipts" / (document["receipt_id"] + ".json"))
         binding = original["binding"]
-    status = acceptance_summary(str(root), binding, _scientific_protocol())
+    protocol = scientific_protocol(retention_enabled=retention_enabled)
+    if binding["scientific_protocol_sha256"] != canonical_sha256(protocol):
+        raise ValueError("receipt does not match the explicitly selected retention policy")
+    status = acceptance_summary(str(root), binding, protocol)
     if status["registry_status"] == "invalid":
         raise ValueError("existing registry must validate before adding an event")
     events, total = 1, len(data)
@@ -245,7 +254,7 @@ def check_publication_budget(root: Path, document: dict):
                 raise ValueError("publication would exceed the reader registry budget")
 
 
-def publish(root: Path, document: dict, *, dry_run: bool = False) -> dict:
+def publish(root: Path, document: dict, *, dry_run: bool = False, retention_enabled: bool = True) -> dict:
     from app.services.polymer_md_acceptance_registry import validate_receipt, validate_revocation
 
     root = safe_path(root)
@@ -264,11 +273,11 @@ def publish(root: Path, document: dict, *, dry_run: bool = False) -> dict:
         original = validate_receipt(original)
         if original["receipt_sha256"] != document["receipt_sha256"]:
             raise ValueError("revocation does not match the immutable original decision")
-    check_publication_budget(root, document)
+    check_publication_budget(root, document, retention_enabled=retention_enabled)
     if dry_run:
         return {"written": False, "dry_run": True, "kind": document["kind"]}
     with registry_lock(root):
-        check_publication_budget(root, document)
+        check_publication_budget(root, document, retention_enabled=retention_enabled)
         if document["kind"] == "approval":
             verify_evidence(document["evidence"])
         else:
@@ -287,19 +296,22 @@ def main(argv=None):
     for action in ("publish", "revoke", "inspect"):
         command = sub.add_parser(action)
         command.add_argument("--registry", type=Path, required=True)
+        command.add_argument("--retention-enabled", choices=("true", "false"), default="true",
+            help="must match candidate POLYMER_MD_RETENTION_ENABLED; default preserves the development protocol")
         if action != "revoke":
             command.add_argument("--manifest", type=Path, required=True)
         if action != "inspect":
             command.add_argument("--review", type=Path, required=True)
             command.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    retention_enabled = args.retention_enabled == "true"
     if args.action == "inspect":
         from app.services.polymer_md_acceptance_registry import acceptance_summary
-        _, manifest, protocol = binding_from_manifest(args.manifest)
+        _, manifest, protocol = binding_from_manifest(args.manifest, retention_enabled=retention_enabled)
         print(json.dumps(acceptance_summary(str(safe_path(args.registry)), manifest, protocol), sort_keys=True))
     else:
-        document = prepare_approval(args.review, args.manifest) if args.action == "publish" else prepare_revocation(args.review)
-        print(json.dumps(publish(args.registry, document, dry_run=args.dry_run), sort_keys=True))
+        document = prepare_approval(args.review, args.manifest, retention_enabled=retention_enabled) if args.action == "publish" else prepare_revocation(args.review)
+        print(json.dumps(publish(args.registry, document, dry_run=args.dry_run, retention_enabled=retention_enabled), sort_keys=True))
     return 0
 
 

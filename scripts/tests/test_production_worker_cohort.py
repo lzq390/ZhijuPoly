@@ -37,12 +37,15 @@ def cohort_files(monkeypatch):
     with tempfile.TemporaryDirectory(prefix='pc-') as temporary:
         runtime = Path(temporary)
         root = runtime / 'state/p9000-20261102'
-        source = root / 'releases' / SHA
+        source_base = runtime / 'sources'
+        source_parent = source_base / root.name
+        source = source_parent / SHA
         source.mkdir(mode=0o700, parents=True)
-        for path in (root, root / 'releases', root / 'config'):
-            path.mkdir(mode=0o700, exist_ok=True)
+        for path in (root, root / 'releases', root / 'config', source_base, source_parent):
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
             path.chmod(0o700)
         monkeypatch.setattr(module, 'PRODUCTION_RUNTIME_ROOT', runtime)
+        monkeypatch.setattr(module, 'PRODUCTION_SOURCE_ROOT', source_base)
         monkeypatch.setattr(monomer_dft_worker_env, 'RUNTIME_ROOT', runtime)
         monkeypatch.setattr(module, 'inspect_git_checkout',
             lambda path: SimpleNamespace(source_sha=SHA, source_tree=TREE))
@@ -108,6 +111,8 @@ def test_candidate_has_independent_state_and_scrubbed_native_environments(cohort
 @pytest.mark.parametrize('changes', [
     {'schema_version': True}, {'extra': 'unreviewed'}, {'source_sha': 'short'},
     {'source_root': '/data/lzq/gith/nexpoly'},
+    {'source_root': '/data/lzq/gith/nexpoly-runtime/state/p9000-20261102/releases/' + SHA},
+    {'source_root': '/data/lzq/gith/nexpoly-release-private/p9000-unrelated/' + SHA},
     {'cohort_root': '/data/lzq/gith/nexpoly-runtime'},
     {'callback_base_url': 'http://114.214.255.154:9000'},
     {'callback_base_url': 'http://127.0.0.1:18002/'},
@@ -192,6 +197,40 @@ def test_existing_controller_default_toolchain_pins_are_unchanged(tmp_path):
     assert defaults['uv'] == '/snap/astral-uv/1551/bin/uv'
     assert defaults['uv_sha256'] == production_dft_toolchain.UV_SHA256
     assert defaults['uv_uid'] == 0 and defaults['uv_mode'] == 0o755
+
+
+@pytest.mark.parametrize('proxy', ['https://127.0.0.1:17891', 'http://localhost:17891',
+    'http://127.0.0.1:17891/', 'http://user:secret@127.0.0.1:17891',
+    'http://127.0.0.1:17891?option=true', 'http://127.0.0.1:17891#fragment',
+    'http://127.0.0.1:80', '', True])
+def test_build_proxy_cannot_select_credentials_remote_endpoints_or_paths(proxy):
+    with pytest.raises(module.CohortError, match='loopback HTTP'):
+        builder.validate_build_proxy(proxy)
+
+
+def test_sealed_build_proxy_only_reaches_real_hash_locked_pip_downloads(monkeypatch):
+    calls = []
+    def run(self, command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(builder.core.SystemRunner, 'run', run)
+    proxy = 'http://127.0.0.1:17891'
+    python = '/usr/bin/python3.12'
+    arguments = [python, '-I', '-m', 'pip', 'download', '--require-hashes', '--only-binary=:all:']
+    runner = builder.BuildOnlyRunner(proxy, {python})
+    original = {'PATH': '/usr/bin', 'HTTP_PROXY': 'http://unexpected:1', 'all_proxy': 'http://unexpected:2'}
+    runner.run(arguments, env=original)
+    assert calls[-1][1]['env'] == {'PATH': '/usr/bin', 'HTTP_PROXY': proxy, 'HTTPS_PROXY': proxy}
+    for command in ([python, '-I', '-m', 'pip', 'install', '--no-index'],
+                    ['/sealed/tools/uv', 'pip', 'install', '--offline'],
+                    ['/tmp/other-python', *arguments[1:]], arguments[:-1],
+                    [python, '-m', 'uvicorn', 'app:app']):
+        runner.run(command, env=original)
+        assert calls[-1][1]['env'] == {'PATH': '/usr/bin'}
+    builder.BuildOnlyRunner(None, {python}).run(arguments, env=original)
+    assert calls[-1][1]['env'] == {'PATH': '/usr/bin'}
+    assert original['HTTP_PROXY'] == 'http://unexpected:1'
+    assert builder.validate_build_proxy('http://[::1]:17891') == 'http://[::1]:17891'
 
 
 @pytest.mark.parametrize('change', ['worktree', 'dirty', 'wrong-sha', 'wrong-tree'])
