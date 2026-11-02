@@ -1,15 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ preload: vi.fn(), page: vi.fn(), mount: vi.fn() }));
+const mocks = vi.hoisted(() => ({ preload: vi.fn(), page: vi.fn(), mount: vi.fn(), simulation: vi.fn() }));
 vi.mock("@structure-editor-preload", () => ({ preloadStructureEditor: mocks.preload }));
 vi.mock("./pages", () => ({ preloadPage: mocks.page }));
+vi.mock("./mountSimulationPayment", () => ({ mountSimulationPayment: mocks.simulation }));
 vi.mock("./mountApp", () => ({ mountApp: mocks.mount }));
 
 beforeEach(() => {
   vi.resetModules();
   mocks.preload.mockReset().mockReturnValue(new Promise(() => {}));
   mocks.mount.mockReset();
+  mocks.simulation.mockReset();
   mocks.page.mockReset().mockResolvedValue(undefined);
   document.body.innerHTML = '<div id="root"></div>';
 });
@@ -41,4 +43,21 @@ describe("refresh bootstrap", () => {
     expect(mocks.mount).toHaveBeenCalledOnce();
     expect(document.querySelector('[role="alert"]')).toBeNull();
   });
+});
+
+it.each(["/billing/simulate-pay", "/billing/simulate-pay/"])("mounts public %s without app, page graph or editor preload", async path => {
+  window.history.replaceState({}, "", `${path}#token=fragment-only`);
+  await import("./main"); await vi.dynamicImportSettled();
+  expect(mocks.simulation).toHaveBeenCalledOnce(); expect(mocks.mount).not.toHaveBeenCalled();
+  expect(mocks.preload).not.toHaveBeenCalled(); expect(mocks.page).not.toHaveBeenCalled();
+  expect(document.head.querySelector('meta[name="referrer"]')?.getAttribute("content")).toBe("no-referrer");
+});
+
+it("keeps the normal account app available when global stylesheet transport fails", async () => {
+  window.history.replaceState({}, "", "/account/subscription");
+  vi.doMock("./index.css", () => { throw new Error("Stylesheet unavailable"); });
+  try {
+    await import("./main"); await vi.dynamicImportSettled();
+    expect(mocks.mount).toHaveBeenCalledOnce(); expect(document.querySelector('[role="alert"]')).toBeNull();
+  } finally { vi.doUnmock("./index.css"); }
 });

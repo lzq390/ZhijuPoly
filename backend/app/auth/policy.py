@@ -5,6 +5,8 @@ import re
 
 MODULES = ('database','prediction','generation','polytao','reverse','knowledge','online_knowledge',
            'browsing','assistant','md','dft','polymerization','batch','retrosynthesis','openscience')
+SIMULATION_CHECKOUT_PATHS = frozenset({
+    '/api/v1/billing/simulation/checkout', '/api/v1/billing/simulation/confirm'})
 
 
 def capabilities(member: bool, *, acceptance=None, owner_id: str | None = None) -> dict[str, bool]:
@@ -20,6 +22,8 @@ def capabilities(member: bool, *, acceptance=None, owner_id: str | None = None) 
 
 
 def route_policy(path: str, method: str) -> str:
+    if method == 'POST' and path in SIMULATION_CHECKOUT_PATHS:
+        return 'public'
     if method == 'POST' and path in {'/api/v1/billing/webhooks/wechat', '/api/v1/billing/webhooks/alipay'}:
         return 'payment_webhook'
     if path.startswith('/internal/'):

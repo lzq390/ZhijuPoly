@@ -100,7 +100,7 @@ def test_multiuser_all_runtime_routes_reject_guest_initial_password_and_operatio
     runtime = {(method, route.path) for route in app.routes for method in getattr(route, "methods", ())}
     assert runtime == set(reviewed), "Runtime routes must match the reviewed independent inventory"
     checked, operations, internal = set(), set(), set()
-    substitutions = {"job_id": str(uuid4()), "import_id": uuid4().hex, "history_id": "99999999",
+    substitutions = {"job_id": str(uuid4()), "order_id": str(uuid4()), "import_id": uuid4().hex, "history_id": "99999999",
                      "role": "a", "format": "csv", "mol_id": "1", "polymer_id": "1"}
     try:
         for route in app.routes:
@@ -112,12 +112,21 @@ def test_multiuser_all_runtime_routes_reject_guest_initial_password_and_operatio
                 variants = [(path, expected)] if expected != "mixed-template" else [
                     (path, "public"), (path.rsplit("/", 1)[0] + "/x.txt", "member"),
                 ]
+                if expected == "mixed-payment-webhook":
+                    variants = [(path.rsplit('/', 1)[0] + '/' + provider, 'payment_webhook')
+                                for provider in ('wechat', 'alipay')]
+                    variants.append((path.rsplit('/', 1)[0] + '/unknown', 'member'))
                 for path, policy in variants:
                     # Expected policy comes from the independently reviewed
                     # manifest, never from the implementation under test.
                     assert route_policy(path, method) == policy, (method, path, policy)
                     default_operations_denied = policy == "operations" or policy.startswith("capability:")
                     if policy == "public" or path.startswith("/api/v1/auth/"):
+                        continue
+                    if policy == 'payment_webhook':
+                        # Only exact providers bypass browser identity. An
+                        # unsigned callback still fails before fulfillment.
+                        assert guest.request(method, path, content=b'invalid-notification').status_code == 400
                         continue
                     options = {"content": b"invalid-json", "headers": {"Origin": "http://testserver", "Content-Type": "application/json"}}
                     if policy == "internal":
@@ -141,7 +150,7 @@ def test_multiuser_all_runtime_routes_reject_guest_initial_password_and_operatio
                         operations.add((method, route.path))
                     checked.add((method, route.path))
         expected_private = {key for key, permission in reviewed.items()
-                            if (permission in {"member", "operations", "mixed-template"} or permission.startswith("capability:"))
+                            if (permission in {"member", "account", "operations", "mixed-template", "mixed-payment-webhook"} or permission.startswith("capability:"))
                             and not key[1].startswith("/api/v1/auth/") and key[0] != "OPTIONS"}
         assert checked == expected_private
         assert ("GET", "/api/v1/lab-data/test-projects") in operations

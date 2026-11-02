@@ -13,7 +13,8 @@ from psycopg.errors import UndefinedTable
 
 from app.auth.context import service_context
 from app.postgres_database import postgres_connection
-from .development import is_simulated_order
+from .development import (SIMULATION_APP_ID, SIMULATION_MERCHANT_ID, is_simulated_order,
+                          simulation_token_matches, simulation_token_order_id)
 
 
 class BillingError(Exception):
@@ -32,11 +33,23 @@ def next_month(at: datetime) -> datetime:
 
 
 def public_order(row):
+    checkout = row.get("checkout_data") or {}
+    token = checkout.get("simulation_checkout_token")
     return {**{key: row.get(key) for key in (
         "id", "provider", "amount_fen", "currency", "status", "expires_at",
         "created_at", "paid_at", "access_ends_at")},
         "simulation": is_simulated_order(row),
-        "qr_code": (row.get("checkout_data") or {}).get("qr_code") if row["status"] == "pending" else None}
+        "qr_code": checkout.get("qr_code") if row["status"] == "pending" else None,
+        "simulation_checkout_token": token if (row["status"] == "pending"
+            and row["expires_at"] > datetime.now(timezone.utc) and simulation_token_matches(row, token)) else None}
+
+
+def simulation_checkout_view(row):
+    """The bearer may see purchase facts, never account or full order identity."""
+    return {"simulation": True, "period": "month", "order_suffix": str(row["id"])[-6:],
+            "server_time": datetime.now(timezone.utc),
+            **{key: row.get(key) for key in (
+                "provider", "amount_fen", "currency", "status", "expires_at", "access_ends_at")}}
 
 
 class BillingRepository:
@@ -115,11 +128,46 @@ class BillingRepository:
 
     def save_checkout(self, order_id, checkout):
         # Persist only the presentation payload, never raw provider responses.
-        payload = {"simulation": True} if checkout.get("simulation") is True else {"qr_code": checkout["qr_code"]}
+        if checkout.get("simulation") is True:
+            token = checkout.get("simulation_checkout_token")
+            if simulation_token_order_id(token) != UUID(str(order_id)):
+                raise BillingError("invalid_simulation_checkout", "模拟支付链接无效。", 400)
+            payload = {"simulation": True, "simulation_checkout_token": token}
+            with self.connection(service=True) as connection:
+                # Compare-and-set lets old pending simulation orders gain a QR,
+                # while concurrent refreshes cannot rotate a published token.
+                connection.execute("""UPDATE billing.orders SET checkout_data=%s
+                    WHERE id=%s AND status='pending' AND expires_at>clock_timestamp()
+                    AND merchant_id=%s AND app_id=%s
+                    AND checkout_data IN ('{}'::jsonb,'{"simulation":true}'::jsonb)""",
+                    (Jsonb(payload), order_id, SIMULATION_MERCHANT_ID, SIMULATION_APP_ID))
+            return
+        payload = {"qr_code": checkout["qr_code"]}
         with self.connection(service=True) as connection:
             connection.execute("""UPDATE billing.orders SET checkout_data=%s
                 WHERE id=%s AND status='pending' AND checkout_data='{}'::jsonb""",
                 (Jsonb(payload), order_id))
+
+    @staticmethod
+    def _validate_simulation_token(order, token, now):
+        if order is None or not simulation_token_matches(order, token):
+            raise BillingError("simulation_checkout_unavailable", "模拟支付链接无效或不可用。", 404)
+        if order["expires_at"] <= now:
+            raise BillingError("simulation_checkout_expired", "模拟支付链接已过期，请在电脑上重新下单。", 410)
+
+    def simulation_checkout(self, token):
+        """Read only: inspection never reconciles, rotates a token or pays."""
+        order_id = simulation_token_order_id(token)
+        if order_id is None:
+            raise BillingError("simulation_checkout_unavailable", "模拟支付链接无效或不可用。", 404)
+        with self.connection(service=True) as connection:
+            connection.execute("SET TRANSACTION READ ONLY")
+            order = connection.execute("""SELECT o.*,clock_timestamp() AS server_time
+                FROM billing.orders o JOIN auth.users u ON u.user_id=o.owner_user_id
+                WHERE o.id=%s AND u.status='active' AND NOT u.is_system""", (order_id,)).fetchone()
+            now = order["server_time"] if order is not None else datetime.now(timezone.utc)
+            self._validate_simulation_token(order, token, now)
+            return order
 
     def get_order(self, owner, order_id):
         with self.connection() as connection:
@@ -149,8 +197,10 @@ class BillingRepository:
         with self.connection(service=True) as connection:
             connection.execute("UPDATE billing.orders SET status='closed' WHERE id=%s AND status='pending'", (order_id,))
 
-    def fulfill(self, payment, *, simulation_owner=None):
+    def fulfill(self, payment, *, simulation_owner=None, simulation_token=None):
         """Verified payment, or an explicitly owner-authorized development action."""
+        if simulation_token is not None and simulation_owner is None:
+            raise BillingError("simulation_checkout_unavailable", "模拟支付链接无效或不可用。", 404)
         try:
             order_id = str(UUID(str(payment["order_id"])))
             provider, payment_id = payment["provider"], payment["transaction_id"]
@@ -179,6 +229,11 @@ class BillingRepository:
                 connection.execute("SELECT user_id FROM auth.users WHERE user_id=%s FOR UPDATE", (owner,)).fetchone()
                 connection.execute("SELECT owner_user_id FROM billing.accounts WHERE owner_user_id=%s FOR UPDATE", (owner,)).fetchone()
             order = connection.execute("SELECT * FROM billing.orders WHERE id=%s FOR UPDATE", (order_id,)).fetchone()
+            now = connection.execute("SELECT clock_timestamp() AS at").fetchone()["at"]
+            if simulation_token is not None:
+                # Recheck after account + order locks, including paid replays.
+                # A slow confirmation cannot outlive its bearer capability.
+                self._validate_simulation_token(order, simulation_token, now)
             if is_simulated_order(order) != (simulation_owner is not None):
                 raise BillingError("payment_mode_mismatch", "该订单不支持此支付方式。", 400)
             if (order["provider"] != provider or order["amount_fen"] != amount or order["currency"] != "CNY"
@@ -192,7 +247,6 @@ class BillingRepository:
                     raise BillingError("payment_conflict", "订单支付流水不一致。")
                 return order
             # A late, genuine successful payment still fulfills a locally closed order.
-            now = connection.execute("SELECT clock_timestamp() AS at").fetchone()["at"]
             if simulation_owner is not None and (order["status"] != "pending" or order["expires_at"] <= now):
                 raise BillingError("simulation_order_expired", "模拟订单已失效，请重新下单。")
             prior = connection.execute("SELECT paid_through FROM billing.subscriptions WHERE owner_user_id=%s FOR UPDATE", (owner,)).fetchone()

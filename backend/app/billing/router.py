@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Literal
 from uuid import UUID
@@ -18,7 +19,8 @@ router = APIRouter(prefix="/api/v1/billing", tags=["membership"])
 
 
 async def billing_error_handler(request, exc: BillingError):
-    return JSONResponse({"detail": {"code": exc.code, "message": exc.message}}, status_code=exc.status)
+    return JSONResponse({"detail": {"code": exc.code, "message": exc.message}}, status_code=exc.status,
+                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
 def service(request):
@@ -60,6 +62,40 @@ def order(request: Request, order_id: UUID):
 @router.post("/orders/{order_id}/simulate-payment")
 def simulate_payment(request: Request, order_id: UUID):
     return jsonable_encoder(service(request).simulate_payment(current_owner_id(), str(order_id)))
+
+
+async def simulation_token_body(request: Request):
+    # Parse manually so validation errors never reflect a bearer token. The
+    # authentication middleware checks trusted Origin before this public route.
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise BillingError("simulation_json_required", "请使用 JSON 提交模拟支付请求。", 415)
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > 1024:
+            raise BillingError("simulation_body_too_large", "模拟支付请求过大。", 413)
+        chunks.append(chunk)
+    try:
+        body = json.loads(b"".join(chunks))
+    except (ValueError, UnicodeError):
+        raise BillingError("simulation_body_invalid", "模拟支付请求无效。", 400) from None
+    if not isinstance(body, dict) or set(body) != {"token"} or not isinstance(body["token"], str):
+        raise BillingError("simulation_body_invalid", "模拟支付请求无效。", 400)
+    return body["token"]
+
+
+@router.post("/simulation/checkout")
+async def simulation_checkout(request: Request):
+    token = await simulation_token_body(request)
+    result = await run_in_threadpool(service(request).simulation_checkout, token)
+    return JSONResponse(jsonable_encoder(result), headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
+@router.post("/simulation/confirm")
+async def confirm_simulation_checkout(request: Request):
+    token = await simulation_token_body(request)
+    result = await run_in_threadpool(service(request).confirm_simulation_checkout, token)
+    return JSONResponse(jsonable_encoder(result), headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
 @router.post("/webhooks/{provider}")

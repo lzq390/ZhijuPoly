@@ -3,7 +3,8 @@ import QRCode from "qrcode";
 import { Crown, RefreshCw, ShieldCheck } from "lucide-react";
 import { useAuth } from "../auth/AuthProvider";
 import { randomId } from "../auth/randomId";
-import { createBillingOrder, fetchBillingOrder, fetchBillingOrders, fetchBillingPlans, fetchSubscription, simulateBillingPayment, type BillingOrder, type BillingPlans, type PaymentProvider, type Subscription } from "../services/billing";
+import { createBillingOrder, fetchBillingOrder, fetchBillingOrders, fetchBillingPlans, fetchSubscription, type BillingOrder, type BillingPlans, type PaymentProvider, type Subscription } from "../services/billing";
+import { simulationCheckoutUrl } from "../services/billingSimulation";
 import { ModulePageHeader } from "./ModulePageHeader";
 import "./SubscriptionPage.css";
 
@@ -108,12 +109,14 @@ function SubscriptionContent({ onReturn }: { onReturn?: () => void }) {
     timer = setTimeout(poll, 1500);
     return () => { controller.abort(); clearTimeout(timer); };
   }, [order?.id, order?.status]);
+  const simulationUrl = plans?.simulation && order?.simulation_checkout_token ? simulationCheckoutUrl(order.simulation_checkout_token, window.location.origin) : null;
+  const qrPayload = plans?.simulation ? simulationUrl : order?.qr_code;
   useEffect(() => {
     setQr(""); let active = true;
-    if (!plans?.simulation && order?.status === "pending" && order.qr_code) QRCode.toDataURL(order.qr_code, { width: 256, margin: 2, errorCorrectionLevel: "M" })
+    if (order?.status === "pending" && qrPayload) QRCode.toDataURL(qrPayload, { width: 256, margin: 2, errorCorrectionLevel: "M" })
       .then(value => { if (active) setQr(value); }).catch(() => { if (active) setPollError("无法显示支付二维码，请重新读取订单。"); });
     return () => { active = false; };
-  }, [order?.id, order?.status, order?.qr_code, plans?.simulation]);
+  }, [order?.id, order?.status, qrPayload]);
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
 
   async function buy() {
@@ -141,14 +144,6 @@ function SubscriptionContent({ onReturn }: { onReturn?: () => void }) {
     catch (reason) { if (!signal?.aborted) setPollError(message(reason)); }
     finally { submitting.current = false; if (!signal?.aborted) setBusy(false); }
   }
-  async function simulatePayment() {
-    if (submitting.current || !plans?.simulation || !order || order.status !== "pending" || new Date(order.expires_at).getTime() <= Date.now() + clockOffset.current) return;
-    submitting.current = true; setBusy(true); setPollError("");
-    const signal = lifetime.current?.signal;
-    try { await applyOrder(await simulateBillingPayment(order.id, signal), signal); }
-    catch (reason) { if (!signal?.aborted) setPollError(message(reason)); }
-    finally { submitting.current = false; if (!signal?.aborted) setBusy(false); }
-  }
   const legacy = subscription?.source === "legacy" && subscription.account_type === "member";
   const blocked = subscription?.purchase_blocked === true;
   const expiredOrder = order ? new Date(order.expires_at).getTime() <= now + clockOffset.current : false;
@@ -159,7 +154,7 @@ function SubscriptionContent({ onReturn }: { onReturn?: () => void }) {
     {loading && <p role="status">正在读取会员信息…</p>}
     {error && <div className="np-subscription-error" role="alert"><p>{error}</p><button type="button" disabled={busy} onClick={() => setRevision(value => value + 1)}>重新读取</button></div>}
     {!loading && plans && <>
-      {plans.simulation && <aside className="np-subscription-simulation" role="note"><strong>开发模拟支付 · 不会扣款</strong><p>当前金额仅供流程验收；微信和支付宝均为模拟渠道，不会生成真实支付二维码。</p></aside>}
+      {plans.simulation && <aside className="np-subscription-simulation" role="note"><strong>开发模拟支付 · 不会扣款</strong><p>当前金额仅供流程验收；扫码会打开 Nexpoly 模拟确认页，微信和支付宝均不会真实扣款。</p></aside>}
       {signedIn && subscription && <section className="np-subscription-card" aria-label="当前会员状态"><h3>当前账号</h3><strong>{subscription.account_type === "member" ? "会员账号" : "普通账号"}</strong>
         <p>{legacy ? "当前账号已拥有长期会员权限，无需重复购买。" : subscription.expires_at ? `会员有效期至 ${date(subscription.expires_at)}（本地时间）` : "可使用本地画板和公开示例，开通会员后使用科研服务。"}</p>
         {blocked && <p>当前权限由管理员设置，暂不提供在线购买。</p>}
@@ -175,7 +170,10 @@ function SubscriptionContent({ onReturn }: { onReturn?: () => void }) {
         </>}
       </section>}
       {order && <section className="np-subscription-card np-subscription-payment" aria-label="支付订单"><h3>{plans.simulation ? "模拟订单 · " : ""}{statuses[order.status]}</h3><p>{providers[order.provider]}{plans.simulation ? "（开发模拟）" : ""} · {money(order.amount_fen)}</p>
-        {order.status === "pending" && !expiredOrder && (plans.simulation ? <button type="button" className="is-primary" disabled={busy} onClick={() => void simulatePayment()}>模拟支付成功（不会扣款）</button> : qr ? <img src={qr} width={256} height={256} alt={`${providers[order.provider]}二维码`} /> : <p role="status">{order.qr_code ? "正在生成支付二维码…" : "支付渠道确认中，请读取当前订单。"}</p>)}
+        {order.status === "pending" && !expiredOrder && <>
+          {qr ? <img src={qr} width={256} height={256} alt={plans.simulation ? `${order.provider === "wechat" ? "微信" : "支付宝"}模拟扫码二维码` : `${providers[order.provider]}二维码`} /> : <p role="status">{qrPayload ? "正在生成支付二维码…" : plans.simulation ? "正在准备模拟扫码链接，请读取当前订单。" : "支付渠道确认中，请读取当前订单。"}</p>}
+          {plans.simulation && simulationUrl && <div className="np-subscription-scan"><p>请使用手机{providers[order.provider]}扫一扫，在打开的 Nexpoly 页面确认模拟支付。无需登录，确认后电脑会自动更新会员状态。</p><a href={simulationUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">在新窗口打开模拟确认页</a><p className="np-subscription-note">仅供开发验收；新窗口也可测试确认流程。</p>{/^(localhost|127\.[\d.]+|\[::1\]|.*\.localhost)$/.test(window.location.hostname) && <p role="note">当前为本机地址，手机无法访问。请用手机可访问的站点域名或局域网地址重新打开订阅页，再扫码。</p>}</div>}
+        </>}
         {order.status === "pending" && <p>{plans.simulation ? expiredOrder ? "模拟订单已过期，请读取订单确认状态。" : `此订单仅用于开发验收，不会扣款；有效至 ${date(order.expires_at)}。` : expiredOrder ? "二维码已过期。如已支付，请读取订单确认结果。" : `请使用${providers[order.provider]}扫码，二维码有效至 ${date(order.expires_at)}。`}</p>}
         {order.status === "paid" && <p role="status">{subscription?.account_type === "member" ? "会员已生效，可返回原功能继续使用。" : "支付已成功，正在确认会员状态。"}{order.access_ends_at && ` 本次开通后有效期至 ${date(order.access_ends_at)}。`}</p>}
         <p className="np-subscription-note">订单号：{order.id}</p>{order.status === "paid" && subscription?.account_type === "member" && onReturn && <button type="button" className="is-primary" onClick={onReturn}>返回原功能</button>}{pollError && <p role="alert">{pollError}</p>}

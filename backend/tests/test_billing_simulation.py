@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 from app.auth.context import Identity, user_context
 from app.auth.policy import route_policy
 from app.auth.settings import AuthSettings
-from app.billing.development import DevelopmentPaymentGateway, SIMULATION_MERCHANT_ID, SIMULATION_APP_ID
+from app.billing.development import (DevelopmentPaymentGateway, SIMULATION_MERCHANT_ID,
+                                    SIMULATION_APP_ID, simulation_token_order_id)
 from app.billing.providers import PaymentError
 from app.billing.repository import BillingError
 from app.billing.settings import BillingSettings, BillingConfigurationError
@@ -54,7 +55,10 @@ def test_simulation_has_no_real_channels_or_payment_callback():
     gateway = DevelopmentPaymentGateway(configuration)
     for provider in configuration.available_providers:
         order_id = uuid4().hex
-        assert gateway.create_order(provider, order_id, 19900, 'development', None) == {'simulation': True}
+        checkout = gateway.create_order(provider, order_id, 19900, 'development', None)
+        assert checkout['simulation'] is True and 'qr_code' not in checkout
+        assert simulation_token_order_id(checkout['simulation_checkout_token']).hex == order_id
+        assert checkout != gateway.create_order(provider, order_id, 19900, 'development', None)
         assert gateway.query_order(provider, order_id, expected_amount_fen=19900) == {'status': 'pending'}
         assert gateway.close_order(provider, order_id) == {'status': 'closed'}
         with pytest.raises(PaymentError, match='development_callbacks_disabled'):

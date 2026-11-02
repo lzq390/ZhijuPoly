@@ -12,7 +12,7 @@ from starlette.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from .context import user_context, service_context
-from .policy import route_policy
+from .policy import SIMULATION_CHECKOUT_PATHS, route_policy
 from .service import csrf_token
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,9 @@ class AuthenticationMiddleware:
 
         if policy == 'public' and method not in {'GET','HEAD','OPTIONS'} and headers.get('origin') not in self.auth.settings.allowed_origins:
             return await reject(403, '请求来源未获授权。', 'untrusted_origin')
-        token = Request(scope).cookies.get(self.auth.settings.cookie_name)
+        # Mobile checkout authenticates only its short-lived order capability.
+        # Ignore ambient cookies, so preview cannot touch a login session.
+        token = None if path in SIMULATION_CHECKOUT_PATHS else Request(scope).cookies.get(self.auth.settings.cookie_name)
         try:
             session = await anyio.to_thread.run_sync(self.auth.resolve, token)
         except Exception:
@@ -120,14 +122,15 @@ class AuthenticationMiddleware:
                         return await reject(503, '用户隔离数据库尚未准备好。', 'isolation_not_ready')
         scope.setdefault('state', {})['auth_session'] = session
         scope['state']['auth_token'] = token
-        if path.startswith(('/api/v1/auth/', '/api/v1/structure-library/')) and method not in {'GET','HEAD','OPTIONS'}:
+        if (path.startswith(('/api/v1/auth/', '/api/v1/structure-library/')) or path in SIMULATION_CHECKOUT_PATHS) and method not in {'GET','HEAD','OPTIONS'}:
             original_receive = receive
             received_bytes = 0
             async def bounded_auth_receive():
                 nonlocal received_bytes
                 message = await original_receive()
                 received_bytes += len(message.get('body',b''))
-                limit = 2 * 1024 * 1024 if path.startswith('/api/v1/structure-library/') else 8192
+                limit = (1024 if path in SIMULATION_CHECKOUT_PATHS else
+                         2 * 1024 * 1024 if path.startswith('/api/v1/structure-library/') else 8192)
                 if received_bytes > limit:
                     raise HTTPException(413,'Request body is too large')
                 return message

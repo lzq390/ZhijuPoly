@@ -1,0 +1,23 @@
+:root { font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; color:#20384a; background:#f2f6f5; font-synthesis:none; }
+body { margin:0; }
+.np-simulated-payment,.np-simulated-payment * { box-sizing:border-box; }
+.np-simulated-payment { width:min(100%,480px); margin:auto; padding:28px 18px 40px; line-height:1.65; }
+.np-simulation-brand { font-size:19px; font-weight:750; letter-spacing:.09em; margin-bottom:22px; }
+.np-simulation-brand span { font-size:12px; font-weight:500; margin-left:10px; letter-spacing:0; color:#667b85; }
+.np-simulation-warning { padding:16px; border:2px solid #ca9430; border-radius:12px; background:#fff4d6; color:#694711; }
+.np-simulation-warning strong { font-size:19px; }
+.np-simulated-payment p { margin:10px 0; }
+.np-simulation-warning p { font-size:14px; margin-bottom:0; }
+.np-simulation-sheet { margin-top:18px; padding:24px 20px; border:1px solid #dce7e2; border-radius:16px; background:white; }
+.np-simulation-sheet h1 { margin:0 0 18px; font-size:24px; line-height:1.35; }
+.np-simulation-sheet .np-simulation-amount { font-size:40px; font-weight:700; margin:0; }
+.np-simulation-muted,.np-simulated-payment footer { color:#627581; font-size:13px; }
+.np-simulation-sheet dl { border-top:1px solid #e3ebe7; border-bottom:1px solid #e3ebe7; padding:16px 0; margin:20px 0; }
+.np-simulation-sheet dl div { display:flex; justify-content:space-between; gap:16px; margin:9px 0; }
+.np-simulation-sheet dt { color:#627581; flex-shrink:0; }
+.np-simulation-sheet dd { margin:0; text-align:right; overflow-wrap:anywhere; }
+.np-simulation-sheet small { display:block; color:#627581; }
+.np-simulation-sheet button { width:100%; margin-top:18px; padding:14px 12px; border:0; border-radius:10px; background:#176c65; color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+.np-simulation-sheet button:disabled { opacity:.6; cursor:wait; }
+.np-simulation-sheet button:focus-visible { outline:3px solid #83bdb2; outline-offset:3px; }
+.np-simulated-payment footer { margin-top:20px; text-align:center; }

@@ -3,7 +3,7 @@ import { privateFetch } from "../auth/session";
 export type PaymentProvider = "wechat" | "alipay";
 export type BillingPlans = { enabled: boolean; simulation: boolean; currency: "CNY"; monthly_price_fen: number | null; period: "month"; providers: PaymentProvider[]; registration_enabled: boolean };
 export type Subscription = { account_type: "free" | "member"; source: "legacy" | "subscription" | "none" | "admin"; expires_at: string | null; server_time: string; purchase_blocked?: boolean };
-export type BillingOrder = { id: string; provider: PaymentProvider; amount_fen: number; currency: "CNY"; status: "pending" | "paid" | "closed" | "failed"; qr_code: string | null; expires_at: string; created_at: string; paid_at: string | null; access_ends_at: string | null };
+export type BillingOrder = { id: string; provider: PaymentProvider; amount_fen: number; currency: "CNY"; status: "pending" | "paid" | "closed" | "failed"; qr_code: string | null; simulation_checkout_token?: string | null; expires_at: string; created_at: string; paid_at: string | null; access_ends_at: string | null };
 const BASE = `${import.meta.env.VITE_API_BASE_URL ?? "/api/v1"}/billing`;
 
 async function read<T>(response: Response): Promise<T> {

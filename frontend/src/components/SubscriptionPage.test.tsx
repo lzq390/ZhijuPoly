@@ -94,35 +94,38 @@ it("does not refresh another account from an order read after unmount", async ()
   view.unmount(); await act(async () => finish({ ...pending, status: "paid" }));
   expect(mocks.refresh).not.toHaveBeenCalled();
 });
-it.each(["wechat", "alipay"] as const)("confirms %s simulation through the backend without generating a payment QR", async provider => {
+const simulationToken = `${"a".repeat(32)}.${"b".repeat(43)}`;
+it.each(["wechat", "alipay"] as const)("shows a current-origin %s simulation QR and lets desktop polling refresh membership", async provider => {
   mocks.plans.mockResolvedValue({ enabled: true, simulation: true, monthly_price_fen: 9900, providers: ["wechat", "alipay"], registration_enabled: true });
-  mocks.orders.mockResolvedValue([{ ...pending, provider }]);
-  let finish!: (value: BillingOrder) => void;
-  mocks.simulate.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  mocks.orders.mockResolvedValue([{ ...pending, provider, simulation_checkout_token: simulationToken }]);
   render(<SubscriptionPage />);
-  expect(await screen.findByText("开发模拟支付 · 不会扣款")).toBeTruthy();
-  expect(screen.getByRole("radio", { name: "微信支付（开发模拟）" })).toBeTruthy();
-  expect(screen.getByRole("radio", { name: "支付宝（开发模拟）" })).toBeTruthy();
-  expect(screen.queryByRole("img")).toBeNull(); expect(mocks.qr).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "模拟支付成功（不会扣款）" }));
-  expect(mocks.simulate).toHaveBeenCalledWith(pending.id, expect.any(AbortSignal));
-  expect(mocks.refresh).not.toHaveBeenCalled();
+  expect(await screen.findByAltText(`${provider === "wechat" ? "微信" : "支付宝"}模拟扫码二维码`)).toBeTruthy();
+  const url = `${window.location.origin}/billing/simulate-pay#token=${simulationToken}`;
+  expect(mocks.qr).toHaveBeenCalledWith(url, expect.objectContaining({ width: 256 }));
+  const link = screen.getByRole("link", { name: "在新窗口打开模拟确认页" });
+  expect(link.getAttribute("href")).toBe(url); expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  expect(screen.queryByRole("button", { name: "模拟支付成功（不会扣款）" })).toBeNull();
+  expect(mocks.simulate).not.toHaveBeenCalled(); expect(mocks.refresh).not.toHaveBeenCalled();
+  expect(screen.getByText(/当前为本机地址，手机无法访问/)).toBeTruthy();
   mocks.subscription.mockResolvedValue({ ...subscription, account_type: "member", source: "subscription", expires_at: "2027-01-01T00:00:00Z" });
-  await act(async () => finish({ ...pending, provider, status: "paid", access_ends_at: "2027-01-01T00:00:00Z" }));
-  await screen.findByText(/会员已生效/);
-  expect(mocks.refresh).toHaveBeenCalledOnce();
-  expect(screen.queryByRole("button", { name: "模拟支付成功（不会扣款）" })).toBeNull();
+  mocks.order.mockResolvedValue({ ...pending, provider, status: "paid", access_ends_at: "2027-01-01T00:00:00Z" });
+  await screen.findByText(/会员已生效/, {}, { timeout: 3000 });
+  expect(mocks.refresh).toHaveBeenCalledOnce(); expect(mocks.create).not.toHaveBeenCalled(); expect(mocks.simulate).not.toHaveBeenCalled();
 });
-it("does not offer simulation after expiry or when the backend rejects confirmation", async () => {
+it("reads an existing pending simulation order to recover its token without creating a replacement", async () => {
   mocks.plans.mockResolvedValue({ enabled: true, simulation: true, monthly_price_fen: 9900, providers: ["wechat"], registration_enabled: true });
-  mocks.orders.mockResolvedValue([{ ...pending, expires_at: new Date(Date.now() - 60000).toISOString() }]);
-  const view = render(<SubscriptionPage />);
-  await screen.findByText("模拟订单已过期，请读取订单确认状态。");
-  expect(screen.queryByRole("button", { name: "模拟支付成功（不会扣款）" })).toBeNull();
-  expect(mocks.qr).not.toHaveBeenCalled(); view.unmount();
-  mocks.orders.mockResolvedValue([pending]); mocks.simulate.mockRejectedValue(new Error("模拟支付未开放"));
+  mocks.orders.mockResolvedValue([{ ...pending, qr_code: null }]);
+  mocks.order.mockResolvedValue({ ...pending, simulation_checkout_token: simulationToken });
   render(<SubscriptionPage />);
-  fireEvent.click(await screen.findByRole("button", { name: "模拟支付成功（不会扣款）" }));
-  await screen.findByRole("alert");
-  expect(screen.getByText("模拟支付未开放")).toBeTruthy(); expect(mocks.refresh).not.toHaveBeenCalled();
+  await screen.findByText("正在准备模拟扫码链接，请读取当前订单。"); expect(mocks.qr).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "读取模拟结果" }));
+  await screen.findByAltText("微信模拟扫码二维码");
+  expect(mocks.order).toHaveBeenCalledWith(pending.id, expect.any(AbortSignal)); expect(mocks.create).not.toHaveBeenCalled();
+});
+it("does not expose the simulation QR or confirmation link after expiry", async () => {
+  mocks.plans.mockResolvedValue({ enabled: true, simulation: true, monthly_price_fen: 9900, providers: ["wechat"], registration_enabled: true });
+  mocks.orders.mockResolvedValue([{ ...pending, simulation_checkout_token: simulationToken, expires_at: new Date(Date.now() - 60000).toISOString() }]);
+  render(<SubscriptionPage />);
+  await screen.findByText("模拟订单已过期，请读取订单确认状态。");
+  expect(screen.queryByRole("img")).toBeNull(); expect(screen.queryByRole("link")).toBeNull(); expect(mocks.simulate).not.toHaveBeenCalled();
 });

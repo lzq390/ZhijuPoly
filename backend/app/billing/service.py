@@ -7,8 +7,9 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from .providers import PaymentError
-from .repository import BillingError, public_order
-from .development import SIMULATION_MERCHANT_ID, SIMULATION_APP_ID, is_simulated_order
+from .repository import BillingError, public_order, simulation_checkout_view
+from .development import (SIMULATION_MERCHANT_ID, SIMULATION_APP_ID, is_simulated_order,
+                          simulation_token_matches)
 
 logger = logging.getLogger("nexpoly.billing")
 
@@ -81,19 +82,35 @@ class BillingService:
     @staticmethod
     def _checkout_ready(order):
         return bool(order["checkout_data"].get("qr_code") or
-                    (is_simulated_order(order) and order["checkout_data"].get("simulation") is True))
+                    simulation_token_matches(order, order["checkout_data"].get("simulation_checkout_token")))
 
-    def simulate_payment(self, owner, order_id):
+    def _require_simulation(self):
         if not getattr(self.settings, "simulation_enabled", False):
             raise BillingError("simulation_unavailable", "开发模拟支付未开放。", 404)
+
+    @staticmethod
+    def _simulation_payment(order):
+        return {"order_id": str(order["id"]), "provider": order["provider"],
+                "transaction_id": "dev-simulation-" + str(order["id"]),
+                "status": "paid", "currency": "CNY", "amount_fen": order["amount_fen"],
+                "merchant_id": SIMULATION_MERCHANT_ID, "app_id": SIMULATION_APP_ID}
+
+    def simulation_checkout(self, token):
+        self._require_simulation()
+        return simulation_checkout_view(self.repository.simulation_checkout(token))
+
+    def confirm_simulation_checkout(self, token):
+        self._require_simulation()
+        order = self.repository.simulation_checkout(token)
+        return simulation_checkout_view(self.repository.fulfill(self._simulation_payment(order),
+            simulation_owner=order["owner_user_id"], simulation_token=token))
+
+    def simulate_payment(self, owner, order_id):
+        self._require_simulation()
         order = self.repository.get_order(owner, order_id)
         if not is_simulated_order(order):
             raise BillingError("payment_mode_mismatch", "该订单不支持开发模拟支付。", 400)
-        payment = {"order_id": str(order["id"]), "provider": order["provider"],
-                   "transaction_id": "dev-simulation-" + str(order["id"]),
-                   "status": "paid", "currency": "CNY", "amount_fen": order["amount_fen"],
-                   "merchant_id": SIMULATION_MERCHANT_ID, "app_id": SIMULATION_APP_ID}
-        return public_order(self.repository.fulfill(payment, simulation_owner=owner))
+        return public_order(self.repository.fulfill(self._simulation_payment(order), simulation_owner=owner))
 
     def get_order(self, owner, order_id):
         order = self.repository.get_order(owner, order_id)
@@ -108,6 +125,13 @@ class BillingService:
                 self._reconcile_order(order)
 
     def _reconcile_order(self, order):
+        if (getattr(self.settings, "simulation_enabled", False) and is_simulated_order(order)
+                and not self._checkout_ready(order) and order["expires_at"] > datetime.now(timezone.utc)):
+            # Owner refresh upgrades old pending simulation orders even when a
+            # background check recently claimed them. Admission covers this write.
+            checkout = self.gateway.create_order(order["provider"], UUID(str(order["id"])).hex,
+                order["amount_fen"], "NexPoly 开发模拟会员（一个月）", order["expires_at"])
+            self.repository.save_checkout(order["id"], checkout)
         claimed = self.repository.claim_check(order["id"])
         if claimed is None:
             return

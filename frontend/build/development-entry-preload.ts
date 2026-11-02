@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { normalizePath, type Plugin } from "vite";
 import { canvasRoutePaths } from "../shared/canvas-routes";
+import { isSimulationPaymentPath } from "../shared/billing-routes";
 
 /** Discover the bootstrap roots from HTML instead of another import round trip.
  * These modules do not eagerly import business pages or initialize the SDK.
@@ -17,8 +18,10 @@ export function developmentEntryPreload(engine: string): Plugin {
       handler(_html, context) {
         const server = context.server;
         if (context.path !== "/index.html" || !server) return;
-        const roots = ["../shared/canvas-routes.ts", "routing.ts", "pages.ts", "mountApp.tsx", "App.tsx", "components/AppShell.tsx"];
         const pathname = new URL(context.originalUrl || context.path, "http://localhost").pathname.replace(/\/+$/, "") || "/";
+        const roots = isSimulationPaymentPath(pathname)
+          ? ["../shared/billing-routes.ts", "mountSimulationPayment.tsx", "components/SimulatedPaymentPage.tsx"]
+          : ["../shared/canvas-routes.ts", "routing.ts", "pages.ts", "mountApp.tsx", "App.tsx", "components/AppShell.tsx"];
         const module = Object.entries(canvasRoutePaths).find(([, route]) => route === pathname)?.[0];
         if (module) {
           // Keep the business loader the source of truth. Preload just this page

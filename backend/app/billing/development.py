@@ -1,4 +1,7 @@
 """Explicit development payment simulation. No network or accepted callbacks."""
+import hmac
+import re
+import secrets
 from uuid import UUID
 
 from .providers import PaymentError
@@ -6,11 +9,27 @@ from .settings import BillingConfigurationError
 
 SIMULATION_MERCHANT_ID = "nexpoly-development-simulation"
 SIMULATION_APP_ID = "nexpoly-development-simulation"
+SIMULATION_TOKEN_PATTERN = re.compile(r"[0-9a-f]{32}\.[A-Za-z0-9_-]{43}")
 
 
 def is_simulated_order(order):
     return (order.get("merchant_id") == SIMULATION_MERCHANT_ID
             and order.get("app_id") == SIMULATION_APP_ID)
+
+
+def simulation_token_order_id(token):
+    if not isinstance(token, str) or not SIMULATION_TOKEN_PATTERN.fullmatch(token):
+        return None
+    return UUID(token[:32])
+
+
+def simulation_token_matches(order, token):
+    checkout = order.get("checkout_data") or {}
+    saved = checkout.get("simulation_checkout_token")
+    return (is_simulated_order(order) and checkout.get("simulation") is True
+            and simulation_token_order_id(token) == order["id"]
+            and simulation_token_order_id(saved) == order["id"]
+            and hmac.compare_digest(saved, token))
 
 
 class DevelopmentPaymentGateway:
@@ -30,8 +49,10 @@ class DevelopmentPaymentGateway:
 
     def create_order(self, provider, order_id, amount_fen, description, expires_at):
         self._validate(provider, order_id)
-        # Deliberately no payment URI/QR that could be mistaken for a real charge.
-        return {"simulation": True}
+        # A bearer capability for this order only. The owner builds a local page
+        # URL with the token in its fragment; no real payment URI is generated.
+        return {"simulation": True,
+                "simulation_checkout_token": UUID(str(order_id)).hex + "." + secrets.token_urlsafe(32)}
 
     def query_order(self, provider, order_id, *, expected_amount_fen):
         self._validate(provider, order_id)

@@ -24,6 +24,9 @@
 .np-subscription-body legend { margin-bottom:10px; font-weight:600; }
 .np-subscription-body label { display:flex; align-items:center; gap:7px; }
 .np-subscription-payment img { max-width:100%; height:auto; margin:16px 0; }
+.np-subscription-scan { max-width:540px; }
+.np-subscription-scan a { color:#176c65; text-decoration:underline; text-underline-offset:3px; }
+.np-subscription-scan [role="note"] { color:#805712; background:#fff6db; padding:12px; border-radius:8px; }
 .np-subscription-error { border:1px solid #e7bfad; background:#fff6f0; padding:16px; border-radius:12px; }
 .np-subscription-simulation { border:2px solid #d79b29; background:#fff6db; color:#684810; padding:18px 20px; border-radius:12px; margin:18px 0; }
 .np-subscription-simulation strong { font-size:18px; }

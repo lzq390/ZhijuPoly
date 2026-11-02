@@ -26,7 +26,8 @@ ROUTES = (
         "/api/v1/billing/orders", "/api/v1/billing/orders/{order_id}")),
     *_entries(None, "observe", "POST", (
         "/api/v1/billing/orders", "/api/v1/billing/webhooks/{provider}",
-        "/api/v1/billing/orders/{order_id}/simulate-payment")),
+        "/api/v1/billing/orders/{order_id}/simulate-payment",
+        "/api/v1/billing/simulation/checkout", "/api/v1/billing/simulation/confirm")),
     *_entries("assistant", "sync", "POST", (
         "/api/v1/assistant/chat/stream", "/api/v1/assistant/chat/image-stream")),
     *_entries("tg_assistant", "sync", "POST", (
