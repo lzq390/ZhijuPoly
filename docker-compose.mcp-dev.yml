@@ -16,7 +16,7 @@ services:
       NEXPOLY_MCP_CLIENTS_FILE: /run/property-filter-mcp/clients.json
       NEXPOLY_MCP_HOST: 0.0.0.0
       NEXPOLY_MCP_PORT: "18110"
-      NEXPOLY_MCP_ALLOWED_HOSTS: "127.0.0.1:18110,localhost:18110"
+      NEXPOLY_MCP_ALLOWED_HOSTS: "127.0.0.1:18110,localhost:18110,nexpoly_mcp_dev-property-filter-mcp-1:18110"
       NEXPOLY_MCP_ALLOWED_ORIGINS: ""
       NEXPOLY_MCP_RATE_LIMIT: "60"
       NEXPOLY_MCP_MAX_CONCURRENCY: "2"
@@ -39,7 +39,7 @@ services:
     pids_limit: 128
     restart: "no"
     stop_grace_period: 30s
-    networks: [development-database]
+    networks: [development-database, development-clients]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18110/healthz', timeout=3).read()"]
       interval: 10s
@@ -51,3 +51,6 @@ networks:
   development-database:
     external: true
     name: nexpoly_dev_default
+  development-clients:
+    name: nexpoly_mcp_clients_dev
+    internal: true

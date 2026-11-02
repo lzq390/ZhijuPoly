@@ -1,0 +1,159 @@
+# Separate development OpenScience. Never attach the shared 9011 deployment.
+name: nexpoly_openscience_dev
+
+services:
+  model-egress:
+    # Host egress listens only on a private Unix socket, never a host TCP port.
+    image: python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3
+    pull_policy: never
+    network_mode: host
+    user: "${NEXPOLY_OPENSCIENCE_DEV_UID}:${NEXPOLY_OPENSCIENCE_DEV_GID}"
+    command: [python, -B, /app/model_proxy.py, egress]
+    volumes:
+      - ./ops/openscience-mcp-dev/model_proxy.py:/app/model_proxy.py:ro
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/proxy-socket:/run/openscience-proxy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 32
+    mem_limit: 64m
+    cpus: 0.25
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('/run/openscience-proxy/model.sock'); s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  model-proxy:
+    image: python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3
+    pull_policy: never
+    user: "${NEXPOLY_OPENSCIENCE_DEV_UID}:${NEXPOLY_OPENSCIENCE_DEV_GID}"
+    command: [python, -B, /app/model_proxy.py, bridge]
+    depends_on:
+      model-egress:
+        condition: service_healthy
+    volumes:
+      - ./ops/openscience-mcp-dev/model_proxy.py:/app/model_proxy.py:ro
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/proxy-socket:/run/openscience-proxy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 32
+    mem_limit: 64m
+    cpus: 0.25
+    restart: "no"
+    networks: [default]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1',17892),2).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  openscience-backend:
+    image: nexpoly-openscience-mcp:dev
+    build:
+      context: ./ops/openscience-mcp-dev
+      dockerfile: Dockerfile
+    user: "${NEXPOLY_OPENSCIENCE_DEV_UID:?use scripts/openscience_mcp_dev.py}:${NEXPOLY_OPENSCIENCE_DEV_GID:?use scripts/openscience_mcp_dev.py}"
+    depends_on:
+      model-proxy:
+        condition: service_healthy
+    command:
+      - bun
+      - --conditions=browser
+      - /app/backend/cli/src/index.ts
+      - serve
+      - --hostname
+      - 0.0.0.0
+      - --port
+      - "4096"
+      - --cors
+      - http://127.0.0.1:19111
+      - --cors
+      - http://localhost:19111
+      - --project-root
+      - /openscience/files/projects
+      - --general-workspace
+      - /openscience/files/general
+    env_file:
+      - path: ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME:?use scripts/openscience_mcp_dev.py}/backend.env
+        format: raw
+    environment:
+      OPENSCIENCE_CONFIG: /run/openscience/openscience.json
+      OPENSCIENCE_RECORDS_ROOT: /openscience/records
+      OPENSCIENCE_FILES_ROOT: /openscience/files
+      OPENSCIENCE_UMASK: "0077"
+      OPENSCIENCE_DISABLE_AUTOUPDATE: "1"
+      OPENSCIENCE_DISABLE_PROJECT_CONFIG: "1"
+      HOME: /home/openscience
+      XDG_DATA_HOME: /openscience/files/.runtime/data
+      XDG_CONFIG_HOME: /var/lib/openscience/config
+      XDG_STATE_HOME: /var/lib/openscience/state
+      XDG_CACHE_HOME: /var/lib/openscience/cache
+    ports:
+      - "127.0.0.1:14096:4096"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/openscience.json:/run/openscience/openscience.json:ro
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/mcp-token:/run/openscience/mcp-token:ro
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/files:/openscience/files
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/records:/openscience/records
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/config:/var/lib/openscience/config
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/state:/var/lib/openscience/state
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/cache:/var/lib/openscience/cache
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/home:/home/openscience
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2
+    restart: "no"
+    stop_grace_period: 30s
+    networks: [default, mcp-clients]
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:4096/global/health'); if (!r.ok) process.exit(1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  openscience-ui:
+    # Existing UI binary reused by immutable local image identity, with new state/network only.
+    image: sha256:7dfa854a2a934cd8a6f7f62ec6bda97c6d9ab6faaa6a67c12c24cebf95d6809a
+    pull_policy: never
+    user: "${NEXPOLY_OPENSCIENCE_DEV_UID}:${NEXPOLY_OPENSCIENCE_DEV_GID}"
+    depends_on:
+      openscience-backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:19111:4454"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1
+    restart: "no"
+    stop_grace_period: 10s
+    networks: [default]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4454/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+networks:
+  default:
+    name: nexpoly_openscience_dev_default
+    ipam:
+      config:
+        - subnet: 192.168.80.0/20
+          gateway: 192.168.80.1
+  mcp-clients:
+    external: true
+    name: nexpoly_mcp_clients_dev

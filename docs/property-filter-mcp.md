@@ -144,7 +144,7 @@ async def main():
 asyncio.run(main())
 ```
 
-本仓库目前只有 OpenScience iframe 桥和 UI overlay，没有其后端 MCP 配置契约。因此此变更交付可验证的 MCP 服务和开发凭据，不声称已修改或接通现有 OpenScience 后端。实际接入要在已确认的开发后端中添加此远程 MCP，并验证会话真实调用这三个工具。
+独立 OpenScience 开发接入已实现，入口为 `http://127.0.0.1:19111/`，操作及真实对话验证见 [开发接入说明](openscience-property-filter-mcp-dev.md)。现有 `9001` 与生产 `9000` 共用的 `9011` OpenScience 保持不变。独立后端仅通过 `nexpoly_mcp_clients_dev` 内部网络访问 MCP，不直接进入数据库网络。
 
 容器中的 `127.0.0.1` 指向容器自己。若 OpenScience 后端在另一个容器内，应先确定开发网络/代理或隧道路径；默认的宿主 loopback 地址不能直接当作跨容器地址使用。任何额外监听地址和 Host/Origin 白名单调整都应限制在所选开发环境。
 
