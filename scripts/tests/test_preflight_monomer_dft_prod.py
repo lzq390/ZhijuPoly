@@ -5,9 +5,11 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest import mock
+import venv
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +23,26 @@ SPEC.loader.exec_module(preflight)
 
 
 class ProductionDftPreflightTests(unittest.TestCase):
+    def test_version_probe_preserves_uv_style_pth_modules_in_sealed_venv(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="dft-probe-no-bytecode-") as raw:
+            root = Path(raw)
+            venv.EnvBuilder(with_pip=False).create(root / "venv")
+            python = root / "venv/bin/python"
+            site = root / f"venv/lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
+            # uv's startup imports _virtualenv through a .pth; setuptools does
+            # the same for _distutils_hack. Both used to create sealed pyc files.
+            (site / "_virtualenv.py").write_text("UV_STARTUP_MODULE = True\n")
+            (site / "_virtualenv.pth").write_text("import _virtualenv\n")
+            (site / "_distutils_hack").mkdir()
+            (site / "_distutils_hack/__init__.py").write_text("SETUPTOOLS_STARTUP_MODULE = True\n")
+            (site / "distutils-precedence.pth").write_text("import _distutils_hack\n")
+            before = sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
+            with mock.patch.dict(os.environ, {"PYTHONDONTWRITEBYTECODE": "0"}):
+                observed = preflight.python_version(python)
+            self.assertEqual(observed, f"{sys.version_info.major}.{sys.version_info.minor}")
+            self.assertEqual(sorted(path.relative_to(root).as_posix() for path in root.rglob("*")), before)
+            self.assertFalse(list(site.rglob("*.pyc")))
+
     def test_systemd_unit_uses_only_the_versioned_runtime_environment(self) -> None:
         unit = (
             ROOT / "ops/systemd/nexpoly-monomer-dft-worker.service"

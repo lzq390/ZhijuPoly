@@ -53,7 +53,7 @@ def observe(uv: Path) -> dict:
         raise ToolchainError('Candidate system toolchain path is not canonical')
     python_digest, _ = _pinned_digest(PYTHON, expected_uid=0,
         allowed_modes=frozenset({0o755}), maximum_bytes=64 * 1024 * 1024)
-    minor = subprocess.run([str(PYTHON), '-I', '-c',
+    minor = subprocess.run([str(PYTHON), '-I', '-B', '-c',
         "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
         check=True, capture_output=True, text=True, env=clean_env).stdout.strip()
     if minor != '3.12':

@@ -36,6 +36,10 @@ Its sealed cohort manifest is required
 by the candidate launchers. It reuses the existing dependency/model build checks,
 but does not migrate databases, publish applications or switch services. A
 candidate toolchain seal does not replace actual scientific acceptance.
+The build validates the governed asset release and seals its canonical ByteFF2
+root and inventory. Candidate assets point directly to that immutable release;
+the old stack's mutable `current-assets` pointer must stay unchanged during the
+build and is not used as the candidate's ongoing authority.
 
 The candidate build normalizes only newly generated metadata: the four MD venv
 activation scripts lose group/world write bits, and a successful DFT `uv pip
@@ -45,6 +49,8 @@ runtime inventory. Installed AIMNet console scripts are accepted only when the
 locked wheel declares them, their installed metadata matches that wheel, and
 their ordinary, owned, single-link files stay in this venv's `bin` with valid
 RECORD hashes and sizes. Existing runtimes and scientific inputs are not changed.
+Read-only Python identity/version probes use explicit `-B`, including under
+`-I`, so startup `.pth` imports cannot add bytecode to sealed runtimes.
 
 Polymer MD uses the production runtime contract and a separate jobs root, 16 CPU,
 32 GiB, no GPU and one execution slot. Render the analysis service with

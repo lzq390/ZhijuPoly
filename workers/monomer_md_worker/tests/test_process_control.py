@@ -444,9 +444,10 @@ def test_systemd_scope_exec_preserves_pid_gate_fds_environment_and_stdout(
         "--expand-environment=no",
         "--",
     ]
-    assert arguments[10:14] == [
+    assert arguments[10:15] == [
         sys.executable,
         "-I",
+        "-B",
         "-S",
         os.fspath(
             Path(process_control.__file__).resolve().parents[3]

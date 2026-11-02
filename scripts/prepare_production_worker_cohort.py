@@ -26,6 +26,27 @@ from scripts import pull_deploy_controller as core
 from scripts import worker_slot_runtime as slots
 
 
+def production_md_assets_root() -> Path:
+    """Resolve the existing governed pointer to its validated immutable release."""
+    pointer = cohorts.PRODUCTION_RUNTIME_ROOT / 'state/current-assets'
+    metadata = pointer.lstat()
+    if (not stat.S_ISLNK(metadata.st_mode) or metadata.st_uid != os.geteuid()
+            or not Path(os.readlink(pointer)).is_absolute()):
+        raise cohorts.CohortError('Production MD asset authority is not an owned absolute pointer')
+    release = pointer.resolve(strict=True)
+    asset_root = release / 'byteff2'
+    if not cohorts._canonical_md_assets_root(asset_root):
+        raise cohorts.CohortError('Production MD asset authority is outside immutable releases')
+    expected = 'sha256:' + release.name
+    core.inspect_asset_release(release, expected)
+    after = pointer.lstat()
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    if pointer.resolve(strict=True) != release or any(
+            getattr(after, key) != getattr(metadata, key) for key in fields):
+        raise cohorts.CohortError('Production MD asset authority changed while validating')
+    return asset_root
+
+
 def validate_build_proxy(value):
     if value is None:
         return None
@@ -237,7 +258,7 @@ def prepare(*, cohort_root: Path, sha: str, tree: str, operation_id: str,
     token_path = cohort_root / 'config/dft-start-authorization.token'
     md_env_digest = core.sha256_bytes(cohorts.private_payload(md_env_path))
     token_digest = core.sha256_bytes(cohorts.private_payload(token_path))
-    asset_root = cohorts.PRODUCTION_RUNTIME_ROOT / 'state/current-assets/byteff2'
+    asset_root = production_md_assets_root()
     asset_digest = core.directory_inventory_digest(asset_root)
     locks = {name: core.sha256_bytes((source / name).read_bytes()) for name in (
         'workers/monomer_md_worker/requirements.lock',
@@ -251,7 +272,8 @@ def prepare(*, cohort_root: Path, sha: str, tree: str, operation_id: str,
         'dft_uv_lock_mode_policy': 'empty-owned-operation-uv-lock-0600-v1',
         'md_base_python_identity': base, 'md_worker_env_sha256': md_env_digest,
         'dft_start_authorization_token_sha256': token_digest,
-        'dft_toolchain_sha256': toolchain_digest, 'md_assets_inventory_sha256': asset_digest,
+        'dft_toolchain_sha256': toolchain_digest, 'md_assets_root': str(asset_root),
+        'md_assets_inventory_sha256': asset_digest,
         'scientific_locks': locks}
     inputs_digest = _write_once(cohort_root / 'config/worker-build-inputs.json', _bytes(inputs))
     md_runtime = cohort_root / 'md-runtime'
@@ -286,6 +308,8 @@ def prepare(*, cohort_root: Path, sha: str, tree: str, operation_id: str,
             builder.venv_root = cohorts.PRODUCTION_RUNTIME_ROOT / 'worker-venvs'
             builder._validate_dft_runtime_directory(result['dft_runtime'])
             cohort = cohorts.load_cohort(cohort_root / 'config/worker-cohort.json', result['cohort_sha256'])
+            if production_md_assets_root() != asset_root:
+                raise cohorts.CohortError('Production MD asset authority changed during the build')
             cohorts.md_environment(cohort, {})
             cohorts.dft_environment(cohort, {})
             slots.verify_runtime_binding(source_root=source, runtime_root=md_runtime)
@@ -316,11 +340,14 @@ def prepare(*, cohort_root: Path, sha: str, tree: str, operation_id: str,
         dft_env_digest = _write_once(cohort_root / 'config/dft-runtime.env', dft_env)
         document = {key: inputs[key] for key in ('schema_version', 'cohort_root', 'source_root',
             'source_sha', 'source_tree', 'callback_base_url', 'md_worker_env_sha256',
-            'dft_start_authorization_token_sha256', 'dft_toolchain_sha256', 'md_assets_inventory_sha256')}
+            'dft_start_authorization_token_sha256', 'dft_toolchain_sha256', 'md_assets_root',
+            'md_assets_inventory_sha256')}
         document['dft_runtime_env_sha256'] = dft_env_digest
         cohort_path = cohort_root / 'config/worker-cohort.json'
         cohort_digest = _write_once(cohort_path, _bytes(document))
         cohort = cohorts.load_cohort(cohort_path, cohort_digest)
+        if production_md_assets_root() != asset_root:
+            raise cohorts.CohortError('Production MD asset authority changed during the build')
         cohorts.md_environment(cohort, {})
         cohorts.dft_environment(cohort, {})
         slots.verify_runtime_binding(source_root=source, runtime_root=md_runtime)

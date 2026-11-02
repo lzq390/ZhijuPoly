@@ -371,7 +371,7 @@ def inspect_base_python_identity(
     clean_environment["PYTHONNOUSERSITE"] = "1"
     try:
         result = subprocess.run(
-            [str(resolved), "-I", "-c", WORKER_BASE_IDENTITY_PROGRAM],
+            [str(resolved), "-I", "-B", "-c", WORKER_BASE_IDENTITY_PROGRAM],
             cwd="/",
             env=clean_environment,
             check=True,

@@ -26,12 +26,14 @@ from scripts.worker_slot_runtime import inspect_git_checkout, require_private_di
 
 PRODUCTION_RUNTIME_ROOT = Path('/data/lzq/gith/nexpoly-runtime')
 PRODUCTION_SOURCE_ROOT = Path('/data/lzq/gith/nexpoly-release-private')
+PRODUCTION_ASSET_RELEASES_ROOT = Path('/data/lzq/nexpoly-assets/releases')
 FILE_KEY = 'NEXPOLY_PROD_WORKER_COHORT_FILE'
 DIGEST_KEY = 'NEXPOLY_PROD_WORKER_COHORT_SHA256'
 SOURCE_KEY = 'NEXPOLY_PROD_WORKER_SOURCE_ROOT'
 FIELDS = frozenset({'schema_version', 'cohort_root', 'source_root', 'source_sha', 'source_tree',
     'callback_base_url', 'md_worker_env_sha256', 'dft_runtime_env_sha256',
-    'dft_start_authorization_token_sha256', 'dft_toolchain_sha256', 'md_assets_inventory_sha256'})
+    'dft_start_authorization_token_sha256', 'dft_toolchain_sha256', 'md_assets_root',
+    'md_assets_inventory_sha256'})
 DIGEST_RE = re.compile(r'sha256:[0-9a-f]{64}\Z')
 
 
@@ -92,6 +94,7 @@ class ProductionWorkerCohort:
     dft_runtime_env_sha256: str
     dft_start_authorization_token_sha256: str
     dft_toolchain_sha256: str
+    md_assets_root: Path
     md_assets_inventory_sha256: str
 
     @property
@@ -112,10 +115,11 @@ class ProductionWorkerCohort:
 
     def validate_md_assets(self):
         from scripts.pull_deploy_controller import directory_inventory_digest
-        asset_root = PRODUCTION_RUNTIME_ROOT / 'state/current-assets/byteff2'
+        asset_root = self.md_assets_root
         link = self.md_runtime_root / 'state/current-assets/byteff2'
         if (not link.is_symlink() or os.readlink(link) != str(asset_root)
-                or asset_root.resolve(strict=True) != asset_root):
+                or link.lstat().st_uid != os.geteuid()
+                or not _canonical_md_assets_root(asset_root)):
             raise CohortError('Candidate MD assets must reference the frozen production asset tree')
         for path in (asset_root, *asset_root.rglob('*')):
             metadata = path.lstat()
@@ -137,6 +141,12 @@ class ProductionWorkerCohort:
         if re.fullmatch(r'[A-Za-z0-9_-]{32,256}', token) is None:
             raise CohortError('Production cohort DFT authorization token is invalid')
         return token
+
+
+def _canonical_md_assets_root(path: Path) -> bool:
+    return (path.name == 'byteff2' and path.parent.parent == PRODUCTION_ASSET_RELEASES_ROOT
+        and re.fullmatch(r'[0-9a-f]{64}', path.parent.name) is not None
+        and path.resolve(strict=True) == path)
 
 
 def load_cohort(path: Path, digest: str) -> ProductionWorkerCohort:
@@ -164,12 +174,16 @@ def load_cohort(path: Path, digest: str) -> ProductionWorkerCohort:
         for key in ('md_worker_env_sha256', 'dft_runtime_env_sha256', 'dft_start_authorization_token_sha256', 'dft_toolchain_sha256', 'md_assets_inventory_sha256'):
             if DIGEST_RE.fullmatch(data[key]) is None:
                 raise CohortError('Production cohort input digest is invalid')
+        assets = Path(data['md_assets_root'])
+        if not _canonical_md_assets_root(assets):
+            raise CohortError('Production cohort MD assets are outside the immutable release layout')
         checkout = inspect_git_checkout(source)
         if checkout.source_sha != data['source_sha'] or checkout.source_tree != data['source_tree']:
             raise CohortError('Production cohort source differs from its sealed release')
         cohort = ProductionWorkerCohort(path, digest, root, source, data['source_sha'], data['source_tree'],
             data['callback_base_url'], data['md_worker_env_sha256'], data['dft_runtime_env_sha256'],
-            data['dft_start_authorization_token_sha256'], data['dft_toolchain_sha256'], data['md_assets_inventory_sha256'])
+            data['dft_start_authorization_token_sha256'], data['dft_toolchain_sha256'], assets,
+            data['md_assets_inventory_sha256'])
         socket = cohort.md_runtime_root / 'state/monomer-md-worker-socket/worker.sock'
         if len(os.fsencode(socket)) > 107:
             raise CohortError('Production cohort MD Unix socket path is too long')

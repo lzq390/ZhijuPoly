@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,7 @@ from scripts import monomer_dft_worker_env, monomer_md_worker_launcher, producti
 from scripts import prepare_production_worker_cohort as builder
 
 OBSERVE_TOOLCHAIN = production_dft_toolchain.observe
+VALIDATE_MD_ASSETS = module.ProductionWorkerCohort.validate_md_assets
 
 SHA = 'a' * 40
 TREE = 'b' * 40
@@ -46,11 +48,19 @@ def cohort_files(monkeypatch):
             path.chmod(0o700)
         monkeypatch.setattr(module, 'PRODUCTION_RUNTIME_ROOT', runtime)
         monkeypatch.setattr(module, 'PRODUCTION_SOURCE_ROOT', source_base)
+        assets_base = runtime / 'assets'
+        assets = assets_base / ('d' * 64) / 'byteff2'
+        assets.mkdir(parents=True)
+        (assets / 'scientific-model').write_bytes(b'frozen scientific model')
+        (assets / 'scientific-model').chmod(0o400)
+        assets.chmod(0o500)
+        monkeypatch.setattr(module, 'PRODUCTION_ASSET_RELEASES_ROOT', assets_base)
         monkeypatch.setattr(monomer_dft_worker_env, 'RUNTIME_ROOT', runtime)
         monkeypatch.setattr(module, 'inspect_git_checkout',
             lambda path: SimpleNamespace(source_sha=SHA, source_tree=TREE))
         monkeypatch.setattr(module.ProductionWorkerCohort, 'validate_md_assets', lambda self: None)
-        data = {'md_assets_inventory_sha256': DIGEST, 'schema_version': 1, 'cohort_root': str(root), 'source_root': str(source),
+        data = {'md_assets_root': str(assets), 'md_assets_inventory_sha256': DIGEST,
+            'schema_version': 1, 'cohort_root': str(root), 'source_root': str(source),
             'source_sha': SHA, 'source_tree': TREE, 'callback_base_url': 'http://127.0.0.1:18002'}
         data['md_worker_env_sha256'] = write_private(root / 'config/md-worker.env',
             b'APP_SERVICE_POSTGRES_DSN=postgresql://cohort_service:fixture-secret@127.0.0.1:55433/nexpoly\n'
@@ -78,6 +88,96 @@ def cohort_files(monkeypatch):
             return write_private(path, json.dumps({**data, **(changes or {})}).encode())
 
         yield root, source, path, seal(), seal
+
+
+def test_assets_bind_canonical_release_and_survive_legacy_pointer_switch(cohort_files, monkeypatch):
+    root, _, path, sealed, _ = cohort_files
+    cohort = module.load_cohort(path, sealed)
+    assets = cohort.md_assets_root
+    cohort = replace(cohort, md_assets_inventory_sha256=builder.core.directory_inventory_digest(assets))
+    link = cohort.md_runtime_root / 'state/current-assets/byteff2'
+    link.parent.mkdir(parents=True)
+    link.symlink_to(assets, target_is_directory=True)
+    legacy_pointer = module.PRODUCTION_RUNTIME_ROOT / 'state/current-assets'
+    legacy_pointer.symlink_to(assets.parent, target_is_directory=True)
+    checks = []
+    monkeypatch.setattr(builder.core, 'inspect_asset_release',
+        lambda release, expected: checks.append((release, expected)))
+    assert builder.production_md_assets_root() == assets
+    assert checks == [(assets.parent, 'sha256:' + assets.parent.name)]
+    VALIDATE_MD_ASSETS(cohort)
+    other = assets.parent.parent / ('e' * 64) / 'byteff2'
+    other.mkdir(parents=True)
+    legacy_pointer.unlink()
+    legacy_pointer.symlink_to(other.parent, target_is_directory=True)
+    # A future old-stack release does not change the candidate's sealed assets.
+    VALIDATE_MD_ASSETS(cohort)
+    assert builder.production_md_assets_root() == other
+
+
+@pytest.mark.parametrize('change', ['legacy-link', 'other-link', 'linked-file', 'writable', 'hash'])
+def test_assets_reject_unsealed_pointer_or_mutated_tree(cohort_files, change):
+    _, _, path, sealed, _ = cohort_files
+    cohort = module.load_cohort(path, sealed)
+    assets = cohort.md_assets_root
+    cohort = replace(cohort, md_assets_inventory_sha256=builder.core.directory_inventory_digest(assets))
+    link = cohort.md_runtime_root / 'state/current-assets/byteff2'
+    link.parent.mkdir(parents=True)
+    target = assets
+    if change == 'legacy-link':
+        legacy = module.PRODUCTION_RUNTIME_ROOT / 'state/current-assets'
+        legacy.symlink_to(assets.parent, target_is_directory=True)
+        target = legacy / 'byteff2'
+    elif change == 'other-link':
+        target = assets.parent.parent / ('e' * 64) / 'byteff2'
+        target.mkdir(parents=True)
+    elif change == 'linked-file':
+        assets.chmod(0o700)
+        (assets / 'extra').symlink_to(assets / 'scientific-model')
+        assets.chmod(0o500)
+    elif change == 'writable':
+        (assets / 'scientific-model').chmod(0o600)
+    elif change == 'hash':
+        model = assets / 'scientific-model'
+        model.chmod(0o600)
+        model.write_bytes(b'changed scientific model')
+        model.chmod(0o400)
+    link.symlink_to(target, target_is_directory=True)
+    with pytest.raises(module.CohortError):
+        VALIDATE_MD_ASSETS(cohort)
+
+
+def test_asset_authority_rejects_pointer_changed_during_validation(cohort_files, monkeypatch):
+    _, _, path, sealed, _ = cohort_files
+    cohort = module.load_cohort(path, sealed)
+    pointer = module.PRODUCTION_RUNTIME_ROOT / 'state/current-assets'
+    pointer.symlink_to(cohort.md_assets_root.parent, target_is_directory=True)
+    other = cohort.md_assets_root.parent.parent / ('e' * 64) / 'byteff2'
+    other.mkdir(parents=True)
+    def change_pointer(*_):
+        pointer.unlink()
+        pointer.symlink_to(other.parent, target_is_directory=True)
+    monkeypatch.setattr(builder.core, 'inspect_asset_release', change_pointer)
+    with pytest.raises(module.CohortError, match='changed while validating'):
+        builder.production_md_assets_root()
+
+
+@pytest.mark.parametrize('target', ['outside', 'linked-release', 'invalid-release'])
+def test_cohort_rejects_noncanonical_asset_release(cohort_files, target):
+    _, _, path, sealed, seal = cohort_files
+    cohort = module.load_cohort(path, sealed)
+    if target == 'outside':
+        assets = cohort.root / 'arbitrary-assets/byteff2'
+        assets.mkdir(parents=True)
+    elif target == 'linked-release':
+        release = cohort.md_assets_root.parent.parent / ('e' * 64)
+        release.symlink_to(cohort.md_assets_root.parent, target_is_directory=True)
+        assets = release / 'byteff2'
+    else:
+        assets = cohort.md_assets_root.parent.parent / 'latest/byteff2'
+        assets.mkdir(parents=True)
+    with pytest.raises(module.CohortError, match='immutable release layout'):
+        module.load_cohort(path, seal({'md_assets_root': str(assets)}))
 
 
 def test_candidate_has_independent_state_and_scrubbed_native_environments(cohort_files):

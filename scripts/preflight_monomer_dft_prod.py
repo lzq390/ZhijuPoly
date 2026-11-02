@@ -87,6 +87,13 @@ def run(*command: str) -> str:
         raise PreflightError(f"startup command failed: {command[0]}") from exc
 
 
+def python_version(python: Path) -> str:
+    # Isolated mode ignores PYTHONDONTWRITEBYTECODE; -B must protect the
+    # already sealed venv from site .pth imports before the version probe.
+    return run(os.fspath(python), "-I", "-B", "-c",
+        "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+
+
 def load_runtime_environment(path: Path) -> dict[str, str]:
     private_file(path)
     values: dict[str, str] = {}
@@ -222,15 +229,7 @@ def validate(
     python = release_runtime / "venv/bin/python"
     if not python.exists() or not os.access(python, os.X_OK):
         raise PreflightError("DFT runtime Python is unavailable")
-    if (
-        run(
-            os.fspath(python),
-            "-I",
-            "-c",
-            "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
-        )
-        != "3.12"
-    ):
+    if python_version(python) != "3.12":
         raise PreflightError("DFT runtime Python is not 3.12")
 
     lock_path = repo_root / "workers/monomer_dft_worker/aimnet-source.lock.json"
