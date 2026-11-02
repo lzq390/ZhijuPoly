@@ -60,6 +60,19 @@ RESEARCH_SELECTORS = (
     "NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED",
 )
 RESEARCH_INPUTS = (*RESEARCH_SELECTORS, "NEXPOLY_DEV_RESEARCH_ENV_FILE", "NEXPOLY_DEV_RESEARCH_CONFIG_SHA256")
+BILLING_INPUTS = ("NEXPOLY_DEV_BILLING_SIMULATION_ENABLED", "NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN")
+
+
+def billing_configuration(environment: dict[str, str]) -> dict[str, str]:
+    """Freeze the development-only opt-in and its explicit non-secret test price."""
+    selected = environment.get(BILLING_INPUTS[0], "false")
+    if selected == "false":
+        return {}
+    price = environment.get(BILLING_INPUTS[1], "")
+    if (selected != "true" or re.fullmatch(r"[1-9][0-9]{0,8}", price) is None
+            or int(price) > 100_000_000):
+        raise OperatorError("GPU operator billing simulation selection or price is invalid")
+    return {BILLING_INPUTS[0]: "true", BILLING_INPUTS[1]: price}
 
 
 def research_configuration(environment: dict[str, str]) -> dict[str, str]:
@@ -214,6 +227,7 @@ class DevGpuOperator:
         self.source_tree = source_tree
         self.python_executable = python_executable
         self.research_configuration = research_configuration(dict(os.environ))
+        self.billing_configuration = billing_configuration(dict(os.environ))
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
         self._operation_thread: threading.Thread | None = None
@@ -498,6 +512,10 @@ class DevGpuOperator:
                 # dotenv edit must not silently opt their recovery into research.
                 environment.update({key: "false" for key in RESEARCH_SELECTORS})
                 environment.update(self.research_configuration)
+                for key in BILLING_INPUTS:
+                    environment.pop(key, None)
+                environment[BILLING_INPUTS[0]] = "false"
+                environment.update(self.billing_configuration)
                 if self.research_configuration:
                     environment["NEXPOLY_DEV_EXPECTED_RESEARCH_CONFIG_SHA256"] = self.research_configuration["NEXPOLY_DEV_RESEARCH_CONFIG_SHA256"]
                 environment["NEXPOLY_DEV_GPU_SESSION_EXECUTE"] = "1"
@@ -662,6 +680,7 @@ class DevGpuOperator:
                     "source_tree": self.source_tree,
                     "user_isolation_enabled": os.getenv("NEXPOLY_DEV_USER_ISOLATION_ENABLED", "false") == "true",
                     "research_configuration": self.research_configuration,
+                    "billing_configuration": self.billing_configuration,
                 },
             )
             server.listen(8)

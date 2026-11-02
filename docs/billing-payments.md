@@ -1,5 +1,9 @@
 # 月费会员支付部署
 
+开发原生 launcher 的模拟支付使用独立 opt-in：设置 `NEXPOLY_DEV_BILLING_SIMULATION_ENABLED=true`，同时明确设置 `NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN`（例如 `9900`，表示测试展示价 ¥99）。默认关闭。它要求已开启开发用户隔离和显式 `nexpoly_dev_` 前缀会话 cookie；不支持 frozen cohort。不要将这两个选择项写入只允许研究服务字段的私有 research dotenv。
+
+该 opt-in 将 `docker-compose.billing-simulation-dev.yml` 同时加入 CPU/GPU 配置及构建配置哈希，固定真实支付关闭、真实渠道为空、模拟支付和注册开启，健康检查严格要求 `membership-0025`。必须先按停机、备份、迁移及校验流程应用 0025，再启动相应镜像。launcher 不会自动迁移数据库。GPU operator 和 controller 恢复时保留同一选择与价格；未来人工启动同样需要显式提供这两个变量。模拟关闭后，已迁移数据库仍需要支持 0025 的代码和相应 schema target，不能直接退回 0024 发布配置。
+
 支付适配器接入微信 Native APIv3 和支付宝当面付 `alipay.trade.precreate`。购买一次月费会员产生一个商户订单，由用户扫码支付；这不是自动扣款签约，不会在下月自动从用户账户扣费。月费价格必须由部署者明确配置为人民币分，不提供默认商业价格。
 
 ## 权限与会员有效期

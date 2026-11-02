@@ -1,0 +1,14 @@
+# Explicit isolated-development opt-in, appended after research/GPU overlays.
+# Apply membership-0025 separately before starting. No real gateway or key mount.
+services:
+  backend:
+    environment:
+      GPU_BROKER_ENVIRONMENT: dev
+      NEXPOLY_BILLING_ENABLED: "false"
+      NEXPOLY_BILLING_SIMULATION_ENABLED: "true"
+      NEXPOLY_BILLING_REGISTRATION_ENABLED: "true"
+      NEXPOLY_BILLING_PROVIDERS: ""
+      NEXPOLY_BILLING_MONTHLY_PRICE_FEN: "${NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN:?set an explicit monthly simulation price in fen}"
+      NEXPOLY_POSTGRES_PREFLIGHT_ARGS: "--strict --schema-target membership-0025 --service-context"
+      DEPLOYMENT_DRAIN_ENABLED: "true"
+      USAGE_ENTITLEMENTS_ENABLED: "false"
