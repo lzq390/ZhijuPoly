@@ -20,6 +20,14 @@ def _entries(module, mode, method, paths):
     return tuple(UsageRoute(method, path, module, mode) for path in paths)
 
 ROUTES = (
+    # Account purchases and payment reconciliation do not execute scientific work.
+    *_entries(None, "observe", "GET", (
+        "/api/v1/billing/plans", "/api/v1/billing/subscription",
+        "/api/v1/billing/orders", "/api/v1/billing/orders/{order_id}")),
+    *_entries(None, "observe", "POST", (
+        "/api/v1/billing/orders", "/api/v1/billing/webhooks/{provider}",
+        "/api/v1/billing/orders/{order_id}/simulate-payment",
+        "/api/v1/billing/simulation/checkout", "/api/v1/billing/simulation/confirm")),
     *_entries("assistant", "sync", "POST", (
         "/api/v1/assistant/chat/stream", "/api/v1/assistant/chat/image-stream")),
     *_entries("tg_assistant", "sync", "POST", (

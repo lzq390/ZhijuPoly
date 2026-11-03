@@ -322,6 +322,23 @@ def test_catalog_classifies_every_registered_router_endpoint():
     assert all(item["coverage"] in {"measured","partial","external"} for item in catalog_modules())
 
 
+@pytest.mark.parametrize("method,path", [
+    ("POST", "/api/v1/auth/register"),
+    ("GET", "/api/v1/billing/plans"),
+    ("GET", "/api/v1/billing/subscription"),
+    ("POST", "/api/v1/billing/orders"),
+    ("GET", "/api/v1/billing/orders"),
+    ("GET", "/api/v1/billing/orders/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"),
+    ("POST", "/api/v1/billing/orders/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa/simulate-payment"),
+    ("POST", "/api/v1/billing/webhooks/wechat"),
+    ("POST", "/api/v1/billing/webhooks/alipay"),
+])
+def test_membership_account_operations_are_not_scientific_usage(method, path):
+    route = match_usage_route(method, path)
+    assert route is not None and route.mode == "observe" and route.module is None
+    assert match_usage_route("POST", "/api/v1/billing/unclassified-operation") is None
+
+
 def test_authentication_is_outermost_to_usage_and_drain_rejects_before_usage():
     source = (Path(__file__).parents[1]/"app/main.py").read_text()
     assert source.index("app.add_middleware(UsageMeteringMiddleware") < source.index("app.add_middleware(DeploymentDrainMiddleware") < source.index("app.add_middleware(AuthenticationMiddleware")

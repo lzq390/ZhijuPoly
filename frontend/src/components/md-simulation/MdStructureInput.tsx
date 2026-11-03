@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../../auth/access";
 import { useStructureImport } from "../../structure-library/StructureLibraryProvider";
 import {
   Atom,
@@ -51,7 +52,7 @@ export function MdStructureInput({
   onTouched,
   onEditStructure
 }: MdStructureInputProps) {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewRevisionRef = useRef(0);
   const previewValueRef = useRef("");

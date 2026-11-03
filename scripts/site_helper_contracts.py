@@ -590,6 +590,21 @@ def validate_literature_ledger(records: object) -> list[dict[str, str]]:
     return [dict(record) for record in expected]
 
 
+# Membership evidence has its own exact boundary; historical protocols stay fixed.
+MEMBERSHIP_MIGRATION_LEDGER = (*LITERATURE_MIGRATION_LEDGER,
+    ("0025_membership_subscriptions", "ced7418143e8b1cb22e45f72ff0d5e53190b348a85fb7951f96a5cc7a5ff3db5"),
+)
+POST_0025_BUSINESS_MUTABLE_TABLES = tuple(("billing", name) for name in
+    ("accounts", "subscriptions", "orders", "payment_events"))
+
+
+def validate_membership_ledger(records: object) -> list[dict[str, str]]:
+    expected = [{"version": version, "checksum": checksum} for version, checksum in MEMBERSHIP_MIGRATION_LEDGER]
+    if records != expected:
+        raise SiteHelperContractError("membership requires the complete canonical ledger through 0025")
+    return [dict(record) for record in expected]
+
+
 def validate_user_isolation_v2_ledger(records: object) -> list[dict[str, str]]:
     expected = [{"version": version, "checksum": checksum} for version, checksum in USER_ISOLATION_V2_MIGRATION_LEDGER]
     if records != expected:

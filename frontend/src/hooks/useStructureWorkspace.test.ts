@@ -33,3 +33,18 @@ it("keeps guest drawing and text conversion local", async () => {
   await act(async () => { expect(await result.current.getCurrentSmiles()).toBe("CCN"); });
   expect(standardize).not.toHaveBeenCalled();
 });
+
+it("changes local mode after membership activation without replacing the canvas draft", async () => {
+  standardize.mockResolvedValue({ standardized_smiles: "CCN" });
+  const { result, rerender } = renderHook(({ localOnly }) => useStructureWorkspace({ guest: localOnly, initialSmiles: "CCO" }), { initialProps: { localOnly: true } });
+  const workspace = result.current.workspace;
+  await act(async () => { result.current.workspace.setSmiles("CCO"); });
+  rerender({ localOnly: false });
+  expect(result.current.workspace).toBe(workspace);
+  expect(result.current.smiles).toBe("CCO");
+  await act(async () => { result.current.workspace.setSmiles("CCN"); });
+  expect(standardize).toHaveBeenCalledWith({ smiles: "CCN" });
+  rerender({ localOnly: true }); standardize.mockClear();
+  await act(async () => { result.current.workspace.setSmiles("CCC"); });
+  expect(standardize).not.toHaveBeenCalled();
+});

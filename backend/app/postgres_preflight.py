@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from app.config import Settings
+from task_usage.billing_contract import BILLING_VERSION, BILLING_CHECKSUM
 from app.literature_contract import LITERATURE_MIGRATION
 from app.migration_compatibility import compatible_forward_versions
 from app.migration_policy import validate_migration_manifest_entries
@@ -126,9 +127,11 @@ SCHEMA_TARGET_STRUCTURE_LIBRARY = "user-isolation-0020"
 SCHEMA_TARGET_ISOLATION_HISTORICAL = "user-isolation-0018"
 SCHEMA_TARGET_POLYMER_MD = "polymer-md-0023"
 SCHEMA_TARGET_LITERATURE = "literature-0024"
+SCHEMA_TARGET_BILLING = "membership-0025"
+BILLING_POSTGRES_TABLES = tuple(("billing", name) for name in ("accounts", "subscriptions", "orders", "payment_events"))
 LITERATURE_POSTGRES_TABLES = tuple(("knowledge", name) for name in ("literature_generations", "literature_catalog", "literature_snapshots"))
 POLYMER_MD_POSTGRES_TABLES = tuple(("polymer_md", name) for name in ("jobs", "job_attempts", "stage_runs", "artifacts"))
-ISOLATION_TARGETS = frozenset({SCHEMA_TARGET_ISOLATION, SCHEMA_TARGET_ISOLATION_HISTORICAL, SCHEMA_TARGET_STRUCTURE_LIBRARY, SCHEMA_TARGET_CURRENT_ISOLATION, SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE})
+ISOLATION_TARGETS = frozenset({SCHEMA_TARGET_ISOLATION, SCHEMA_TARGET_ISOLATION_HISTORICAL, SCHEMA_TARGET_STRUCTURE_LIBRARY, SCHEMA_TARGET_CURRENT_ISOLATION, SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING})
 SCHEMA_TARGETS = frozenset({SCHEMA_TARGET_STARTUP, SCHEMA_TARGET_FINAL, *ISOLATION_TARGETS})
 
 
@@ -143,6 +146,9 @@ def known_checksums_for_target(schema_target: str) -> dict[str, str]:
         if LITERATURE_MIGRATION in known and known[LITERATURE_MIGRATION] != LITERATURE_MIGRATION_SHA256:
             raise ValueError("literature checksum differs from the registered release")
         known[LITERATURE_MIGRATION] = LITERATURE_MIGRATION_SHA256
+        if BILLING_VERSION in known and known[BILLING_VERSION] != BILLING_CHECKSUM:
+            raise ValueError("membership checksum differs from the registered release")
+        known[BILLING_VERSION] = BILLING_CHECKSUM
     return known
 
 
@@ -153,7 +159,8 @@ def _required_migrations(schema_target: str) -> tuple[str, ...]:
                     SCHEMA_TARGET_ISOLATION_HISTORICAL: "0018_user_isolation_cutover",
                     SCHEMA_TARGET_STRUCTURE_LIBRARY: "0020_structure_library",
                     SCHEMA_TARGET_POLYMER_MD: "0023_polymer_md_jobs",
-                    SCHEMA_TARGET_LITERATURE: LITERATURE_MIGRATION}[schema_target]
+                    SCHEMA_TARGET_LITERATURE: LITERATURE_MIGRATION,
+                    SCHEMA_TARGET_BILLING: BILLING_VERSION}[schema_target]
         return tuple(migration.version for migration in _MIGRATION_POLICY if migration.version <= boundary)
     if schema_target == SCHEMA_TARGET_STARTUP:
         return STARTUP_REQUIRED_MIGRATIONS
@@ -168,7 +175,7 @@ def _required_runtime_tables(
     if schema_target in ISOLATION_TARGETS:
         # Hidden lab modules are not part of the authenticated v1 product.
         # Their rows must not require extra API/service privileges at startup.
-        return tuple(table for table in STRICT_RUNTIME_TABLES if table[0] != "lab") + (POLYMER_MD_POSTGRES_TABLES if schema_target in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE} else ()) + (LITERATURE_POSTGRES_TABLES if schema_target == SCHEMA_TARGET_LITERATURE else ())
+        return tuple(table for table in STRICT_RUNTIME_TABLES if table[0] != "lab") + (POLYMER_MD_POSTGRES_TABLES if schema_target in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING} else ()) + (LITERATURE_POSTGRES_TABLES if schema_target in {SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING} else ()) + (BILLING_POSTGRES_TABLES if schema_target == SCHEMA_TARGET_BILLING else ())
     if schema_target == SCHEMA_TARGET_STARTUP:
         return STARTUP_RUNTIME_TABLES
     if schema_target == SCHEMA_TARGET_FINAL:
@@ -528,7 +535,7 @@ def run_preflight(
                 # same exact ledger, role, RLS and ACL checks as explicit targets.
                 # Unknown/historical ledgers still fail closed below.
                 from app.auth.isolation_ledger import LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION
-                schema_target = (SCHEMA_TARGET_LITERATURE if applied_migrations and max(applied_migrations) == LITERATURE_MIGRATION else SCHEMA_TARGET_POLYMER_MD if applied_migrations and max(applied_migrations) == POLYMER_VERSION else SCHEMA_TARGET_STRUCTURE_LIBRARY
+                schema_target = (SCHEMA_TARGET_BILLING if applied_migrations and max(applied_migrations) == BILLING_VERSION else SCHEMA_TARGET_LITERATURE if applied_migrations and max(applied_migrations) == LITERATURE_MIGRATION else SCHEMA_TARGET_POLYMER_MD if applied_migrations and max(applied_migrations) == POLYMER_VERSION else SCHEMA_TARGET_STRUCTURE_LIBRARY
                     if applied_migrations and max(applied_migrations) in {
                         LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION,
                     } else SCHEMA_TARGET_ISOLATION)
@@ -573,12 +580,14 @@ def run_preflight(
                     validate_service_migration_ledger(connection, boundary)
                 else:
                     ledger = (validate_application_migration_ledger(connection, require_usage=True, require_entitlements=True)
-                              if schema_target in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE} else validate_application_migration_ledger(connection))
+                              if schema_target in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING} else validate_application_migration_ledger(connection))
                     boundary = ledger[-1]["version"]
                     if schema_target == SCHEMA_TARGET_STRUCTURE_LIBRARY and boundary < LIBRARY_VERSION:
                         raise ValueError("Structure library requires its exact release-known migration prefix")
                 if schema_target == SCHEMA_TARGET_POLYMER_MD and boundary != POLYMER_VERSION:
                     raise ValueError("Polymer MD requires its exact release-known migration prefix")
+                if schema_target == SCHEMA_TARGET_BILLING and boundary != BILLING_VERSION:
+                    raise ValueError("Membership requires its exact release-known migration prefix")
                 if schema_target == SCHEMA_TARGET_LITERATURE and boundary != LITERATURE_MIGRATION:
                     raise ValueError("Literature requires its exact release-known migration prefix")
                 report["service_identity"] = validate_runtime_role(connection, "nexpoly_service")
@@ -599,7 +608,7 @@ def run_preflight(
                         api_ledger = validate_application_migration_ledger(api)
                         if api_ledger[-1]["version"] != boundary:
                             raise ValueError("API and service migration boundaries differ")
-                        if schema_target == SCHEMA_TARGET_LITERATURE:
+                        if schema_target in {SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING}:
                             from app.services.literature_preflight import validate_literature_api_schema
                             validate_literature_api_schema(api)
                             literature_table_counts = {
@@ -609,7 +618,7 @@ def run_preflight(
                             report["literature_schema_ready"] = True
                     report["runtime_database"] = service_database
             dft_schema = probe_monomer_dft_schema(connection)
-            if schema_target in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE}:
+            if schema_target in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING}:
                 from app.services.polymer_md_schema import validate_polymer_md_schema
                 validate_polymer_md_schema(connection)
             table_counts = {
@@ -649,6 +658,9 @@ def run_preflight(
                         for schema, table in MONOMER_DFT_POSTGRES_TABLES
                     }
                 )
+            if schema_target == SCHEMA_TARGET_BILLING:
+                table_counts.update({f"{schema}.{table}": _postgres_count(connection,schema,table) for schema,table in BILLING_POSTGRES_TABLES})
+                report["billing_schema_ready"] = True
             report["postgres"] = {
                 "reachable": True,
                 "database": version["database"],
@@ -656,7 +668,7 @@ def run_preflight(
                 "version": str(version["version"]).split(",", 1)[0],
                 "tables": table_counts,
             }
-            if schema_target in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE}:
+            if schema_target in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING}:
                 table_counts.update({f"{schema}.{table}":_postgres_count(connection,schema,table) for schema,table in POLYMER_MD_POSTGRES_TABLES})
             report["monomer_dft_schema"] = {
                 "state": dft_schema.state.value,
@@ -700,7 +712,7 @@ def run_preflight(
     report["blockers"] = blockers
     report["strict_ok"] = not strict_errors
     report["strict_errors"] = strict_errors
-    report["current_readiness"] = schema_target in {SCHEMA_TARGET_ISOLATION, SCHEMA_TARGET_STRUCTURE_LIBRARY, SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE} and not strict_errors
+    report["current_readiness"] = schema_target in {SCHEMA_TARGET_ISOLATION, SCHEMA_TARGET_STRUCTURE_LIBRARY, SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING} and not strict_errors
     return report
 
 

@@ -77,6 +77,23 @@ async def login(body: LoginBody, request: Request, response: Response):
     return await run_in_threadpool(_account_response, request, session, token)
 
 
+@router.post('/register', status_code=201)
+async def register(body: LoginBody, request: Request, response: Response):
+    billing = getattr(request.app.state, 'billing', None)
+    if billing is None or not billing.settings.registration_enabled:
+        raise HTTPException(403, '自助注册暂未开放。')
+    # Registration must never fall back to the legacy no-tier => member behavior.
+    await run_in_threadpool(billing.repository.assert_ready)
+    auth = request.app.state.auth
+    if auth.settings.isolated_ab_session_policy is not None:
+        raise HTTPException(403, '隔离验收入口不提供自助注册。')
+    session, token = await run_in_threadpool(auth.register, body.username, body.password,
+                                            request.client.host if request.client else 'unknown')
+    response.set_cookie(auth.settings.cookie_name, token, max_age=session['session_max_age'],
+                        secure=auth.settings.cookie_secure, httponly=True, samesite='lax', path='/')
+    return await run_in_threadpool(_account_response, request, session, token)
+
+
 @router.post('/logout',status_code=204)
 async def logout(request: Request):
     auth = request.app.state.auth

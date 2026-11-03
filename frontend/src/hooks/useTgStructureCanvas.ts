@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../auth/access";
 import type { StructureDocument } from "../structure-library/types";
 import { useAuth } from "../auth/AuthProvider";
 import { createPrivateObjectURL, revokePrivateObjectURL } from "../auth/objectUrls";
@@ -280,7 +281,7 @@ export function useTgStructureCanvas({
   structure,
   onStructureChanged
 }: UseTgStructureCanvasOptions) {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const workspace = structure.workspace;
   const identityEpoch = useRef(getSessionEpoch()).current;
   const document = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);

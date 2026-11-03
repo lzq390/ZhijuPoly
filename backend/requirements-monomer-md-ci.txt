@@ -25,3 +25,4 @@ argon2-cffi==25.1.0
 uvicorn==0.32.0
 
 minio==7.2.20
+cryptography==50.0.2

@@ -469,7 +469,7 @@ describe("数据库分析工作台", () => {
   it("访客切回窗口或切换数据集不读取统计，也不请求登录", async () => {
     vi.spyOn(authContext, "useAuth").mockReturnValue({
       status: "guest", session: GUEST_SESSION, error: null,
-      login: vi.fn(), logout: vi.fn(async () => {}), changePassword: vi.fn(),
+      login: vi.fn(), register: vi.fn(), refreshSession: vi.fn(async () => {}), logout: vi.fn(async () => {}), changePassword: vi.fn(),
       guestDraft: "", registerGuestCapture: vi.fn()
     });
     const requestAccess = vi.spyOn(guestAccess, "requestServiceAccess");

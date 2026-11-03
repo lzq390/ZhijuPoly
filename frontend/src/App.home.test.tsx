@@ -565,6 +565,18 @@ describe("智聚万物首页", () => {
 
 
 describe("游客共享工作空间", () => {
+  it("普通账号使用游客业务界面并保留会员订阅入口", async () => {
+    const ordinary = { ...GUEST_SESSION, authenticated: true, account_type: "free", user: { id: "ordinary", username: "ordinary", must_change_password: false }, session_id: "ordinary-session", csrf_token: "ordinary-csrf" };
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(ordinary), { headers: { "Content-Type": "application/json" } }));
+    render(<AuthProvider><App /></AuthProvider>);
+    await screen.findByRole("button", { name: "账号菜单：ordinary" });
+    expect(screen.getByRole("heading", { name: "对话", level: 1 })).toBeTruthy();
+    expect(screen.getByText("开通会员后即可发送消息")).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "账号菜单：ordinary" }));
+    expect(screen.getByRole("menuitem", { name: "会员订阅" })).toBeTruthy();
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual(["/api/v1/auth/session"]);
+  });
   function guestPage() {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(GUEST_SESSION), { headers: { "Content-Type": "application/json" } }));
     render(<AuthProvider><App /></AuthProvider>);

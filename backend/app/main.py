@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import os
@@ -20,6 +21,12 @@ from app.config import Settings, get_settings
 from app.auth.context import service_context
 from app.auth.middleware import AuthenticationMiddleware
 from app.auth.router import router as auth_router
+from app.billing.router import router as billing_router, billing_error_handler
+from app.billing.repository import BillingRepository, BillingError
+from app.billing.service import BillingService
+from app.billing.settings import BillingSettings
+from app.billing.providers import PaymentGateway
+from app.billing.development import DevelopmentPaymentGateway
 from app.auth.service import AuthService
 from app.auth.settings import AuthSettings
 from app.task_control import configure_task_control
@@ -41,6 +48,7 @@ from app.postgres_preflight import (
     SCHEMA_TARGET_ISOLATION,
     SCHEMA_TARGET_POLYMER_MD,
     SCHEMA_TARGET_LITERATURE,
+    SCHEMA_TARGET_BILLING,
     preflight_blockers,
     run_preflight,
 )
@@ -153,9 +161,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(api_app: FastAPI):
         residency_lease: ManagedGpuLease | None = None
+        billing_task = None
+        billing_stop = asyncio.Event()
         try:
             required_startup = api_app.state.settings.gpu_preload_mode == "required"
             await run_in_threadpool(_validate_entitlement_startup, api_app)
+            billing = api_app.state.billing
+            if billing.settings.registration_enabled or billing.settings.enabled or billing.settings.available_providers:
+                await run_in_threadpool(billing.repository.assert_ready)
             with service_context(api_app.state.auth.settings):
                 _run_database_startup_preflight(api_app, required=required_startup)
                 _mark_expired_monomer_md_jobs_failed(api_app)
@@ -197,8 +210,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             api_app.state.monomer_dft_retention_reaper.start()
             if api_app.state.polymer_md_reconciler is not None:
                 api_app.state.polymer_md_reconciler.start()
+            if billing.settings.available_providers:
+                async def reconcile_payments():
+                    while not billing_stop.is_set():
+                        try:
+                            await run_in_threadpool(billing.reconcile_pending, billing_stop.is_set)
+                        except Exception:
+                            logger.warning('billing_reconciliation_unavailable')
+                        try:
+                            await asyncio.wait_for(billing_stop.wait(), timeout=30)
+                        except asyncio.TimeoutError:
+                            pass
+                billing_task = asyncio.create_task(reconcile_payments())
             yield
         finally:
+            billing_stop.set()
+            if billing_task is not None:
+                await billing_task
             if api_app.state.polymer_md_reconciler is not None:
                 await api_app.state.polymer_md_reconciler.stop()
             if api_app.state.polymer_md_worker_client is not None:
@@ -289,6 +317,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(BatchUploadLimitMiddleware, max_bytes=batch_config.request_bytes)
     app.state.settings = app_settings
     app.state.auth = AuthService(AuthSettings.from_settings(app_settings))
+    billing_settings = BillingSettings.from_env()
+    app.state.billing = BillingService(billing_settings, BillingRepository(app.state.auth.settings),
+                                       (DevelopmentPaymentGateway(billing_settings) if billing_settings.simulation_enabled
+                                        else PaymentGateway(billing_settings)), application_settings=app_settings)
+    app.add_exception_handler(BillingError, billing_error_handler)
     app.state.usage_collector = UsageCollector(app_settings.app_postgres_dsn, settings=app.state.auth.settings)
     app.state.entitlement_repository = EntitlementRepository(app_settings.app_postgres_dsn)
     app.state.entitlement_policy = configured_policy()
@@ -313,6 +346,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.postgres_connection_factory = postgres_connection
     app.state.structure_similarity_index = StructureSimilarityIndex()
     app.state.inflight_api_writes = InflightApiWriteTracker()
+    app.state.billing.write_tracker = app.state.inflight_api_writes
     # In lazy/development mode startup database checks are allowed to fail
     # without taking unrelated APIs offline.
     app.state.database_preflight_errors = ()
@@ -481,6 +515,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.add_api_route("/health", health, methods=["GET"])
     app.include_router(auth_router)
+    app.include_router(billing_router)
     app.include_router(usage_router)
     app.include_router(entitlements_router)
     app.include_router(monomer_dft_internal_router)
@@ -720,8 +755,8 @@ def _run_database_startup_preflight(api_app: FastAPI, *, required: bool) -> None
         )
         errors = preflight_blockers(report)
         if (getattr(api_app.state.settings, "polymer_md_enabled", getattr(api_app.state.settings, "polymer_md_dev_enabled", False))
-                and report.get("schema_target") not in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE}):
-            errors.append("Polymer MD requires a validated current 0023/0024 migration boundary")
+                and report.get("schema_target") not in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING}):
+            errors.append("Polymer MD requires a validated current 0023/0024/0025 migration boundary")
         api_app.state.auth.assert_application_ready()
     except Exception as exc:
         errors = [f"database preflight failed: {type(exc).__name__}"]

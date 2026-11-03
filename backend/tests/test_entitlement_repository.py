@@ -457,7 +457,7 @@ def test_worker_release_contract_exactly_matches_full_manifest():
     assert contract["ledger"] == base
     assert contract["entitlement_sql_sha256"] == base[-1]["checksum"]
     assert accepted_release_ledgers() == [base, prefix("0023_polymer_md_jobs"),
-                                         prefix("0024_literature_projection")]
+                                         prefix("0024_literature_projection"), prefix("0025_membership_subscriptions")]
     for pin, epoch in ((OPTIONAL_MIGRATION, 8), (LITERATURE_MIGRATION, 9)):
         entry = next(row for row in entries if row.version == pin["version"])
         assert entry.kind == "expand" and entry.epoch == epoch

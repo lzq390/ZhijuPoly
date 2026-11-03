@@ -31,7 +31,8 @@
     "test:structure-ai": "node scripts/verify-structure-ai.mjs",
     "test:structure-engines": "node scripts/verify-structure-engines.mjs",
     "test:structure-refresh": "node scripts/verify-structure-refresh-performance.mjs",
-    "test:usage-browser": "node scripts/verify-personal-usage.mjs"
+    "test:usage-browser": "node scripts/verify-personal-usage.mjs",
+    "test:subscription-browser": "node scripts/verify-subscription.mjs"
   },
   "dependencies": {
     "3dmol": "^2.5.4",
@@ -44,6 +45,7 @@
     "lucide-react": "^0.542.0",
     "pako": "^2.1.0",
     "process": "0.11.10",
+    "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwind-merge": "^3.3.1"
@@ -54,6 +56,7 @@
     "@testing-library/react": "^16.3.2",
     "@types/compression": "1.8.1",
     "@types/node": "^24.7.2",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@types/react-test-renderer": "19.1.0",

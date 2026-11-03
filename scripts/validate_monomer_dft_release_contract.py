@@ -808,6 +808,8 @@ def _validate_current_isolation_resolver(
         profiles.append(("SCHEMA_TARGET_POLYMER_MD", "polymer-md-0023"))
     if "LITERATURE_MIGRATION" in boundary_names:
         profiles.append(("SCHEMA_TARGET_LITERATURE", "literature-0024"))
+    if "BILLING_VERSION" in boundary_names:
+        profiles.append(("SCHEMA_TARGET_BILLING", "membership-0025"))
     for name, value in profiles:
         if ast.dump(assignments.get(name, ast.Constant(None))) != expression(repr(value)):
             failures.append(f"Postgres current-isolation schema profile is missing: {name}")
@@ -815,7 +817,8 @@ def _validate_current_isolation_resolver(
     target_names = {node.id for node in ast.walk(targets) if isinstance(node, ast.Name)} if targets else set()
     required_targets = {"SCHEMA_TARGET_CURRENT_ISOLATION", "SCHEMA_TARGET_STRUCTURE_LIBRARY"}
     for boundary, target in (("POLYMER_VERSION", "SCHEMA_TARGET_POLYMER_MD"),
-                             ("LITERATURE_MIGRATION", "SCHEMA_TARGET_LITERATURE")):
+                             ("LITERATURE_MIGRATION", "SCHEMA_TARGET_LITERATURE"),
+                             ("BILLING_VERSION", "SCHEMA_TARGET_BILLING")):
         if boundary in boundary_names:
             required_targets.add(target)
     if not required_targets <= target_names:
@@ -829,11 +832,12 @@ def _validate_current_isolation_resolver(
     resolver_source = (
         "SCHEMA_TARGET_STRUCTURE_LIBRARY if applied_migrations and max(applied_migrations) in {"
         + ", ".join(name for name in boundary_names
-                    if name not in {"POLYMER_VERSION", "LITERATURE_MIGRATION"})
+                    if name not in {"POLYMER_VERSION", "LITERATURE_MIGRATION", "BILLING_VERSION"})
         + "} else SCHEMA_TARGET_ISOLATION"
     )
     for boundary, target in (("POLYMER_VERSION", "SCHEMA_TARGET_POLYMER_MD"),
-                             ("LITERATURE_MIGRATION", "SCHEMA_TARGET_LITERATURE")):
+                             ("LITERATURE_MIGRATION", "SCHEMA_TARGET_LITERATURE"),
+                             ("BILLING_VERSION", "SCHEMA_TARGET_BILLING")):
         if boundary in boundary_names:
             resolver_source = (f"{target} if applied_migrations and max(applied_migrations) == {boundary} "
                                f"else {resolver_source}")
@@ -868,6 +872,7 @@ def _validate_current_isolation_resolver(
             "validate_application_migration_ledger(connection, require_usage=True, require_entitlements=True)",
             "boundary != POLYMER_VERSION",
             *(["boundary != LITERATURE_MIGRATION"] if "LITERATURE_MIGRATION" in boundary_names else []),
+            *(["boundary != BILLING_VERSION"] if "BILLING_VERSION" in boundary_names else []),
         ):
             if expression(required) not in isolation_expressions:
                 failures.append(f"current isolation startup protection is missing: {required}")
@@ -1002,6 +1007,7 @@ def validate_database_schema_state_contract(
         ("0022_usage_entitlements", "ENTITLEMENT_VERSION"),
         ("0023_polymer_md_jobs", "POLYMER_VERSION"),
         ("0024_literature_projection", "LITERATURE_MIGRATION"),
+        ("0025_membership_subscriptions", "BILLING_VERSION"),
     )
     current_isolation = any(version in versions for version, _name in private_boundaries)
     isolated = current_isolation or any(version in versions for version in isolation_versions)

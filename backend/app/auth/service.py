@@ -79,6 +79,32 @@ class AuthService:
     def __init__(self, settings: AuthSettings):
         self.settings = settings
         self.limiter = LoginLimiter()
+        self.registration_limiter = LoginLimiter()
+
+    def register(self, username: str, password: str, peer: str):
+        """Create the user, trigger-created free identity and first session atomically."""
+        import psycopg
+        try:
+            username = normalize_username(username)
+            self.registration_limiter.check(peer, username)
+            encoded = hash_password(password)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        token, session_id, user_id = secrets.token_urlsafe(32), uuid4(), uuid4()
+        max_age = self.settings.session_hours * 3600
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=max_age)
+        with self.connection() as connection:
+            try:
+                with connection.transaction():
+                    user = connection.execute('''INSERT INTO auth.users
+                        (user_id,username,password_hash,must_change_password)
+                        VALUES(%s,%s,%s,false) RETURNING user_id,username,must_change_password''',
+                        (user_id, username, encoded)).fetchone()
+                    connection.execute('''INSERT INTO auth.sessions(session_id,user_id,token_hash,expires_at)
+                        VALUES(%s,%s,%s,%s)''', (session_id,user_id,hashlib.sha256(token.encode()).digest(),expires_at))
+            except psycopg.errors.UniqueViolation:
+                raise HTTPException(409, '该用户名不可用，请更换用户名。') from None
+        return {**user, 'session_id': session_id, 'session_max_age': max_age, 'expires_at': expires_at}, token
 
     @contextmanager
     def connection(self, *, service=False):

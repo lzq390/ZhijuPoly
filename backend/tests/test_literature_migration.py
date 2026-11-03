@@ -12,6 +12,7 @@ from literature_test_support import install_literature_test_projection, literatu
 from app.auth.backup import validate_backup_schema
 from app.auth.cutover import backup_state_seal
 from app.auth.isolation_ledger import expected_isolation_ledger, validate_service_migration_ledger
+from task_usage.billing_contract import BILLING_VERSION, BILLING_CHECKSUM
 from app.literature_contract import compatible_identity_ledger, registered_literature_ledger, LITERATURE_MIGRATION, LITERATURE_MIGRATION_SHA256
 from app.postgres_migrations import apply_postgres_migrations
 from scripts.site_helper_contracts import validate_user_isolation_v2_ledger, validate_literature_ledger, SiteHelperContractError
@@ -41,7 +42,7 @@ def test_bridge_preflight_without_packaged_sql(monkeypatch):
     from app import postgres_preflight as preflight
     monkeypatch.setattr(preflight, '_MIGRATION_CHECKSUMS', {})
     assert preflight.known_checksums_for_target(preflight.SCHEMA_TARGET_ISOLATION) == {
-        LITERATURE_MIGRATION: LITERATURE_MIGRATION_SHA256}
+        LITERATURE_MIGRATION: LITERATURE_MIGRATION_SHA256, BILLING_VERSION: BILLING_CHECKSUM}
     assert preflight.known_checksums_for_target(preflight.SCHEMA_TARGET_STARTUP) == {}
 
 

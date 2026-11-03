@@ -119,8 +119,9 @@ def _check_readiness(connection):
     try:
         # The exact release ledger validates the complete usage/entitlement
         # schemas, including RLS, ACLs and exact invoker trigger definitions.
-        validate_application_migration_ledger(connection, require_usage=True, require_entitlements=True)
+        ledger = validate_application_migration_ledger(connection, require_usage=True, require_entitlements=True)
         validate_isolation_schema(connection)
+        return ledger
     except ValueError:
         raise CliError("database_readiness_failed", 3) from None
 
@@ -145,7 +146,7 @@ def _database_operation(args, *, policy=None, owner=None):
             connection.execute("SET LOCAL statement_timeout = '30s'")
             connection.execute("SET LOCAL lock_timeout = '5s'")
             _check_authority(connection)
-            _check_readiness(connection)
+            ledger = _check_readiness(connection)
             base = {"command": args.command, "mode": "apply" if args.apply else "preview",
                     "readiness_verified": True}
             if args.command == "install-policy":
@@ -165,9 +166,16 @@ def _database_operation(args, *, policy=None, owner=None):
                 raise CliError("system_owner_forbidden")
             row = connection.execute("SELECT tier FROM usage_entitlements.owner_entitlements WHERE owner_user_id=%s", (owner,)).fetchone()
             previous = row["tier"] if row else "member"
+            would_write = row is None or previous != args.tier
+            from task_usage.billing_contract import BILLING_VERSION
+            if ledger and ledger[-1]["version"] == BILLING_VERSION:
+                from task_usage.entitlement_access import resolve_access_tier
+                previous = resolve_access_tier(connection, owner_user_id=owner)
+                account = connection.execute("SELECT override_tier FROM billing.accounts WHERE owner_user_id=%s", (owner,)).fetchone()
+                would_write = would_write or account is None or account["override_tier"] != args.tier
             receipt = {"owner_user_id": owner, "observed_tier": previous, "requested_tier": args.tier}
             if not args.apply:
-                return {**base, **receipt, "would_change": previous != args.tier, "would_write": row is None or previous != args.tier, "written": False}
+                return {**base, **receipt, "would_change": previous != args.tier, "would_write": would_write, "written": False}
             # Core rechecks existence/non-system under the auth.users lock that
             # linearizes this configuration with actual first-start admission.
             result = _admin_store().set_owner_tier(connection, owner_user_id=owner, tier=args.tier)

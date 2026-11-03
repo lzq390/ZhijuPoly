@@ -143,6 +143,7 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
             "validate_application_migration_ledger(connection, require_usage=True, require_entitlements=True)",
             "boundary != POLYMER_VERSION",
             "boundary != LITERATURE_MIGRATION",
+            "boundary != BILLING_VERSION",
         ):
             with self.subTest(protection=required):
                 self.assertIn(required, source)
@@ -153,14 +154,14 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
         relative = "backend/app/postgres_preflight.py"
         source = (REPOSITORY_ROOT / relative).read_text()
         for name in ("SCHEMA_TARGET_CURRENT_ISOLATION", "SCHEMA_TARGET_STRUCTURE_LIBRARY",
-                     "SCHEMA_TARGET_POLYMER_MD", "SCHEMA_TARGET_LITERATURE"):
+                     "SCHEMA_TARGET_POLYMER_MD", "SCHEMA_TARGET_LITERATURE", "SCHEMA_TARGET_BILLING"):
             with self.subTest(membership=name):
                 removed = re.sub(r'^(ISOLATION_TARGETS = .*?)\b' + name + r'\b,? ?', r'\1', source, flags=re.MULTILINE)
                 self.assertNotEqual(removed, source)
                 self.assertIn("current startup targets must retain all isolation checks",
                               self._schema_failures_with_sources({relative: removed}))
         for name in ("SCHEMA_TARGET_CURRENT_ISOLATION", "SCHEMA_TARGET_STRUCTURE_LIBRARY",
-                     "SCHEMA_TARGET_POLYMER_MD", "SCHEMA_TARGET_LITERATURE"):
+                     "SCHEMA_TARGET_POLYMER_MD", "SCHEMA_TARGET_LITERATURE", "SCHEMA_TARGET_BILLING"):
             with self.subTest(profile=name):
                 mutated = re.sub(rf'^{name} = .*$', f'{name} = "unreviewed"', source, flags=re.MULTILINE)
                 self.assertNotEqual(mutated, source)
@@ -171,7 +172,7 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
         relative = "backend/migrations/postgres/manifest.json"
         manifest = json.loads((REPOSITORY_ROOT / relative).read_text())
         for version in ("0020_structure_library", "0021_usage_metering",
-                        "0022_usage_entitlements", "0023_polymer_md_jobs", "0024_literature_projection"):
+                        "0022_usage_entitlements", "0023_polymer_md_jobs", "0024_literature_projection", "0025_membership_subscriptions"):
             for duplicate in (False, True):
                 with self.subTest(version=version, duplicate=duplicate):
                     entries = [entry for entry in manifest["migrations"] if entry["version"] != version]
@@ -180,7 +181,7 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
                     mutated = dict(manifest, migrations=entries)
                     failures = self._schema_failures_with_sources({relative: json.dumps(mutated)})
                     expected = ("current isolation resolver must accept only exact release-known migration boundaries"
-                                if version == "0024_literature_projection" and not duplicate else
+                                if version == "0025_membership_subscriptions" and not duplicate else
                                 "current isolation startup requires each intervening private migration exactly once")
                     self.assertIn(expected, failures)
 

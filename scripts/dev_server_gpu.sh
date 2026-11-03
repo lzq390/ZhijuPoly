@@ -8,7 +8,9 @@ cd "$ROOT_DIR"
 declare -A RESEARCH_LAUNCH_INPUTS=()
 for research_input in NEXPOLY_DEV_POLYMER_MD_ENABLED NEXPOLY_DEV_LITERATURE_ENABLED \
   NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED NEXPOLY_DEV_RESEARCH_ENV_FILE \
-  NEXPOLY_DEV_EXPECTED_RESEARCH_CONFIG_SHA256; do
+  NEXPOLY_DEV_EXPECTED_RESEARCH_CONFIG_SHA256 NEXPOLY_DEV_MEMBERSHIP_ENABLED \
+  NEXPOLY_DEV_BILLING_SIMULATION_ENABLED \
+  NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN; do
   if [[ -v "$research_input" ]]; then RESEARCH_LAUNCH_INPUTS["$research_input"]="${!research_input}"; fi
 done
 readonly RESEARCH_LAUNCH_INPUTS
@@ -236,6 +238,45 @@ PY
 }
 load_research_environment
 
+load_billing_environment() {
+  BILLING_COMPOSE_FILES=()
+  BILLING_BUILD_CONFIG_FILES=()
+  case "${NEXPOLY_DEV_BILLING_SIMULATION_ENABLED:-false}" in
+    true|false) export NEXPOLY_DEV_BILLING_SIMULATION_ENABLED="${NEXPOLY_DEV_BILLING_SIMULATION_ENABLED:-false}" ;;
+    *) echo "NEXPOLY_DEV_BILLING_SIMULATION_ENABLED must be exactly true or false." >&2; return 2 ;;
+  esac
+  # Preserve the original simulation opt-in, but freeze the schema selection
+  # independently so disabling simulation cannot downgrade a recovered stack.
+  case "${NEXPOLY_DEV_MEMBERSHIP_ENABLED-$NEXPOLY_DEV_BILLING_SIMULATION_ENABLED}" in
+    true|false) export NEXPOLY_DEV_MEMBERSHIP_ENABLED="${NEXPOLY_DEV_MEMBERSHIP_ENABLED-$NEXPOLY_DEV_BILLING_SIMULATION_ENABLED}" ;;
+    *) echo "NEXPOLY_DEV_MEMBERSHIP_ENABLED must be exactly true or false." >&2; return 2 ;;
+  esac
+  if [[ "$NEXPOLY_DEV_MEMBERSHIP_ENABLED" == false ]]; then
+    [[ "$NEXPOLY_DEV_BILLING_SIMULATION_ENABLED" == false ]] || {
+      echo "Billing simulation requires the membership schema opt-in." >&2; return 2
+    }
+    return 0
+  fi
+  [[ -z "${NATIVE_COHORT_CONFIG_INPUT:-}" && "$NEXPOLY_DEV_USER_ISOLATION_ENABLED" == true &&
+    "${AUTH_COOKIE_NAME:-}" == nexpoly_dev_* ]] || {
+    echo "Membership requires the ordinary isolated development stack and its explicit development cookie." >&2; return 2
+  }
+  [[ "${USAGE_ENTITLEMENTS_ENABLED:-false}" == false ]] || {
+    echo "Membership deployment must retain disabled entitlement enforcement." >&2; return 2
+  }
+  if [[ "$NEXPOLY_DEV_BILLING_SIMULATION_ENABLED" == true || -n "${NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN:-}" ]]; then
+    [[ "${NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN:-}" =~ ^[1-9][0-9]{0,8}$ &&
+      "${NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN}" -le 100000000 ]] || {
+      echo "Billing simulation requires an explicit monthly test price in fen (1..100000000)." >&2; return 2
+    }
+  fi
+  export NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN="${NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN:-}"
+  export NEXPOLY_DEV_SCHEMA_TARGET=membership-0025
+  BILLING_BUILD_CONFIG_FILES=(docker-compose.billing-simulation-dev.yml)
+  BILLING_COMPOSE_FILES=(-f docker-compose.billing-simulation-dev.yml)
+}
+load_billing_environment
+
 case "${NEXPOLY_DEV_GPU_LAUNCHER_ENABLED:-false}" in
   true|false) ;;
   *)
@@ -289,6 +330,7 @@ if [[ "$NEXPOLY_DEV_USER_ISOLATION_ENABLED" == "true" ]]; then
   BACKEND_BUILD_CONFIG_FILES+=(docker-compose.user-isolation-dev.yml)
 fi
 BACKEND_BUILD_CONFIG_FILES+=("${RESEARCH_BUILD_CONFIG_FILES[@]}")
+BACKEND_BUILD_CONFIG_FILES+=("${BILLING_BUILD_CONFIG_FILES[@]}")
 if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
   BACKEND_BUILD_CONFIG_FILES+=("$NEXPOLY_DEV_GPU_COHORT_COMPOSE_FILE")
 fi
@@ -325,12 +367,13 @@ if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
   DEV_COMPOSE_PROJECT="$NEXPOLY_DEV_COMPOSE_PROJECT"
   DEV_COMPOSE_FILES+=(-f "$NEXPOLY_DEV_GPU_COHORT_COMPOSE_FILE")
 fi
-COMPOSE=(docker compose -p "$DEV_COMPOSE_PROJECT" "${DEV_COMPOSE_FILES[@]}" "${RESEARCH_COMPOSE_FILES[@]}" "${DEV_COMPOSE_ENV_FILES[@]}")
+COMPOSE=(docker compose -p "$DEV_COMPOSE_PROJECT" "${DEV_COMPOSE_FILES[@]}" "${RESEARCH_COMPOSE_FILES[@]}" "${BILLING_COMPOSE_FILES[@]}" "${DEV_COMPOSE_ENV_FILES[@]}")
 GPU_COMPOSE=(
   docker compose -p "$DEV_COMPOSE_PROJECT"
   "${DEV_COMPOSE_FILES[@]}"
   -f docker-compose.dev-gpu-session.yml
   "${RESEARCH_COMPOSE_FILES[@]}"
+  "${BILLING_COMPOSE_FILES[@]}"
   "${DEV_COMPOSE_ENV_FILES[@]}"
 )
 GPU_SESSION_CONTROLLER="$ROOT_DIR/scripts/dev_gpu_session.py"
@@ -520,6 +563,12 @@ if any(value=="true" for value in research.values()):
 else:
     research={}
 assert identity.get("research_configuration",{})==research, "GPU operator research configuration differs"
+billing={}
+if os.getenv("NEXPOLY_DEV_MEMBERSHIP_ENABLED","false")=="true":
+    billing={"NEXPOLY_DEV_MEMBERSHIP_ENABLED":"true",
+             "NEXPOLY_DEV_BILLING_SIMULATION_ENABLED":os.getenv("NEXPOLY_DEV_BILLING_SIMULATION_ENABLED","false"),
+             "NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN":os.getenv("NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN","")}
+assert identity.get("billing_configuration",{})==billing, "GPU operator billing configuration differs"
 ' "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE" "${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}" "$GPU_OPERATOR_IDENTITY"
 }
 
@@ -616,6 +665,9 @@ gpu_operator_up() {
       --setenv="NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED=${NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED:-false}" \
       --setenv="NEXPOLY_DEV_RESEARCH_ENV_FILE=${NEXPOLY_DEV_RESEARCH_ENV_FILE:-}" \
       --setenv="NEXPOLY_DEV_RESEARCH_CONFIG_SHA256=${NEXPOLY_DEV_RESEARCH_CONFIG_SHA256:-}" \
+      --setenv="NEXPOLY_DEV_MEMBERSHIP_ENABLED=${NEXPOLY_DEV_MEMBERSHIP_ENABLED:-false}" \
+      --setenv="NEXPOLY_DEV_BILLING_SIMULATION_ENABLED=${NEXPOLY_DEV_BILLING_SIMULATION_ENABLED:-false}" \
+      --setenv="NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN=${NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN:-}" \
       --property="StandardOutput=append:$GPU_OPERATOR_LOG" \
       --property="StandardError=append:$GPU_OPERATOR_LOG" \
       "$GPU_SESSION_PYTHON" -I "$GPU_OPERATOR_SCRIPT" serve \
@@ -1140,7 +1192,7 @@ print(hashlib.sha256(payload).hexdigest())
 }
 
 verify_research_runtime() {
-  [[ "${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" == true || "${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" == true ]] || return 0
+  [[ "${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" == true || "${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" == true || "${NEXPOLY_DEV_MEMBERSHIP_ENABLED:-false}" == true ]] || return 0
   local container_id="$1" mode="$2" configuration
   configuration="$(mktemp)"
   if [[ "$mode" == gpu ]]; then
@@ -1156,7 +1208,7 @@ with open(sys.argv[1], encoding="utf-8") as source:
 actual=json.load(sys.stdin)[0]
 runtime=dict(item.split("=",1) for item in actual["Config"].get("Env",[]) if "=" in item)
 environment=expected.get("environment") or {}
-keys={key for key in set(environment)|set(runtime) if key.startswith(("POLYMER_MD_","LITERATURE_MINIO_"))}
+keys={key for key in set(environment)|set(runtime) if key.startswith(("POLYMER_MD_","LITERATURE_MINIO_","NEXPOLY_BILLING_"))}
 keys.update({"KNOWLEDGE_LITERATURE_ENABLED","DEPLOYMENT_DRAIN_ENABLED","USAGE_ENTITLEMENTS_ENABLED","NEXPOLY_POSTGRES_PREFLIGHT_ARGS"})
 for key in sorted(keys):
     if runtime.get(key)!=environment.get(key):
@@ -1280,7 +1332,7 @@ elif operator_mount:
   if [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]]; then
     gpu_operator_status_is_current >/dev/null
   fi
-  if [[ "${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" == true || "${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" == true ]]; then
+  if [[ "${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" == true || "${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" == true || "${NEXPOLY_DEV_MEMBERSHIP_ENABLED:-false}" == true ]]; then
     verify_research_runtime "$container_id" cpu
   fi
 }
@@ -2221,7 +2273,7 @@ PY
   if [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]]; then
     gpu_operator_status_is_current >/dev/null
   fi
-  if [[ "${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" == true || "${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" == true ]]; then
+  if [[ "${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" == true || "${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" == true || "${NEXPOLY_DEV_MEMBERSHIP_ENABLED:-false}" == true ]]; then
     verify_research_runtime "$container_id" gpu
   fi
 }

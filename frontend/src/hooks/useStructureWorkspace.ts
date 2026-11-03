@@ -6,12 +6,14 @@ import { StructureWorkspace } from "../structure/workspace";
 import type { StructureWorkspaceContext } from "../types";
 
 export function useStructureWorkspace({ guest = false, initialSmiles }: { guest?: boolean; initialSmiles?: string } = {}): StructureWorkspaceContext {
+  const localOnly = useRef(guest);
+  localOnly.current = guest;
   const identityEpoch = useRef(getSessionEpoch()).current;
   const [{ workspace, importedDraft }] = useState(() => {
     const importedDraft = initialSmiles === undefined ? readGuestDraft() : null;
     const workspace = new StructureWorkspace(initialSmiles ?? importedDraft?.smiles ?? "", async (smiles) => {
       assertSessionEpoch(identityEpoch);
-      if (guest) return smiles;
+      if (localOnly.current) return smiles;
       const result = await standardizeSmiles({ smiles });
       assertSessionEpoch(identityEpoch);
       return result.standardized_smiles;

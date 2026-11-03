@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../auth/access";
 import { useModuleDraftState, useStructureImport } from "../structure-library/StructureLibraryProvider";
 import { sourceLabel, type ImportedStructure } from "../structure-library/types";
 import { getSessionEpoch } from "../auth/session";
@@ -257,7 +258,7 @@ export function PolytaoGenerationPage({
   structure,
   onEditStructure
 }: PolytaoGenerationPageProps) {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const polytao = usePolytaoGeneration(!guest);
   const [descriptorError, setDescriptorError] = useState<string | null>(null);
   const [isDescriptorLoading, setIsDescriptorLoading] = useState(false);
