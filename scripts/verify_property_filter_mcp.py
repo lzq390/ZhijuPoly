@@ -8,6 +8,7 @@ The report contains timings, counts and checks, never tokens or measurement data
 from __future__ import annotations
 
 import asyncio
+import argparse
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import hashlib
@@ -29,7 +30,7 @@ from psycopg.rows import dict_row
 
 from property_filter_mcp_dev import (
     BASE_URL, DATABASE, DEV_CONTAINER, DEV_NETWORK, ROLE, TOOLS, DevError,
-    docker_field, read_private, verify_dev_target,
+    docker_field, read_private, verify_dev_target, write_private,
 )
 from app.models import PropertyFilterOption, PropertyFilterSearchRequest
 from app.property_filter_mcp_contract import FilterInput, bind_condition, dataset_revision, option_unit, public_option
@@ -41,6 +42,8 @@ from app.services.property_filter import (
 GROUP_KEY = "COALESCE(NULLIF(canonical_smiles, ''), NULLIF(smiles, ''), 'record:' || filter_record_id::text)"
 EXPECTED_RECORDS = 615159
 EXPECTED_OPTIONS = 188
+ENDPOINT_URLS = {"direct": BASE_URL + "/mcp", "gateway": "http://127.0.0.1:9001/mcp"}
+REPORT_FILES = {"direct": "acceptance.json", "gateway": "acceptance-gateway.json"}
 
 
 class VerificationError(RuntimeError):
@@ -50,6 +53,11 @@ class VerificationError(RuntimeError):
 def require(condition: Any, message: str) -> None:
     if not condition:
         raise VerificationError(message)
+
+
+def endpoint_url(endpoint: str) -> str:
+    require(endpoint in ENDPOINT_URLS, "Acceptance endpoint must be direct or gateway.")
+    return ENDPOINT_URLS[endpoint]
 
 
 def target_credentials() -> tuple[str, str, dict[str, Any]]:
@@ -176,12 +184,15 @@ def direct_histogram(connection: Any, option: PropertyFilterOption, histogram: A
             "total_count": sum(counts.values())}
 
 
-async def verify() -> dict[str, Any]:
+async def verify(endpoint: str = "direct") -> dict[str, Any]:
+    mcp_url = endpoint_url(endpoint)
     dsn, token, identity = target_credentials()
+    identity = {**identity, "endpoint": endpoint, "mcp_url": mcp_url}
     calls: list[dict[str, Any]] = []
     wire_sizes: list[int] = []
 
     async def measure_response(response: Any) -> None:
+        require(not 300 <= response.status_code < 400, "Acceptance endpoints must not redirect.")
         body = await response.aread()
         wire_sizes.append(len(body))
         require(len(body) <= 256 * 1024, "MCP response exceeded the 256 KiB contract.")
@@ -193,7 +204,7 @@ async def verify() -> dict[str, Any]:
 
         @asynccontextmanager
         async def transport():
-            async with streamable_http_client(BASE_URL + "/mcp", http_client=http) as (read, write):
+            async with streamable_http_client(mcp_url, http_client=http) as (read, write):
                 yield read, write
 
         async with Client(transport(), read_timeout_seconds=35) as client:
@@ -283,21 +294,30 @@ async def verify() -> dict[str, Any]:
                             "MCP histogram buckets differ from independent SQL counts.")
                     calls[-1]["baseline_agreement"] = "shared_service_and_independent_sql"
                     return {"status": "passed", "verified_at_utc": datetime.now(timezone.utc).isoformat(),
+                            "endpoint": endpoint,
+                            "health_check": {"url": BASE_URL + "/healthz", "scope": "direct_mcp_service", "status": "ok"},
+                            "protocol_check": {"url": mcp_url, "initialize_and_tool_discovery": "passed"},
                             "identity": identity, "read_only": True, "production_changed": False,
                             "dataset_revision": revision, "total_measurement_count": count,
                             "total_option_count": len(options), "catalog_pages": page,
                             "tool_names": sorted(TOOLS), "calls": calls}
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--endpoint", choices=tuple(ENDPOINT_URLS), default="direct",
+                        help="Use the fixed loopback MCP service or the fixed development gateway (default: direct).")
+    args = parser.parse_args(argv)
     try:
-        report = asyncio.run(verify())
+        report = asyncio.run(verify(args.endpoint))
+        write_private(REPORT_FILES[args.endpoint], json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     except (VerificationError, DevError) as error:
-        print(json.dumps({"status": "failed", "reason": str(error)}, ensure_ascii=False))
+        print(json.dumps({"status": "failed", "endpoint": args.endpoint, "reason": str(error)}, ensure_ascii=False))
         return 1
     except Exception as error:
         # Driver/transport exception reprs can contain URLs or connection details.
-        print(json.dumps({"status": "failed", "reason": "Acceptance could not complete; inspect development service health and private configuration.",
+        print(json.dumps({"status": "failed", "endpoint": args.endpoint,
+                          "reason": "Acceptance could not complete; inspect development service health and private configuration.",
                           "error_type": type(error).__name__}))
         return 1
     print(json.dumps(report, ensure_ascii=False, indent=2))

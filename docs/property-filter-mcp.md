@@ -5,7 +5,7 @@
 ## 固定开发边界
 
 - MCP Compose 项目：`nexpoly_mcp_dev`，仅包含 `property-filter-mcp` 服务。
-- 地址：`http://127.0.0.1:18110/mcp`；健康检查：`/healthz`。
+- 统一开发入口：`http://127.0.0.1:9001/mcp`；内部独立服务及本机诊断地址仍为 `http://127.0.0.1:18110/mcp`，健康检查在该直连地址的 `/healthz`。
 - 数据库：既有 `nexpoly_dev-lab-postgres-1` 容器中的 `nexpoly_dev`，通过既有 `nexpoly_dev_default` 网络访问。
 - 数据库角色：`nexpoly_mcp_dev_reader`，仅获四张筛选相关表的 `SELECT`，默认只读事务，无其他角色成员关系或管理员权限。
 - 不启动、迁移、导入、停止或重建现有 NexPoly/数据库/Worker 服务；不连接生产数据库。
@@ -69,6 +69,40 @@ python3 scripts/property_filter_mcp_dev.py down
 ```
 
 日志只记录客户端 ID、请求 ID、工具、耗时、结果数及状态；不将这些记录写入个人用户用量。启动检查失败返回固定错误，不输出可能携带私有配置值的原始异常。不要把整个 `client.env` 或数据库连接信息复制到聊天、仓库或共享日志。
+
+## 9001 统一入口、内部独立服务
+
+开发入口采用以下路由，不合并后端进程或数据库身份：
+
+```text
+9001/       → 原 NexPoly 开发页面
+9001/api/   → 原 NexPoly 开发后端
+9001/mcp    → nexpoly_mcp_dev-property-filter-mcp-1:18110/mcp
+```
+
+当前 9001 使用只读源码快照。专用发布器保留当前快照的所有页面改动，只修改 Vite 配置并增加 MCP 代理模块；先在 `127.0.0.1:29101` 和独立依赖卷验证候选，再仅重建开发前端容器。它记录当前版本作为回滚目标，检查发布期间源码及容器身份没有漂移，不调用完整开发栈的启动或迁移命令。代理源码须先提交，以便快照记录准确的代码版本。
+
+```bash
+python3 scripts/property_filter_mcp_gateway_dev.py apply
+python3 scripts/property_filter_mcp_gateway_dev.py status
+# 需要撤回代理入口时，仅恢复发布前的开发前端；MCP 服务继续运行。
+python3 scripts/property_filter_mcp_gateway_dev.py rollback
+```
+
+私有发布状态位于 `.runtime/property-filter-mcp/gateway/`；源码快照仍保存在现有本机 `ui-releases/` 目录。发布器只支持已确认的开发容器、9001 端口及源码基线，遇到不同基线时拒绝覆盖，需要先审查并合并代理改动。
+
+普通开发 Compose 模板也支持显式启用：在私有开发环境文件中设置 `NEXPOLY_DEV_MCP_PROXY_TARGET=http://nexpoly_mcp_dev-property-filter-mcp-1:18110`，并设置 `NEXPOLY_DEV_MCP_PROXY_ALLOWED_HOSTS` 为实际入口的 `host:port` 列表。默认不启用，避免其他开发项目意外连接本机 MCP；不要用普通 Compose 命令覆盖当前 9001 的源码快照。
+
+代理仅在 Vite 的 development serve 模式注册，不进入 build 或 preview。当前入口 Host 白名单为 `127.0.0.1:9001`、`localhost:9001`、`114.214.255.154:9001`；请求通过校验后才改写为内部目标 Host。Authorization、Origin、MCP 协议头、结构化响应和 SSE 内容按流转发；不注入凭据，不使用 NexPoly 登录 cookie。原服务的令牌校验、32 KiB 请求限制、只读权限和限流继续生效；代理总时限为 35 秒，服务调用时限仍为 30 秒。
+
+客户端地址改为 `http://127.0.0.1:9001/mcp` 即可，Bearer 令牌仍从本机私有 `client.env` 读取；该文件保留直连 URL，供原有开发客户端和诊断使用。浏览器直接打开 `/mcp` 而没有令牌时返回 401，这是协议入口，不是结果展示页。Origin 仍由 MCP 服务校验，默认拒绝浏览器 Origin。
+
+```bash
+PYTHONPATH=backend .runtime/property-filter-mcp/venv/bin/python \
+  scripts/verify_property_filter_mcp.py --endpoint gateway
+```
+
+验收同时验证真实客户端初始化、三个工具和开发库 SQL 基准，摘要原子写入 `acceptance-gateway.json`（0600）。`--endpoint direct` 保留直连验收并写入 `acceptance.json`。两种模式都禁止重定向和任意 URL；健康探针继续直连 `/healthz`，报告单独标明协议验收入口。现有 OpenScience 客户端仍可沿原内部路径连接，无需修改 9011。
 
 ## 工具合同
 
