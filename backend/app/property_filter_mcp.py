@@ -144,8 +144,12 @@ class MCPRuntime:
                 raise RuntimeError("MCP database role has administrative privileges")
             if connection.execute("SHOW default_transaction_read_only").fetchone()["default_transaction_read_only"] != "on":
                 raise RuntimeError("MCP database role must default to read-only transactions")
-            if connection.execute("SELECT has_database_privilege(current_user, current_database(), 'CREATE') AS allowed").fetchone()["allowed"]:
-                raise RuntimeError("MCP database role must not create schemas")
+            if connection.execute("""
+                SELECT has_database_privilege(current_user, current_database(), 'CREATE')
+                       OR datdba = (SELECT oid FROM pg_roles WHERE rolname = current_user) AS allowed
+                FROM pg_database WHERE datname = current_database()
+            """).fetchone()["allowed"]:
+                raise RuntimeError("MCP database role must not own the database or create schemas")
             memberships = connection.execute("""
                 SELECT 1 FROM pg_roles WHERE rolname <> current_user
                 AND pg_has_role(current_user, oid, 'MEMBER') LIMIT 1
@@ -155,6 +159,8 @@ class MCPRuntime:
             privileges = connection.execute("""
                 SELECT ns.nspname || '.' || cls.relname AS relation,
                        has_table_privilege(current_user, cls.oid, 'SELECT') AS can_read,
+                       has_any_column_privilege(current_user, cls.oid, 'SELECT') AS can_read_columns,
+                       cls.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) AS is_owner,
                        (has_table_privilege(current_user, cls.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
                         OR has_any_column_privilege(current_user, cls.oid, 'INSERT,UPDATE,REFERENCES')) AS can_write
                 FROM pg_class cls JOIN pg_namespace ns ON ns.oid = cls.relnamespace
@@ -162,13 +168,30 @@ class MCPRuntime:
                   AND cls.relkind IN ('r', 'p', 'v', 'm', 'f')
             """).fetchall()
             readable = {row["relation"] for row in privileges if row["can_read"]}
-            if readable != ALLOWED_TABLES or any(row["can_write"] for row in privileges):
+            if readable != ALLOWED_TABLES or any(
+                row["can_write"] or row["is_owner"]
+                or (row["can_read_columns"] and row["relation"] not in ALLOWED_TABLES)
+                for row in privileges
+            ):
                 raise RuntimeError("MCP role must have SELECT only on the four allowed tables")
             if connection.execute("""
-                SELECT 1 FROM pg_namespace WHERE nspname NOT LIKE 'pg_%'
-                AND nspname <> 'information_schema' AND has_schema_privilege(current_user, oid, 'CREATE') LIMIT 1
+                SELECT 1 FROM pg_class cls JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+                WHERE ns.nspname NOT LIKE 'pg_%' AND ns.nspname <> 'information_schema'
+                  AND cls.relkind = 'S'
+                  AND ((CASE WHEN cls.relkind = 'S'
+                             THEN has_sequence_privilege(current_user, cls.oid, 'SELECT,USAGE,UPDATE')
+                             ELSE false END)
+                       OR cls.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user))
+                LIMIT 1
             """).fetchone() is not None:
-                raise RuntimeError("MCP role must not create schema objects")
+                raise RuntimeError("MCP role must not have sequence privileges or ownership")
+            if connection.execute("""
+                SELECT 1 FROM pg_namespace WHERE nspname NOT LIKE 'pg_%'
+                AND nspname <> 'information_schema'
+                AND (has_schema_privilege(current_user, oid, 'CREATE')
+                     OR nspowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)) LIMIT 1
+            """).fetchone() is not None:
+                raise RuntimeError("MCP role must not own schemas or create schema objects")
             self._context(connection)
         self.ready = True
 
@@ -368,7 +391,12 @@ def create_app(config: MCPConfig | None = None) -> Any:
 
     @asynccontextmanager
     async def lifespan(application: Any) -> Any:
-        await asyncio.to_thread(runtime.startup_check)
+        try:
+            await asyncio.to_thread(runtime.startup_check)
+        except Exception:
+            # Uvicorn logs lifespan exceptions. Validation/connection errors can
+            # contain private file values, so never propagate their tracebacks.
+            raise RuntimeError("MCP startup checks failed; verify private credentials, database permissions and catalog readiness.") from None
         async with sdk_lifespan(application):
             yield
         runtime.ready = False

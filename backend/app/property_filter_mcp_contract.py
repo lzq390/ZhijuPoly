@@ -7,10 +7,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models import PropertyFilterCondition, PropertyFilterHistogram, PropertyFilterRecord
+from app.models import CatalogPropertyFilterCondition, PropertyFilterHistogram, PropertyFilterRecord
 
 TOOL_NAMES = frozenset({"list_filter_properties", "search_polymers", "get_property_histogram"})
 MAX_RESPONSE_BYTES = 256 * 1024
+# Keep every permitted page/page_size offset within PostgreSQL bigint range.
+MAX_PAGE = 2**31 - 1
 
 
 class MCPFailure(Exception):
@@ -24,8 +26,16 @@ class PublicModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
-class FilterInput(PublicModel):
-    option_key: str = Field(min_length=1, max_length=512)
+class ToolInput(PublicModel):
+    # Match the published JSON types rather than treating booleans or strings as
+    # numeric bounds, page numbers, or evidence limits.
+    model_config = ConfigDict(strict=True)
+
+
+class FilterInput(ToolInput):
+    # Catalog keys are opaque and may contain long imported property/unit text.
+    # The transport bounds the complete request body.
+    option_key: str = Field(min_length=1)
     min_value: float | None = None
     max_value: float | None = None
 
@@ -38,9 +48,9 @@ class FilterInput(PublicModel):
         return self
 
 
-class ListInput(PublicModel):
+class ListInput(ToolInput):
     q: str = Field(default="", max_length=200)
-    page: int = Field(default=1, ge=1)
+    page: int = Field(default=1, ge=1, le=MAX_PAGE)
     page_size: int = Field(default=25, ge=1, le=50)
     dataset_revision: str | None = Field(default=None, min_length=1, max_length=80)
 
@@ -51,18 +61,18 @@ class ListInput(PublicModel):
         return self
 
 
-class SearchInput(PublicModel):
+class SearchInput(ToolInput):
     dataset_revision: str = Field(min_length=1, max_length=80)
     filters: list[FilterInput] = Field(min_length=1, max_length=8)
     q: str = Field(default="", max_length=200)
-    page: int = Field(default=1, ge=1)
+    page: int = Field(default=1, ge=1, le=MAX_PAGE)
     page_size: int = Field(default=10, ge=1, le=25)
     measurement_limit_per_filter: int = Field(default=1, ge=1, le=3)
 
 
-class HistogramInput(PublicModel):
+class HistogramInput(ToolInput):
     dataset_revision: str = Field(min_length=1, max_length=80)
-    option_key: str = Field(min_length=1, max_length=512)
+    option_key: str = Field(min_length=1)
 
 
 class ErrorDetail(PublicModel):
@@ -186,8 +196,8 @@ def option_unit(option: Any) -> str:
     return (option.canonical_unit if option.filter_type == "standardized" else option.property_unit_clean) or ""
 
 
-def bind_condition(option: Any, condition: FilterInput) -> PropertyFilterCondition:
-    return PropertyFilterCondition(
+def bind_condition(option: Any, condition: FilterInput) -> CatalogPropertyFilterCondition:
+    return CatalogPropertyFilterCondition(
         filter_type=option.filter_type,
         property_key=option.property_key,
         property_name=option.property_name,

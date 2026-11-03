@@ -211,6 +211,8 @@ BEGIN
          (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls OR rolinherit OR NOT rolcanlogin))
      OR EXISTS (SELECT 1 FROM pg_class WHERE relowner=(SELECT oid FROM pg_roles WHERE rolname={literal(ROLE)}))
      OR EXISTS (SELECT 1 FROM pg_namespace WHERE nspowner=(SELECT oid FROM pg_roles WHERE rolname={literal(ROLE)}))
+     OR EXISTS (SELECT 1 FROM pg_database WHERE datname=current_database()
+         AND datdba=(SELECT oid FROM pg_roles WHERE rolname={literal(ROLE)}))
   THEN RAISE EXCEPTION 'role is not isolated'; END IF;
 END $mcp$;
 ALTER ROLE {ROLE} PASSWORD {literal(scram_verifier(password))};
@@ -227,10 +229,18 @@ BEGIN
     WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'
       AND c.relkind IN ('r','v','m','p','f') AND (
         has_table_privilege({literal(ROLE)},c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
-        OR (has_table_privilege({literal(ROLE)},c.oid,'SELECT') AND
+        OR has_any_column_privilege({literal(ROLE)},c.oid,'INSERT,UPDATE,REFERENCES')
+        OR ((has_table_privilege({literal(ROLE)},c.oid,'SELECT')
+             OR has_any_column_privilege({literal(ROLE)},c.oid,'SELECT')) AND
           n.nspname||'.'||c.relname NOT IN ({','.join(literal(table) for table in TABLES)})))
+  ) OR EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'
+      AND CASE WHEN c.relkind='S'
+        THEN has_sequence_privilege({literal(ROLE)},c.oid,'SELECT,USAGE,UPDATE') ELSE false END
   ) OR EXISTS (SELECT 1 FROM pg_namespace WHERE nspname NOT LIKE 'pg_%'
     AND nspname <> 'information_schema' AND has_schema_privilege({literal(ROLE)},oid,'CREATE'))
+    OR has_database_privilege({literal(ROLE)},current_database(),'CREATE')
   THEN RAISE EXCEPTION 'role privileges exceed read-only filter scope'; END IF;
 END $mcp$;
 COMMIT;

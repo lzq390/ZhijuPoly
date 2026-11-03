@@ -21,7 +21,7 @@
 | `governance.import_batches` | 判断缓存是否落后于已完成的数据导入 |
 | `governance.source_files` | `property_filter_csv` 来源状态 |
 
-查询角色还需要数据库 `CONNECT`、上述两个 schema 的 `USAGE`。它没有表写入、序列、认证、私人资产或用量表权限。只读事务之外，数据库 ACL 继续限制写入。MCP 不修复或重建 catalog：快照缺失、损坏或落后于完成导入时返回 `CATALOG_UNAVAILABLE`，由开发数据维护流程修复。现有 REST 保留实时回退、ETag 和浏览录制行为。
+查询角色还需要数据库 `CONNECT`、上述两个 schema 的 `USAGE`。它没有表写入、序列、认证、私人资产或用量表权限。启动检查同时拒绝额外表的列级读取、列级写入、序列权限及数据库/schema/关系所有权，不能通过撤销普通 ACL 后保留所有权绕过检查。只读事务之外，数据库 ACL 继续限制写入。MCP 不修复或重建 catalog：快照缺失、损坏或与最新完成导入不一致时返回 `CATALOG_UNAVAILABLE`，由开发数据维护流程修复。现有 REST 保留实时回退、ETag 和浏览录制行为。
 
 `setup` 只创建/维护带指定管理标记的专用角色。如果同名角色已存在但标记不符、拥有对象、继承角色或获得超出四表范围的权限，操作回滚。它不会撤销其他角色、PUBLIC 或现有应用的权限。
 
@@ -68,7 +68,7 @@ python3 scripts/property_filter_mcp_dev.py rotate-token
 python3 scripts/property_filter_mcp_dev.py down
 ```
 
-日志只记录客户端 ID、请求 ID、工具、耗时、结果数及状态；不将这些记录写入个人用户用量。不要把整个 `client.env` 或数据库连接信息复制到聊天、仓库或共享日志。
+日志只记录客户端 ID、请求 ID、工具、耗时、结果数及状态；不将这些记录写入个人用户用量。启动检查失败返回固定错误，不输出可能携带私有配置值的原始异常。不要把整个 `client.env` 或数据库连接信息复制到聊天、仓库或共享日志。
 
 ## 工具合同
 
@@ -80,7 +80,9 @@ python3 scripts/property_filter_mcp_dev.py down
 | `search_polymers` | `dataset_revision`；1–8 条 `filters`；可选 `q`；`page=1`、`page_size=10`（最多 25）；`measurement_limit_per_filter=1`（最多 3） | `matched_material_count` 为结构组数；每结构的 `evidence` 按条件列出完整命中测量计数、样本测量及 `truncated` |
 | `get_property_histogram` | `dataset_revision`、`option_key` | 全库该选项的 `histogram`、单位及版本；不受前次搜索条件影响 |
 
-每条筛选条件为 `{"option_key":"目录返回的原样 key","min_value":100,"max_value":200}`，上下界至少一个；拒绝未知选项、非有限数值和倒置区间。上下界包含端点。属性及单位严格绑定到目录选项，包括空单位 `""`，搜索阶段不换算单位。
+每条筛选条件为 `{"option_key":"目录返回的原样 key","min_value":100,"max_value":200}`，上下界至少一个；拒绝未知选项、非有限数值和倒置区间。上下界必须为 JSON 数字，不能使用布尔值或数字字符串；页码、页大小和证据上限必须为 JSON 整数，页码上限为 `2147483647`。上下界包含端点。属性及单位严格绑定到目录选项，包括空单位 `""`，搜索阶段不换算单位。
+
+目录字段经过验证后以内部条件模型绑定，不套用 REST 用户输入的名称/单位限长或去空格规则；REST 原有参数限制保持不变。已存在的长 `option_key` 仍可原样提交，整个请求仍受 32 KiB 限制。新目录对会产生分隔符歧义或过长的标识使用紧凑不透明 key，普通 key 和既有唯一快照 key 保持兼容。NULL 与空单位按照已有搜索语义合并；重复 key、统计矛盾或无效批次的快照会被拒绝，不在 MCP 调用中自动修复。
 
 第一次目录调用取得不透明 `dataset_revision`。目录后续翻页、搜索和直方图应持续使用同一版本；版本变化时重新获取第一页并重启查询。不要解析版本或跨版本使用 `record_ref` / `material_ref`。
 
@@ -176,7 +178,7 @@ PYTHONPATH=backend .runtime/property-filter-mcp/venv/bin/python \
 
 该脚本先核验固定开发目标及已发布的 loopback 端口，再使用专用只读凭据；比较 MCP、共享查询和直接 SQL 的目录计数、标准/raw/AND 命中、每条件证据和直方图，并输出不含凭据或完整数据的耗时/响应体积报告。
 
-## 本次验收结果（2026-11-02）
+## 首次验收结果（2026-11-02）
 
 - 隔离 MCP 单元与真实协议/数据库测试：**24 passed**，约 13 秒；一次命令自行建立并清理独立 PostgreSQL。
 - 原有筛选与浏览录制回归：**40 passed**，约 60 秒；在另一个临时测试容器及独立 PostgreSQL 运行，含 REST、ETag、`search_id` 兼容检查。仅有既有依赖弃用警告。
@@ -194,5 +196,23 @@ PYTHONPATH=backend .runtime/property-filter-mcp/venv/bin/python \
 | Tg 全库直方图 | 45,160 条测量，所有桶及上下溢出计数一致 | 251 ms | 775 B |
 
 脚本固定检查本次已确认的 615,159 / 188 快照数量；未来导入变更后需先确认新验收基准，不能把版本变化视为结果可直接比较。
+
+## 独立服务复审与修复（2026-11-03）
+
+本轮仅更新 NexPoly 独立 MCP 的实现和开发容器，未更新 OpenScience 镜像、配置或生产部署。依赖锁、三个只读工具及每客户端 60 次/分钟、2 并发保持不变。
+
+已修复：目录长字段无法搜索、目录原文被归一化、分隔符造成选项键混淆、NULL/空单位产生重复选项、损坏/错误批次快照被接受、数字字符串和布尔值被隐式转换、过大页码进入 SQL，以及启动权限漏检和私有配置异常日志泄露。内部目录绑定支持有效的空字符串标识；缺失标识仍作为损坏目录拒绝。既有唯一快照 key 和数据版本保持兼容，没有重建开发目录。
+
+最终验证：
+
+- `python3 scripts/test_property_filter_mcp.py`：**134 passed**，17.88 秒；包括真实 MCP 协议、只读角色、认证、限流、并发、超时取消、导入锁一致性及新增目录/权限回归。临时 PostgreSQL 已自动清理。
+- 启动器测试：**19 passed**。新增角色配置 SQL 的权限拒绝、事务回滚和正常配置用例包含在上述隔离 MCP 测试中。
+- `backend/tests/test_database_browser.py` 与 `backend/tests/test_browsing_recording.py`：**40 passed**，69.04 秒；使用独立临时 PostgreSQL 和测试容器，保留 REST、ETag、`search_id` 和浏览录制兼容性。只有既有依赖弃用警告；测试容器和网络已清理。
+- 已构建并启动独立 `nexpoly_mcp_dev`，健康检查及真实客户端发现三个工具通过；共享 OpenScience 的 `verify-protected` 返回 `shared_unchanged: true`。
+- 实际开发库只读验收通过，数据版本仍为上文版本，测量数 **615,159**、选项数 **188**；目录、命中结构组数、证据计数/排序/截断及直方图均与共享查询和直接 SQL 一致。
+
+本次开发库观测：目录四页各 127–288 ms、14,131–18,538 B；标准 Tg 搜索 441 ms / 7,204 B，原始属性搜索 236 ms / 4,789 B，Tg + Td AND 搜索 416 ms / 8,629 B，Tg 直方图 230 ms / 775 B。计数分别保持 18,614、18,558、12,114 个结构组及 45,160 条直方图测量。最新摘要报告位于私有 `.runtime/property-filter-mcp/acceptance.json`，不包含凭据或完整测量数据。
+
+可用的开发 MCP 地址仍为 `http://127.0.0.1:18110/mcp`，通过本机私有 `client.env` 提供 Bearer 凭据。
 
 这是一份独立开发部署合同；生产暴露、用户 OAuth、会员/计量绑定及生产 OpenScience 配置不在本期范围。

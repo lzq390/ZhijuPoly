@@ -398,7 +398,8 @@ class PropertyFilterHistogram(BaseModel):
 
 
 class PropertyFilterOption(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    # Catalog identifiers are exact database values, not free-form REST inputs.
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
 
     filter_type: PropertyFilterType
     option_key: str
@@ -452,17 +453,45 @@ class PropertyFilterCondition(BaseModel):
     min_value: float | None = None
     max_value: float | None = None
 
+    @staticmethod
+    def _identifier_is_missing(value: str | None) -> bool:
+        return not value
+
     @model_validator(mode="after")
     def validate_filter(self) -> "PropertyFilterCondition":
         if self.min_value is None and self.max_value is None:
             raise ValueError("At least one threshold bound is required")
         if self.min_value is not None and self.max_value is not None and self.min_value > self.max_value:
             raise ValueError("min_value cannot be greater than max_value")
-        if self.filter_type == "standardized" and not self.property_key:
+        if self.filter_type == "standardized" and self._identifier_is_missing(self.property_key):
             raise ValueError("property_key is required for standardized filters")
-        if self.filter_type == "raw" and not self.property_name:
+        if self.filter_type == "raw" and self._identifier_is_missing(self.property_name):
             raise ValueError("property_name is required for raw filters")
         return self
+
+
+class CatalogPropertyFilterCondition(PropertyFilterCondition):
+    """Validated internal condition bound to an exact catalog option.
+
+    The imported text columns have no REST input length limits. Keep this model
+    separate so resolving a catalog option neither rejects nor rewrites its
+    identifiers, while REST requests retain their existing input boundaries.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False,
+                              allow_inf_nan=False, strict=True)
+
+    property_key: str | None = None
+    canonical_unit: str | None = None
+    property_name: str | None = None
+    property_unit_clean: str | None = None
+
+    @staticmethod
+    def _identifier_is_missing(value: str | None) -> bool:
+        # Empty text is a valid imported identifier; None means it was absent.
+        # Dispatch through this method even when a nested request validates this
+        # instance using the REST condition's Pydantic schema.
+        return value is None
 
 
 class PropertyFilterSearchRequest(BaseModel):
