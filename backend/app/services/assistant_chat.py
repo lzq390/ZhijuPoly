@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from app.models import AssistantChatMessage, AssistantModuleContext
 from app.services.ai_client import clean_ai_provider_error, create_openai_client
 from app.services.usage_provider import close_provider_stream, provider_call
+from app.services.ai_responses import complete_responses_text, stream_responses_text
 
 
 class AssistantChatConfigError(RuntimeError):
@@ -60,6 +61,7 @@ def complete_assistant_intent(
     base_url: str,
     model: str,
     proxy_url: str = "",
+    transport: str = "chat_completions",
 ) -> dict[str, Any]:
     validate_assistant_model_access(api_key=api_key, base_url=base_url, model=model)
     client = create_openai_client(
@@ -67,6 +69,15 @@ def complete_assistant_intent(
     )
 
     try:
+        if transport == "responses":
+            return parse_assistant_json(complete_responses_text(
+                client, model=model,
+                instructions=build_assistant_intent_prompt(
+                    modules=modules, active_module=active_module, skill_catalog=skill_catalog,
+                ),
+                messages=[{"role": message.role, "content": message.content} for message in messages],
+                max_output_tokens=1600, phase="intent",
+            ))
         response = provider_call(client.chat.completions.create,
             usage_phase="intent",
             model=model,
@@ -109,6 +120,7 @@ def stream_assistant_chat(
     base_url: str,
     model: str,
     proxy_url: str = "",
+    transport: str = "chat_completions",
 ) -> Iterable[str]:
     validate_assistant_model_access(api_key=api_key, base_url=base_url, model=model)
     client = create_openai_client(
@@ -117,6 +129,13 @@ def stream_assistant_chat(
 
     stream = None
     try:
+        if transport == "responses":
+            yield from stream_responses_text(
+                client, model=model, instructions=build_assistant_system_prompt(modules, active_module),
+                messages=[{"role": message.role, "content": message.content} for message in messages],
+                max_output_tokens=2400, phase="answer",
+            )
+            return
         stream = provider_call(client.chat.completions.create,
             usage_phase="answer",
             model=model,
@@ -157,6 +176,7 @@ def stream_assistant_image_chat(
     base_url: str,
     model: str,
     proxy_url: str = "",
+    transport: str = "chat_completions",
 ) -> Iterable[str]:
     validate_assistant_model_access(api_key=api_key, base_url=base_url, model=model)
     if not messages or messages[-1].role != "user":
@@ -171,6 +191,15 @@ def stream_assistant_image_chat(
 
     stream = None
     try:
+        if transport == "responses":
+            yield from stream_responses_text(
+                client, model=model, instructions=build_assistant_image_system_prompt(modules, active_module),
+                messages=[*prior_messages, {"role": latest_message.role, "content": [
+                    {"type": "text", "text": latest_message.content},
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                ]}], max_output_tokens=2400, phase="answer",
+            )
+            return
         stream = provider_call(client.chat.completions.create,
             usage_phase="answer",
             model=model,
@@ -223,6 +252,7 @@ def stream_assistant_skill_summary(
     base_url: str,
     model: str,
     proxy_url: str = "",
+    transport: str = "chat_completions",
 ) -> Iterable[str]:
     validate_assistant_model_access(api_key=api_key, base_url=base_url, model=model)
     client = create_openai_client(
@@ -231,6 +261,17 @@ def stream_assistant_skill_summary(
 
     stream = None
     try:
+        if transport == "responses":
+            yield from stream_responses_text(
+                client, model=model,
+                instructions=build_assistant_skill_summary_prompt(
+                    modules=modules, active_module=active_module, skill_name=skill_name,
+                ), messages=[
+                    *[{"role": message.role, "content": message.content} for message in messages],
+                    {"role": "assistant", "content": "Skill execution result JSON:\n" + json.dumps(skill_result, ensure_ascii=False)},
+                ], max_output_tokens=1600, phase="answer",
+            )
+            return
         stream = provider_call(client.chat.completions.create,
             usage_phase="answer",
             model=model,
@@ -280,6 +321,7 @@ def complete_prediction_property_resolution(
     base_url: str,
     model: str,
     proxy_url: str = "",
+    transport: str = "chat_completions",
 ) -> dict[str, Any]:
     validate_assistant_model_access(api_key=api_key, base_url=base_url, model=model)
     client = create_openai_client(
@@ -287,6 +329,14 @@ def complete_prediction_property_resolution(
     )
 
     try:
+        if transport == "responses":
+            return parse_assistant_json(complete_responses_text(
+                client, model=model,
+                instructions=build_prediction_property_resolution_prompt(
+                    requested_properties=requested_properties, property_catalog=property_catalog,
+                ), messages=[{"role": "user", "content": latest_user_message}],
+                max_output_tokens=1600, phase="resolution",
+            ))
         response = provider_call(client.chat.completions.create,
             usage_phase="resolution",
             model=model,

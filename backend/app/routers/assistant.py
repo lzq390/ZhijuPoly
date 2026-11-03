@@ -28,7 +28,7 @@ from app.models import (
     TgAssistantStatusResponse,
 )
 from app.services.assistant_chat import AssistantChatConfigError, AssistantChatModelError, stream_assistant_image_chat
-from app.services.ai_client import clean_ai_provider_error
+from app.services.ai_client import clean_ai_provider_error, model_proxy_url
 from app.postgres_database import PostgresUnavailableError
 from app.services.assistant_orchestrator import stream_assistant_events
 from app.services.postgres_smiles_to_iupac import find_iupac_smiles_matches_postgres
@@ -279,7 +279,7 @@ def _stream_tg_chat_response(
                     api_key=settings.tg_assistant_api_key,
                     base_url=settings.tg_assistant_base_url,
                     model=settings.tg_assistant_model,
-                    proxy_url=settings.ai_proxy_url,
+                    proxy_url=model_proxy_url(settings),
                     image_inputs=image_inputs,
                     reasoning_effort=getattr(
                         settings,
@@ -525,7 +525,9 @@ def stream_chat(
                 model=settings.assistant_model,
                 model_enabled=settings.model_enabled,
                 model_dir=settings.model_dir_path,
-                proxy_url=settings.ai_proxy_url,
+                proxy_url=model_proxy_url(settings),
+                **({"transport": settings.assistant_transport}
+                   if getattr(settings, "assistant_transport", "chat_completions") != "chat_completions" else {}),
                 iupac_match_finder=iupac_match_finder,
             )) as stream:
                 for event in stream:
@@ -596,7 +598,9 @@ async def stream_image_chat(
                 api_key=settings.assistant_api_key,
                 base_url=settings.assistant_base_url,
                 model=settings.assistant_model,
-                proxy_url=settings.ai_proxy_url,
+                proxy_url=model_proxy_url(settings),
+                **({"transport": settings.assistant_transport}
+                   if getattr(settings, "assistant_transport", "chat_completions") != "chat_completions" else {}),
             ):
                 full_message.append(token)
                 yield _sse("token", {"content": token})

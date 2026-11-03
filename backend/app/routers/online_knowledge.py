@@ -49,7 +49,7 @@ from app.services.online_knowledge.search_service import (
     run_online_knowledge_search,
     validate_model_access,
 )
-from app.services.ai_client import clean_ai_provider_error
+from app.services.ai_client import clean_ai_provider_error, model_proxy_url
 from app.services.private_quotas import PrivateQuotaSettings
 from app.services.online_knowledge.postgres_history_repository import OnlineKnowledgeQuotaError
 
@@ -69,6 +69,8 @@ class OnlineModelAccess:
     base_url: str
     model: str
     proxy_url: str
+    model_proxy_url: str | None = None
+    transport: str = "chat_completions"
 
 
 @router.get("/default-config", response_model=OnlineKnowledgeDefaultConfigResponse)
@@ -312,6 +314,10 @@ def _run_search_from_request(
             max_papers=request_body.max_papers,
             extraction_delay_seconds=request_body.extraction_delay_seconds,
             proxy_url=model_access.proxy_url,
+            **({"model_proxy_url": model_access.model_proxy_url}
+               if model_access.model_proxy_url is not None else {}),
+            **({"transport": model_access.transport}
+               if model_access.transport != "chat_completions" else {}),
             progress_callback=progress,
             **({"execution_facts": execution_facts} if execution_facts is not None else {}),
         )
@@ -330,6 +336,9 @@ def resolve_online_model_access(
         base_url=settings.online_knowledge_base_url,
         model=settings.online_knowledge_model,
         proxy_url=settings.online_knowledge_proxy_url,
+        model_proxy_url=(model_proxy_url(settings)
+                         if model_proxy_url(settings) != settings.online_knowledge_proxy_url else None),
+        transport=getattr(settings, "online_knowledge_transport", "chat_completions"),
     )
     validate_model_access(
         api_key=access.api_key,

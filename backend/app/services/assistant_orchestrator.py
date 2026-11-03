@@ -57,6 +57,7 @@ def stream_assistant_events(
     model_enabled: bool,
     model_dir: Path,
     proxy_url: str = "",
+    transport: str = "chat_completions",
     iupac_match_finder: IupacMatchFinder | None = None,
 ) -> Iterable[AssistantStreamEvent]:
     normalized_messages, input_clarification = _normalize_iupac_structure_input(
@@ -85,6 +86,7 @@ def stream_assistant_events(
         base_url=base_url,
         model=model,
         proxy_url=proxy_url,
+        **({"transport": transport} if transport != "chat_completions" else {}),
     )
 
     decision_type = str(decision.get("type") or "chat").strip()
@@ -107,6 +109,7 @@ def stream_assistant_events(
             base_url=base_url,
             model=model,
             proxy_url=proxy_url,
+            **({"transport": transport} if transport != "chat_completions" else {}),
         )
         return
 
@@ -137,6 +140,7 @@ def stream_assistant_events(
                 base_url=base_url,
                 model=model,
                 proxy_url=proxy_url,
+                **({"transport": transport} if transport != "chat_completions" else {}),
             )
             raw_arguments = arguments.model_dump()
         call_id = uuid4().hex
@@ -219,6 +223,7 @@ def stream_assistant_events(
                 base_url=base_url,
                 model=model,
                 proxy_url=proxy_url,
+                **({"transport": transport} if transport != "chat_completions" else {}),
             )
             for token in token_stream:
                 summary_tokens.append(token)
@@ -418,6 +423,7 @@ def _stream_plain_chat(
     base_url: str,
     model: str,
     proxy_url: str = "",
+    transport: str = "chat_completions",
 ) -> Iterable[AssistantStreamEvent]:
     full_message: list[str] = []
     for token in assistant_chat.stream_assistant_chat(
@@ -428,6 +434,7 @@ def _stream_plain_chat(
         base_url=base_url,
         model=model,
         proxy_url=proxy_url,
+        **({"transport": transport} if transport != "chat_completions" else {}),
     ):
         full_message.append(token)
         yield AssistantStreamEvent("token", {"content": token})

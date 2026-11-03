@@ -164,9 +164,12 @@ class Settings:
         online_knowledge_max_papers: int | None = None,
         online_knowledge_proxy_url: str | None = None,
         ai_proxy_url: str | None = None,
+        ai_model_proxy_url: str | None = None,
+        online_knowledge_transport: str | None = None,
         assistant_api_key: str | None = None,
         assistant_base_url: str | None = None,
         assistant_model: str | None = None,
+        assistant_transport: str | None = None,
         assistant_image_max_bytes: int | None = None,
         tg_assistant_enabled: bool | None = None,
         tg_assistant_api_key: str | None = None,
@@ -1112,6 +1115,24 @@ class Settings:
         selected_proxy_name = "AI_PROXY_URL" if raw_ai_proxy_url.strip() else "ONLINE_KNOWLEDGE_PROXY_URL"
         self.ai_proxy_url = _normalize_http_proxy_url(selected_proxy_name, selected_proxy_url)
         self.online_knowledge_proxy_url = self.ai_proxy_url
+        # Preserve the legacy shared proxy unless a model-only override is
+        # explicitly supplied. An explicit empty value selects direct access.
+        raw_model_proxy = ai_model_proxy_url
+        if raw_model_proxy is None:
+            raw_model_proxy = os.getenv("AI_MODEL_PROXY_URL", env_values.get("AI_MODEL_PROXY_URL"))
+        self.ai_model_proxy_url = (
+            self.ai_proxy_url if raw_model_proxy is None
+            else _normalize_http_proxy_url("AI_MODEL_PROXY_URL", raw_model_proxy)
+        )
+        for field, supplied in (
+            ("assistant_transport", assistant_transport),
+            ("online_knowledge_transport", online_knowledge_transport),
+        ):
+            name = field.upper()
+            value = supplied if supplied is not None else os.getenv(name, env_values.get(name, "chat_completions"))
+            if value not in {"chat_completions", "responses"}:
+                raise ValueError(f"{name} must be chat_completions or responses")
+            setattr(self, field, value)
         global _legacy_proxy_warning_emitted
         if (
             not raw_ai_proxy_url.strip()
