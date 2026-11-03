@@ -469,31 +469,49 @@ def verify_promoted(record: dict) -> dict:
     return current
 
 
+def verify_restored(record: dict) -> dict:
+    current = verify_live()
+    baseline = record["baseline"]
+    require(all(current[key] == baseline[key] for key in ("promote_path", "promote_sha256", "source_hash")), "Restored frontend identity differs from its baseline.")
+    if record.get("restored_id"):
+        require(current["container_id"] == record["restored_id"], "Restored frontend was replaced by another operation.")
+    return current
+
+
 def restore(record: dict) -> None:
     baseline = record["baseline"]
     old_path = Path(baseline["promote_path"])
     backup = STATE / "operations" / record["operation"] / "rollback.compose.private.json"
     require(digest(read_private(old_path)) == digest(read_private(backup)) == baseline["promote_sha256"], "Recorded rollback configuration has changed.")
     validate_manifest(Path(baseline["release"]) / "source", baseline["manifest"], baseline["source_hash"])
-    raw = run(["docker", "inspect", LIVE], check=False)
-    if raw:
-        info = json.loads(raw)[0]
-        labels = info.get("Config", {}).get("Labels") or {}
-        require(labels.get("com.docker.compose.project") == PROJECT
-                and labels.get("com.docker.compose.service") == SERVICE, "Rollback refuses to replace a foreign frontend.")
-        if info.get("Id") == baseline["container_id"]:
-            # A failed Compose recreate may leave our old container stopped.
-            # Its immutable ID/config still identifies the rollback baseline;
-            # requiring Running here would prevent the controller repairing it.
-            require(labels.get("com.docker.compose.project.config_files") == baseline["promote_path"]
-                    and labels.get(OVERLAY + "sha256") == baseline["source_hash"], "Stopped rollback baseline identity differs.")
-        else:
-            require(labels.get("com.docker.compose.project.config_files") == record.get("promote_path")
-                    and labels.get(OVERLAY + "sha256") == record.get("source_hash")
-                    and (not record.get("promoted_id") or info.get("Id") == record["promoted_id"]), "Rollback refuses to replace a foreign frontend.")
-    compose(old_path, PROJECT, "up", "-d", "--no-deps", "--force-recreate", SERVICE)
-    current = verify_live()
-    require(all(current[key] == baseline[key] for key in ("promote_path", "promote_sha256", "source_hash")), "Restored frontend identity differs from its baseline.")
+    if record.get("restored_id"):
+        # Retry only the checks on the exact container this operation restored.
+        # A later publication, even of identical baseline source, is not ours.
+        current = verify_restored(record)
+    else:
+        raw = run(["docker", "inspect", LIVE], check=False)
+        if raw:
+            info = json.loads(raw)[0]
+            labels = info.get("Config", {}).get("Labels") or {}
+            require(labels.get("com.docker.compose.project") == PROJECT
+                    and labels.get("com.docker.compose.service") == SERVICE, "Rollback refuses to replace a foreign frontend.")
+            if info.get("Id") == baseline["container_id"]:
+                # A failed Compose recreate may leave our old container stopped.
+                # Its immutable ID/config still identifies the rollback baseline;
+                # requiring Running here would prevent the controller repairing it.
+                require(labels.get("com.docker.compose.project.config_files") == baseline["promote_path"]
+                        and labels.get(OVERLAY + "sha256") == baseline["source_hash"], "Stopped rollback baseline identity differs.")
+            else:
+                require(labels.get("com.docker.compose.project.config_files") == record.get("promote_path")
+                        and labels.get(OVERLAY + "sha256") == record.get("source_hash")
+                        and (not record.get("promoted_id") or info.get("Id") == record["promoted_id"]), "Rollback refuses to replace a foreign frontend.")
+        compose(old_path, PROJECT, "up", "-d", "--no-deps", "--force-recreate", SERVICE)
+        current = verify_restored(record)
+        # Persist ownership before fallible HTTP/protected-container checks.
+        # A crash before this save still requires inspection; do not infer that
+        # an arbitrary new container using the baseline belongs to this rollback.
+        record.update(phase="restoring", restored_id=current["container_id"])
+        save_record(record)
     for attempt in range(60):
         try:
             require(probe_baseline(9001) == record["http_baseline"], "Restored frontend endpoint checks differ.")
@@ -503,7 +521,7 @@ def restore(record: dict) -> None:
                 raise GatewayError("Restored frontend did not pass its endpoint checks.") from None
             time.sleep(0.5)
     check_protected(record)
-    record.update(phase="rolled_back", restored_id=current["container_id"])
+    record["phase"] = "rolled_back"
     save_record(record)
 
 
@@ -543,6 +561,7 @@ def apply() -> dict:
         private_directory(directory)
         write_private(directory / "rollback.compose.private.json", read_private(Path(baseline["promote_path"])))
         save_record(record)
+        live_mutation_started = False
         try:
             release, document = prepare_source(baseline, directory)
             path = release / "promote.compose.private.json"
@@ -560,6 +579,7 @@ def apply() -> dict:
             validate_manifest(release / "source", manifest, record["source_hash"])
             record["phase"] = "promoting"
             save_record(record)
+            live_mutation_started = True
             compose(path, PROJECT, "up", "-d", "--no-deps", "--force-recreate", SERVICE)
             current = verify_promoted(record)
             record["promoted_id"] = current["container_id"]
@@ -569,7 +589,7 @@ def apply() -> dict:
             record["phase"] = "promoted"
             save_record(record)
         except Exception:
-            if record["phase"] == "promoting":
+            if live_mutation_started:
                 try:
                     restore(record)
                 except Exception:
@@ -595,9 +615,7 @@ def rollback() -> dict:
         # the identities present at the start of this rollback transaction.
         record["protected_ids"] = sorted(container_ids() - {live_id} - set(owned_candidate_ids(record)))
         if record["phase"] == "rolled_back":
-            current = verify_live()
-            require(current["promote_path"] == record["baseline"]["promote_path"]
-                    and current["source_hash"] == record["baseline"]["source_hash"], "Rollback baseline was replaced by another operation.")
+            verify_restored(record)
             cleanup(record)
             return {**status(), "action": "rollback", "already_rolled_back": True}
         if record["phase"] in {"preparing", "failed_before_promotion"}:

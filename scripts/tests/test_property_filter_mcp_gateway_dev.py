@@ -532,6 +532,75 @@ class GatewayDevelopmentTests(unittest.TestCase):
         compose.assert_called_once_with(Path(baseline["promote_path"]), gateway.PROJECT, "up", "-d", "--no-deps", "--force-recreate", gateway.SERVICE)
         self.assertEqual(record["phase"], "rolled_back")
 
+    def exercise_restore_validation_retry(self, failure: str) -> None:
+        baseline, restored_info = self.baseline()
+        record = self.operation(baseline)
+        record["phase"] = "promoting"
+        self.rollback_backup(record)
+        promoted = {"Id": record["promoted_id"], "Config": {"Labels": {
+            "com.docker.compose.project": gateway.PROJECT, "com.docker.compose.service": gateway.SERVICE,
+            "com.docker.compose.project.config_files": record["promote_path"], gateway.OVERLAY + "sha256": record["source_hash"]}}}
+        restored_info["Id"] = "restored-container-id"
+        with mock.patch.object(gateway, "run", return_value=json.dumps([promoted])) as run, \
+                mock.patch.object(gateway, "compose") as compose, \
+                mock.patch.object(gateway, "inspect_container", return_value=restored_info), \
+                mock.patch.object(gateway, "probe_baseline", return_value=record["http_baseline"]) as probe, \
+                mock.patch.object(gateway, "check_protected") as protected, mock.patch.object(gateway.time, "sleep"), \
+                mock.patch.object(gateway, "container_ids", return_value={"restored-container-id", "backend-id", "database-id"}), \
+                mock.patch.object(gateway, "owned_candidate_ids", return_value=[]), mock.patch.object(gateway, "cleanup"):
+            failing = probe if failure == "probe" else protected
+            failing.side_effect = gateway.GatewayError("temporarily unavailable")
+            with self.assertRaises(gateway.GatewayError):
+                gateway.restore(record)
+            saved = gateway.saved_record()
+            self.assertEqual(saved["phase"], "restoring")
+            self.assertEqual(saved["restored_id"], restored_info["Id"])
+            failing.side_effect = None
+            run.return_value = json.dumps([restored_info])
+            result = gateway.rollback()
+        self.assertEqual(result["phase"], "rolled_back")
+        self.assertEqual(gateway.saved_record()["restored_id"], restored_info["Id"])
+        compose.assert_called_once_with(Path(baseline["promote_path"]), gateway.PROJECT, "up", "-d", "--no-deps", "--force-recreate", gateway.SERVICE)
+
+    def test_restore_probe_failure_retries_checks_on_recorded_container_without_recreation(self) -> None:
+        self.exercise_restore_validation_retry("probe")
+
+    def test_restore_protected_check_failure_retries_checks_on_recorded_container_without_recreation(self) -> None:
+        self.exercise_restore_validation_retry("protected")
+
+    def test_restore_retry_refuses_different_container_or_baseline_identity(self) -> None:
+        baseline, info = self.baseline()
+        record = self.operation(baseline)
+        record.update(phase="restoring", restored_id="restored-container-id")
+        info["Id"] = record["restored_id"]
+        self.rollback_backup(record)
+        for mutation in ("different-id", "environment", "source-hash"):
+            changed = copy.deepcopy(info)
+            if mutation == "different-id":
+                changed["Id"] = "another-publication-id"
+            elif mutation == "environment":
+                changed["Config"]["Env"].append("DEV_PROXY_TARGET=http://other-backend")
+            else:
+                changed["Config"]["Labels"][gateway.OVERLAY + "sha256"] = "f" * 64
+            with self.subTest(mutation=mutation), mock.patch.object(gateway, "inspect_container", return_value=changed), \
+                    mock.patch.object(gateway, "run") as run, mock.patch.object(gateway, "compose") as compose, \
+                    mock.patch.object(gateway, "probe_baseline") as probe, self.assertRaises(gateway.GatewayError):
+                gateway.restore(record)
+            run.assert_not_called()
+            compose.assert_not_called()
+            probe.assert_not_called()
+
+    def test_restore_does_not_adopt_unrecorded_recreated_baseline(self) -> None:
+        baseline, info = self.baseline()
+        record = self.operation(baseline)
+        record["phase"] = "rollback_required"
+        info["Id"] = "unrecorded-container-id"
+        self.rollback_backup(record)
+        with mock.patch.object(gateway, "run", return_value=json.dumps([info])), \
+                mock.patch.object(gateway, "compose") as compose, self.assertRaises(gateway.GatewayError):
+            gateway.restore(record)
+        compose.assert_not_called()
+
     def test_reapplying_promoted_operation_is_idempotent_and_does_not_prepare(self) -> None:
         baseline, _ = self.baseline()
         record = self.operation(baseline)
@@ -562,6 +631,48 @@ class GatewayDevelopmentTests(unittest.TestCase):
         compose.assert_not_called()
         restore.assert_not_called()
         self.assertEqual(gateway.saved_record()["phase"], "failed_before_promotion")
+
+    def test_promoted_state_write_failure_restores_instead_of_claiming_no_publication(self) -> None:
+        baseline, baseline_info = self.baseline()
+        mcp = {"State": {"Running": True}, "NetworkSettings": {"Networks": {gateway.NETWORK: {}}},
+               "Config": {"Labels": {"com.docker.compose.project": gateway.mcp_dev.PROJECT,
+                                      "com.docker.compose.service": gateway.mcp_dev.SERVICE,
+                                      "com.docker.compose.project.working_dir": str(gateway.ROOT)}}}
+        current_info = copy.deepcopy(baseline_info)
+        persistence = gateway.save_record
+        phases = []
+
+        def save(record):
+            phases.append(record["phase"])
+            if record["phase"] == "promoted":
+                raise OSError("one failed state write after successful live checks")
+            persistence(record)
+
+        def inspect(name):
+            return mcp if name == "nexpoly_mcp_dev-property-filter-mcp-1" else current_info
+
+        def compose(*args):
+            current_info["Id"] = "restored-container-id" if current_info["Id"] == "promoted-container-id" else "promoted-container-id"
+
+        with mock.patch.object(gateway.mcp_dev, "verify_project_ownership"), \
+                mock.patch.object(gateway, "inspect_container", side_effect=inspect), \
+                mock.patch.object(gateway, "run", side_effect=lambda *a, **kw: json.dumps([current_info])), \
+                mock.patch.object(gateway, "protected_ids", return_value=[]), \
+                mock.patch.object(gateway, "probe_baseline", return_value={}), \
+                mock.patch.object(gateway, "prepare_source", return_value=(Path(baseline["release"]), baseline["document"])), \
+                mock.patch.object(gateway, "start_candidate"), mock.patch.object(gateway, "smoke", return_value={}), \
+                mock.patch.object(gateway, "cleanup"), mock.patch.object(gateway, "check_protected"), \
+                mock.patch.object(gateway, "compose", side_effect=compose) as compose_calls, \
+                mock.patch.object(gateway, "save_record", side_effect=save), self.assertRaises(gateway.GatewayError) as raised:
+            gateway.apply()
+        self.assertIn("the original frontend was restored", str(raised.exception))
+        self.assertEqual(compose_calls.call_count, 2)
+        self.assertEqual(phases[-3:], ["promoted", "restoring", "rolled_back"])
+        self.assertNotIn("failed_before_promotion", phases)
+        saved = gateway.saved_record()
+        self.assertEqual(saved["phase"], "rolled_back")
+        self.assertEqual(saved["promoted_id"], "promoted-container-id")
+        self.assertEqual(saved["restored_id"], "restored-container-id")
 
     def test_manual_rollback_snapshots_current_other_containers_instead_of_historical_ids(self) -> None:
         baseline, _ = self.baseline()
