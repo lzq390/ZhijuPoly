@@ -69,6 +69,8 @@ def stream_responses_text(client, *, model, instructions, messages, max_output_t
     try:
         for event in stream:
             kind = _value(event, "type", "")
+            if completed:
+                raise AIResponseError("AI provider emitted an event after completion")
             if kind == "response.output_text.delta":
                 delta = _value(event, "delta", "")
                 if isinstance(delta, str) and delta:
@@ -84,16 +86,24 @@ def stream_responses_text(client, *, model, instructions, messages, max_output_t
                 raise AIResponseError("AI provider response failed or was incomplete")
             elif kind == "response.completed":
                 response = _value(event, "response")
-                if _value(response, "status") not in {None, "completed"}:
+                if _value(response, "status") != "completed":
                     raise AIResponseError("AI provider response did not complete")
                 text = _text(response)
-                if text and parts and text != "".join(parts):
+                if not text.strip():
+                    raise AIResponseError("AI provider terminal response was empty")
+                if parts and text != "".join(parts):
                     raise AIResponseError("AI provider terminal text differs from stream")
+                completed = True
                 if not parts and text:
                     parts.append(text)
                     yield text
-                completed = True
         if not completed or not "".join(parts).strip():
             raise AIResponseError("AI provider stream ended without a complete text response")
+    except AIResponseError as error:
+        # The raw terminal event is observed before this content contract can
+        # validate it. A rejected/malformed stream must not retain that earlier
+        # optimistic provider-success outcome when it is closed.
+        close_provider_stream(stream, error=error)
+        raise
     finally:
         close_provider_stream(stream)

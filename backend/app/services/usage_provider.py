@@ -205,8 +205,10 @@ Existing request options are preserved; absent provider counters remain null.
         raise
 
 
-def close_provider_stream(stream: Any) -> None:
+def close_provider_stream(stream: Any, *, error: BaseException | None = None) -> None:
     if isinstance(stream, _ProviderStream):
+        if error is not None:
+            stream._attempt.terminal(_failure_status(error))
         stream.close()
 
 

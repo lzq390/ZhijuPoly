@@ -131,6 +131,9 @@ def test_partial_text_never_succeeds_without_real_completed_event(spans, termina
 
 @pytest.mark.parametrize("values", [
     [NS(type="response.completed", response=response(""))],
+    [NS(type="response.output_text.delta", delta="OK"), NS(type="response.completed")],
+    [NS(type="response.output_text.delta", delta="OK"), NS(type="response.completed", response=response("OK", status=None))],
+    [NS(type="response.output_text.delta", delta="OK"), NS(type="response.completed", response=response(""))],
     [NS(type="response.output_text.delta", delta="OK"), NS(type="response.completed", response=response("different"))],
     [NS(type="response.completed", response=response("OK", status="failed"))],
 ])
@@ -138,6 +141,34 @@ def test_empty_or_inconsistent_terminal_response_is_rejected(spans, values):
     client, _, _ = client_with([values])
     with pytest.raises(transport.AIResponseError):
         list(transport.stream_responses_text(client, model="m", instructions="i", messages=[], max_output_tokens=10, phase="answer"))
+    assert len(spans) == 1 and spans[0]["status"] == "failed"
+
+
+@pytest.mark.parametrize("late", [
+    NS(type="response.output_text.delta", delta="must not be emitted"),
+    NS(type="response.output_text.done", text="must not be emitted"),
+    NS(type="response.completed", response=response("second terminal")),
+    NS(type="response.refusal.done"),
+])
+def test_post_terminal_event_is_rejected_without_emitting_more_text(spans, late):
+    closed = []
+
+    def raw():
+        try:
+            yield from [*events("OK"), late]
+        finally:
+            closed.append(True)
+
+    client = NS(responses=NS(create=lambda **_: raw()))
+    stream = transport.stream_responses_text(client, model="m", instructions="i", messages=[],
+                                               max_output_tokens=10, phase="answer")
+    output = []
+    with pytest.raises(transport.AIResponseError, match="after completion"):
+        for text in stream:
+            output.append(text)
+    assert output == ["OK"] and closed == [True]
+    assert len(spans) == 1 and spans[0]["status"] == "failed"
+    assert spans[0]["metrics"]["provider_total_tokens"] == 14
 
 
 def test_sdk_output_only_and_output_text_done_fallback_do_not_duplicate(spans):
