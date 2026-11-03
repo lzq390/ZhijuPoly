@@ -44,12 +44,8 @@ def _text(response: Any) -> str:
     return text
 
 
-def complete_responses_text(client, *, model, instructions, messages, max_output_tokens, phase):
-    response = provider_call(
-        client.responses.create, usage_api="responses", usage_phase=phase,
-        model=model, instructions=instructions, input=responses_input(messages),
-        max_output_tokens=max_output_tokens, reasoning={"effort": "medium"}, store=False,
-    )
+def completed_responses_text(response: Any) -> str:
+    """Validate the same terminal text contract for SDK and raw HTTP callers."""
     if _value(response, "status") != "completed":
         raise AIResponseError("AI provider response did not complete")
     text = _text(response)
@@ -58,47 +54,66 @@ def complete_responses_text(client, *, model, instructions, messages, max_output
     return text
 
 
+class ResponsesTextStream:
+    """Content-only state machine; callers own I/O, limits and accounting."""
+
+    def __init__(self):
+        self.parts: list[str] = []
+        self.completed = False
+
+    def feed(self, event: Any) -> str:
+        kind = _value(event, "type", "")
+        if self.completed:
+            raise AIResponseError("AI provider emitted an event after completion")
+        text = ""
+        if kind == "response.output_text.delta":
+            text = _value(event, "delta", "")
+        elif kind == "response.output_text.done" and not self.parts:
+            text = _value(event, "text", "")
+        elif kind in {"response.failed", "response.incomplete", "error",
+                      "response.refusal.delta", "response.refusal.done"}:
+            raise AIResponseError("AI provider response failed or was incomplete")
+        elif kind == "response.completed":
+            text = completed_responses_text(_value(event, "response"))
+            if self.parts and text != "".join(self.parts):
+                raise AIResponseError("AI provider terminal text differs from stream")
+            self.completed = True
+            if self.parts:
+                text = ""
+        if isinstance(text, str) and text:
+            self.parts.append(text)
+            return text
+        return ""
+
+    def finish(self) -> str:
+        text = "".join(self.parts)
+        if not self.completed or not text.strip():
+            raise AIResponseError("AI provider stream ended without a complete text response")
+        return text
+
+
+def complete_responses_text(client, *, model, instructions, messages, max_output_tokens, phase):
+    response = provider_call(
+        client.responses.create, usage_api="responses", usage_phase=phase,
+        model=model, instructions=instructions, input=responses_input(messages),
+        max_output_tokens=max_output_tokens, reasoning={"effort": "medium"}, store=False,
+    )
+    return completed_responses_text(response)
+
+
 def stream_responses_text(client, *, model, instructions, messages, max_output_tokens, phase):
     stream = provider_call(
         client.responses.create, usage_api="responses", usage_phase=phase,
         model=model, instructions=instructions, input=responses_input(messages),
         max_output_tokens=max_output_tokens, reasoning={"effort": "medium"}, store=False, stream=True,
     )
-    parts = []
-    completed = False
+    text_stream = ResponsesTextStream()
     try:
         for event in stream:
-            kind = _value(event, "type", "")
-            if completed:
-                raise AIResponseError("AI provider emitted an event after completion")
-            if kind == "response.output_text.delta":
-                delta = _value(event, "delta", "")
-                if isinstance(delta, str) and delta:
-                    parts.append(delta)
-                    yield delta
-            elif kind == "response.output_text.done" and not parts:
-                text = _value(event, "text", "")
-                if isinstance(text, str) and text:
-                    parts.append(text)
-                    yield text
-            elif kind in {"response.failed", "response.incomplete", "error",
-                          "response.refusal.delta", "response.refusal.done"}:
-                raise AIResponseError("AI provider response failed or was incomplete")
-            elif kind == "response.completed":
-                response = _value(event, "response")
-                if _value(response, "status") != "completed":
-                    raise AIResponseError("AI provider response did not complete")
-                text = _text(response)
-                if not text.strip():
-                    raise AIResponseError("AI provider terminal response was empty")
-                if parts and text != "".join(parts):
-                    raise AIResponseError("AI provider terminal text differs from stream")
-                completed = True
-                if not parts and text:
-                    parts.append(text)
-                    yield text
-        if not completed or not "".join(parts).strip():
-            raise AIResponseError("AI provider stream ended without a complete text response")
+            text = text_stream.feed(event)
+            if text:
+                yield text
+        text_stream.finish()
     except AIResponseError as error:
         # The raw terminal event is observed before this content contract can
         # validate it. A rejected/malformed stream must not retain that earlier
