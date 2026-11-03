@@ -26,12 +26,17 @@ function options(argv) {
     agent: "property-filter",
     playwrightPackage: undefined,
     checkConfig: false,
+    naturalLanguage: false,
   }
   const names = { "--base-url": "baseUrl", "--output-dir": "outputDir", "--timeout-ms": "timeoutMs",
     "--agent": "agent", "--playwright-package": "playwrightPackage" }
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--check-config") {
       result.checkConfig = true
+      continue
+    }
+    if (argv[index] === "--natural-language") {
+      result.naturalLanguage = true
       continue
     }
     const name = names[argv[index]]
@@ -69,6 +74,13 @@ function playwright(packagePath) {
 
 function digest(value) {
   return createHash("sha256").update(value).digest("hex")
+}
+
+function assertBusinessPrompt(prompt) {
+  const forbidden = [...TOOL_NAMES, "MCP", "option_key", "dataset_revision", "data_revision",
+    "min_value", "max_value", "page_size", "measurement_limit_per_filter"]
+  assert.ok(forbidden.every(name => !prompt.toLowerCase().includes(name.toLowerCase())),
+    "The natural-language prompt contains an internal interface name")
 }
 
 function logicalTool(name) {
@@ -137,8 +149,15 @@ async function main(config) {
   await mkdir(config.outputDir, { recursive: true, mode: 0o700 })
   await chmod(config.outputDir, 0o700)
   const reportPath = path.join(config.outputDir, "report.json")
-  const marker = "nexpoly-mcp-ui-" + randomBytes(6).toString("hex")
-  const prompt = [
+  const marker = (config.naturalLanguage ? "polymer-query-ui-" : "nexpoly-mcp-ui-") + randomBytes(6).toString("hex")
+  const prompt = config.naturalLanguage ? [
+    "请查询玻璃化转变温度在 100 到 200 摄氏度之间（包含两端边界）的聚合物。",
+    "最多展示 2 个不同结构，每个结构只展示 1 条测量证据及其来源，同时给出玻璃化转变温度在整个数据库中的分布。",
+    "请列出实际命中的结构总数、材料结构与测量数值、每个结构匹配的测量总数，并说明证据是否仅展示了一部分。",
+    "请说明多项性能条件一起检索时，是否保证来自同一实验条件。",
+    "请基于实际查询结果作答，最终只返回一个 JSON 对象（可以放在 JSON 代码块中），包含这些字段：筛选条件、命中结构总数、材料、分布、数据版本、说明、验收标记。材料应为数组，数据版本应为完整标识。",
+    `验收标记的值为：${marker}。`,
+  ].join("\n") : [
     `这是独立开发环境的真实只读工具验收，标记 ${marker}。请实际调用已连接的 NexPoly 数据库筛选 MCP，禁止编造工具结果。`,
     "请依次完成三步：",
     "1. 调用 list_filter_properties，选择目录中一个有数值范围的属性（优先 Tg），记住真实 option_key、单位和 dataset_revision。",
@@ -147,7 +166,9 @@ async function main(config) {
     "仅允许这三个 MCP 工具；不要使用 shell、文件、网页或其他工具。请用中文展示实际属性/单位、匹配材料数、最多两个结果、测量来源/截断情况和直方图样本数，并原样完整展示三个结果共用的 dataset_revision；说明跨性能 AND 不保证同一实验条件。",
     `最后单独一行写验收标记：${marker}。`,
   ].join("\n")
+  if (config.naturalLanguage) assertBusinessPrompt(prompt)
   const report = { ok: false, baseUrl: config.baseUrl, startedAt: new Date().toISOString(), marker,
+    mode: config.naturalLanguage ? "natural_language" : "explicit_tools",
     evidence: { promptSubmittedThroughUi: false, allThreeToolsCompleted: false, responseRendered: false, refreshPreservedResponse: false },
     toolCalls: [], browserErrors: [], blockedOrigins: [], promptRequests: 0 }
   let browser
@@ -205,6 +226,15 @@ async function main(config) {
     report.sessionId = decodeURIComponent(matchedPath[2])
     report.agent = promptRequest.body.agent
     report.model = promptRequest.body.model
+    if (config.naturalLanguage) {
+      const submittedPrompt = (promptRequest.body.parts ?? []).filter(part => part.type === "text")
+        .map(part => part.text).join("\n")
+      report.userPrompt = submittedPrompt
+      assert.equal(submittedPrompt.replace(/\s+/gu, ""), prompt.replace(/\s+/gu, ""),
+        "The submitted user prompt differs from the business request")
+      assertBusinessPrompt(submittedPrompt)
+      report.promptHasInternalInterfaceNames = false
+    }
     const messageScope = { marker, userMessageId: promptRequest.body.messageID }
     const messagesUrl = new URL(sentUrl)
     messagesUrl.pathname = matchedPath[1] + matchedPath[2] + "/message"
@@ -270,9 +300,17 @@ async function main(config) {
     assert.equal(actualOutputs.get_property_histogram.option_key, condition.option_key, "Histogram returned a different option")
     const selectedOption = actualOutputs.list_filter_properties.options.find(option => option.option_key === condition.option_key)
     assert.ok(selectedOption, "The searched option was not returned by this prompt's catalog call")
-    assert.ok(Number.isFinite(selectedOption.min_value), "The selected catalog option lacks a numeric lower bound")
-    assert.equal(condition.min_value, selectedOption.min_value, "Search did not use the catalog's exact lower bound")
-    assert.ok(condition.max_value == null, "Search added an unrequested upper bound")
+    assert.equal(actualOutputs.get_property_histogram.unit, selectedOption.unit, "Histogram and catalog units differ")
+    if (config.naturalLanguage) {
+      assert.equal(selectedOption.property_key, "tg", "The business query did not select glass transition temperature")
+      assert.equal(selectedOption.unit, "C", "The business query did not select Celsius")
+      assert.equal(condition.min_value, 100, "Search did not use the requested 100 degree lower bound")
+      assert.equal(condition.max_value, 200, "Search did not use the requested 200 degree upper bound")
+    } else {
+      assert.ok(Number.isFinite(selectedOption.min_value), "The selected catalog option lacks a numeric lower bound")
+      assert.equal(condition.min_value, selectedOption.min_value, "Search did not use the catalog's exact lower bound")
+      assert.ok(condition.max_value == null, "Search added an unrequested upper bound")
+    }
     assert.equal(searchInput.q ?? "", "", "Search added an unrequested keyword constraint")
     assert.equal(searchInput.page ?? 1, 1, "Search did not request the first page")
     assert.equal(searchInput.page_size ?? 10, 2, "Search did not request two materials")
@@ -281,10 +319,25 @@ async function main(config) {
     assert.equal(actualOutputs.search_polymers.page_size, 2, "Search returned a different page size")
     report.verifiedData = { datasetRevision: revision,
       optionKey: condition.option_key, label: selectedOption.label, unit: selectedOption.unit,
-      minValue: condition.min_value, page: 1, pageSize: 2,
+      minValue: condition.min_value, maxValue: condition.max_value, page: 1, pageSize: 2,
       matchedMaterialCount: actualOutputs.search_polymers.matched_material_count,
       returnedMaterialCount: actualOutputs.search_polymers.results.length,
       histogramCount: actualOutputs.get_property_histogram.histogram.total_count }
+    if (config.naturalLanguage) {
+      const finalText = inspected.finalText.trim()
+      const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(finalText)
+      const parsed = JSON.parse(fenced ? fenced[1] : finalText)
+      assert.ok(parsed && typeof parsed === "object" && !Array.isArray(parsed), "The final answer is not a JSON object")
+      const required = ["筛选条件", "命中结构总数", "材料", "分布", "数据版本", "说明", "验收标记"]
+      assert.ok(required.every(key => Object.hasOwn(parsed, key)), "The JSON answer is missing requested business fields")
+      assert.equal(parsed["数据版本"], revision, "The JSON answer contains a different dataset revision")
+      assert.equal(parsed["命中结构总数"], report.verifiedData.matchedMaterialCount, "The JSON answer contains an incorrect match count")
+      assert.ok(Array.isArray(parsed["材料"]) && parsed["材料"].length <= 2, "The JSON answer must contain an array of at most two materials")
+      assert.equal(parsed["验收标记"], marker, "The JSON answer contains a different acceptance marker")
+      report.jsonValidation = { valid: true, source: "model_generated_text", fenced: Boolean(fenced),
+        fields: Object.keys(parsed), datasetRevision: parsed["数据版本"],
+        matchedMaterialCount: parsed["命中结构总数"], returnedMaterialCount: parsed["材料"].length }
+    }
     await page.waitForFunction(({ selector, marker, revision }) => [...document.querySelectorAll(selector)].some(
       element => element.textContent?.includes(marker) && element.textContent?.includes(revision)),
       { selector: RESPONSE, marker, revision }, { timeout: 20000 })
@@ -331,7 +384,8 @@ async function main(config) {
 
 try {
   const config = options(process.argv.slice(2))
-  if (config.checkConfig) console.log(JSON.stringify({ ok: true, baseUrl: config.baseUrl, agent: config.agent }))
+  if (config.checkConfig) console.log(JSON.stringify({ ok: true, baseUrl: config.baseUrl, agent: config.agent,
+    mode: config.naturalLanguage ? "natural_language" : "explicit_tools" }))
   else await main(config)
 } catch (error) {
   console.error(JSON.stringify({ ok: false, error: error.message }))

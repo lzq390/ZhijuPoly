@@ -64,6 +64,10 @@ Authorization 配置为 `Bearer {file:/run/openscience/mcp-token}`。启动器�
 
 共享后端和 UI 镜像未修改。补丁适配的后端基底 image ID 为 `sha256:41a2b6929bc74a1bf3c0bac54df09f8e5f835954b3ba58dfba81f703b3ffe17a`；升级 OpenScience 后必须重新评估该补丁，不能跳过校验。
 
+用户可以用自然语言提出属性范围、结果数量和分布需求，由模型依据工具描述及 Agent 指引选择调用。验收提示中写出工具名用于逐项验证接口，正常查询不要求用户掌握工具名或内部参数。
+
+结构化结果有两层：筛选 MCP 本身返回经过数据模型校验的 `structuredContent` JSON 对象及 `outputSchema`，包含材料、测量证据、单位、计数和版本；本期 OpenScience 适配层把该对象序列化后保存在工具输出文本中，供模型读取。聊天最终回复默认是模型生成的文本，也可要求输出 JSON；它与 MCP 原始结果的契约不同。当前没有材料表格、来源卡片或直方图的专用渲染组件。外部程序可以直接消费 MCP 的结构化结果。
+
 ## 启动、停止和令牌轮换
 
 在本工作树执行：
@@ -123,6 +127,14 @@ node --test ops/openscience-mcp-dev/patch.test.mjs ops/openscience-mcp-dev/dev-b
 /home/devuser/.nvm/versions/node/v22.23.2/bin/node scripts/verify_openscience_mcp_browser.mjs
 ```
 
+自然语言模式不在用户提示中出现工具名或内部参数，验证模型自主查询 Tg 100–200°C 的材料并输出业务 JSON：
+
+```bash
+/home/devuser/.nvm/versions/node/v22.23.2/bin/node scripts/verify_openscience_mcp_browser.mjs --natural-language
+```
+
+该模式检查实际提交文本没有内部接口名、搜索边界与单位准确、三工具版本一致；并解析最终 JSON，核对业务字段、命中数、数据版本和本轮标记。报告明确将该 JSON 标为 `model_generated_text`，以区别 MCP 原始结构化结果。编辑器可能合并换行，因此业务提示按忽略空白后的文本比较，仍校验实际发送内容。
+
 探针只允许 `127.0.0.1:19111` / `localhost:19111`，新建浏览器上下文并从真实输入框发送提示，不通过 API 代发、不替换模型或工具输出。API 只读核对该 UI 创建的会话。三个工具必须真实完成、结构化结果 `ok: true` 且版本一致，最终回答必须在页面显示，刷新后仍存在。报告和截图保存到 `.runtime/openscience-mcp-dev/browser-evidence/`，不提交完整对话结果到仓库。
 
 探针以本轮唯一标记定位用户消息，只统计对应 `parentID` 的 assistant/tool parts；精确限定三个完整工具名，避免把历史对话或其他 MCP 的同名工具当成本轮成功。它还核验属性来自本轮目录、搜索与直方图使用同一属性及版本、范围和分页符合提示要求。
@@ -144,5 +156,9 @@ node --test ops/openscience-mcp-dev/patch.test.mjs ops/openscience-mcp-dev/dev-b
 ```
 
 最终中文回答展示了来源、证据截断及跨测量 AND 语义；页面刷新后回答哈希一致。会话为 `http://127.0.0.1:19111/chat/ses_e60fa0a7bffeWAkIwUeY6JjKyR`。私有证据位于 `.runtime/openscience-mcp-dev/browser-evidence/2026-11-03T01-28-48-388Z/`，含 `report.json`、`conversation.png`、`response.png`；合并审计与健康检查的验收记录为 `.runtime/openscience-mcp-dev/real-dialog-acceptance.json`。此前模型 `401` 的失败记录仍保留在原私有证据目录中。
+
+同日的自然语言实测会话为 `http://127.0.0.1:19111/chat/ses_e60eb9693ffei3Y8AvJIX0I20T`，用户提示只提出玻璃化转变温度 100–200°C、两个结构、每结构一条测量证据及来源、全库分布和 JSON 输出等业务要求。模型自主完成目录解析、搜索和直方图查询：命中 5,026 个结构组，返回 2 组，全库直方图仍为 45,160 条测量。最终 JSON 可解析，命中数与数据版本均与工具原始结果一致。
+
+自然语言证据目录为 `.runtime/openscience-mcp-dev/browser-evidence/2026-11-03T01-44-36-155Z/`。原探针曾因编辑器合并换行而触发文本比较断言，失败的 `report.json` 保留；修正比较方式后，只读打开同一个已提交会话完成核对，未发送第二条提示。`readback-report.json` 记录工具与最终 JSON 核对、页面渲染及刷新一致性均通过。`mcp-results.json` 保存三工具原始结构化字段，`answer.json` 保存模型生成的业务 JSON；两者均为私有 `0600` 文件。界面证据为 `natural-language-conversation.png`。
 
 工具的单位、AND、版本、证据计数和错误码合同见 [数据库筛选 MCP 文档](property-filter-mcp.md)。独立开发实例验收不代表已接入共享或生产 OpenScience。
