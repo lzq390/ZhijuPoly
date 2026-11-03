@@ -154,9 +154,7 @@ async def generate_knowledge_summary(events: list[dict], settings: Settings, *, 
             data = json.loads(content)
             attempt.observe(data, api=api)
             if api == "responses":
-                completed = isinstance(data, dict) and data.get("status") == "completed"
-                attempt.observe_completion(data, api=api, completed=completed, terminal=True)
-                attempt.terminal("completed" if completed else "failed")
+                attempt.observe_completion(data, api=api, terminal=True)
                 content = completed_responses_text(data)
             else:
                 attempt.observe_completion(data, terminal=True)
@@ -166,9 +164,18 @@ async def generate_knowledge_summary(events: list[dict], settings: Settings, *, 
                 if choice.get("finish_reason") not in (None, "stop") or not isinstance(content, str) or not content.strip():
                     raise ValueError("empty or incomplete output")
         except (AIResponseError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+            if api == "responses":
+                attempt.terminal("failed")
             raise HTTPException(502, "模型未返回完整的总结文本，记录已保留，可重试") from None
         if len(content.encode("utf-8")) > PrivateQuotaSettings.from_environment().summary_output_bytes:
+            if api == "responses":
+                attempt.terminal("failed")
             raise HTTPException(413, "总结超过大小限制")
+        if api == "responses":
+            # Preserve observed counters on failure, but qualify completion
+            # only after both the response contract and output limit pass.
+            attempt.observe_completion(data, api=api, completed=True, terminal=True)
+            attempt.terminal()
         mark_assistant_result(validated=True)
         return {"summary": content.strip().replace(settings.assistant_api_key, "[已隐藏]"), "generated": True}
 

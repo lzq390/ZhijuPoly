@@ -161,6 +161,32 @@ def test_empty_or_refused_response_never_becomes_business_completion(monkeypatch
     with completion_scope(evidence), pytest.raises(HTTPException):
         asyncio.run(invoke(mode, settings()))
     assert not evidence.validated
+    assert spans[0]["status"] == "failed" and spans[0]["metrics"]["provider_total_tokens"] == 26
+
+
+@pytest.mark.parametrize("body", ["invalid JSON", {**completed(), "output": 123}])
+def test_malformed_json_response_is_failed_with_available_usage_preserved(monkeypatch, spans, body):
+    response = httpx.Response(200, content=body) if isinstance(body, str) else httpx.Response(200, json=body)
+    install_provider(monkeypatch, [response])
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(invoke("json", settings()))
+    assert error.value.status_code == 502
+    assert spans[0]["status"] == "failed"
+    assert spans[0]["metrics"]["provider_total_tokens"] == (None if isinstance(body, str) else 26)
+
+
+@pytest.mark.parametrize("mode", ["json", "stream"])
+def test_oversized_completed_text_is_failed_without_discarding_usage(monkeypatch, spans, mode):
+    monkeypatch.setenv("PRIVATE_SUMMARY_OUTPUT_BYTES", "1000")
+    body = completed("x" * 1001)
+    response = httpx.Response(200, json=body) if mode == "json" else httpx.Response(200, content=sse([
+        {"type": "response.completed", "response": body}]))
+    install_provider(monkeypatch, [response])
+    evidence = CompletionEvidence(1, 4096)
+    with completion_scope(evidence), pytest.raises(HTTPException) as error:
+        asyncio.run(invoke(mode, settings()))
+    assert error.value.status_code == 413 and not evidence.validated
+    assert spans[0]["status"] == "failed" and spans[0]["metrics"]["provider_total_tokens"] == 26
 
 
 @pytest.mark.parametrize("trailer", [[], ["[DONE]"]])
