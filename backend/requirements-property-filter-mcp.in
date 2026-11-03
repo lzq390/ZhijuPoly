@@ -1,0 +1,5 @@
+# Independent Python 3.11 runtime; deliberately separate from the scientific backend.
+mcp==2.3.0
+pydantic==2.14.2
+psycopg[binary]==3.3.6
+uvicorn==0.54.0

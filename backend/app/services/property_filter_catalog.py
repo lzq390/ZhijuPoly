@@ -4,6 +4,8 @@ from collections import OrderedDict
 from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
+import json
 from math import isfinite
 from threading import Lock
 from typing import Any
@@ -22,6 +24,7 @@ PROPERTY_FILTER_SNAPSHOT_SCHEMA_VERSION = 1
 PROPERTY_FILTER_HISTOGRAM_BIN_COUNT = 18
 PROPERTY_FILTER_HISTOGRAM_ROBUST_MIN_ROWS = 40
 PROPERTY_FILTER_HISTOGRAM_CACHE_MAX_ENTRIES = 512
+PROPERTY_FILTER_OPTION_LEGACY_KEY_MAX_LENGTH = 512
 
 
 PropertyFilterHistogramCacheKey = tuple[int, datetime, int | None, str | None, str]
@@ -65,6 +68,36 @@ def _finite_float(value: Any) -> float | None:
     return normalized if isfinite(normalized) else None
 
 
+def _unambiguous_option_key(option: dict[str, Any]) -> str:
+    """Keep established keys except when their delimiter encoding is ambiguous.
+
+    Keys are opaque to callers. Existing unique snapshot keys remain readable;
+    this only affects newly aggregated catalogs, whose revision changes on save.
+    A separate prefix prevents tuple digests from overlapping legacy key space.
+    """
+    if option["filter_type"] == "standardized":
+        identity = [option["property_key"], option.get("canonical_unit") or ""]
+        separator, prefix = ":", "std2:"
+    else:
+        identity = [option["property_name"], option.get("property_unit_clean") or ""]
+        separator, prefix = "|", "raw2:"
+    legacy_key = option["option_key"]
+    if (not any(separator in value for value in identity)
+            and len(legacy_key) <= PROPERTY_FILTER_OPTION_LEGACY_KEY_MAX_LENGTH):
+        return legacy_key
+    encoded = json.dumps(identity, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return prefix + hashlib.sha256(encoded).hexdigest()
+
+
+def _require_unique_option_keys(options: list[dict[str, Any]]) -> None:
+    keys: set[str] = set()
+    for option in options:
+        key = option["option_key"]
+        if not key or key in keys:
+            raise RuntimeError("Property-filter options contain an empty or duplicate option key")
+        keys.add(key)
+
+
 def _histogram_domain(option: dict[str, Any]) -> tuple[float, float, int, str] | None:
     minimum = _finite_float(option.get("min_value"))
     maximum = _finite_float(option.get("max_value"))
@@ -92,6 +125,8 @@ def aggregate_property_filter_histograms(
     schema: str | None = "core",
     table: str = "polymer_property_filter_records",
 ) -> dict[str, dict[str, Any]]:
+    # A duplicate key would merge unrelated measurements and overwrite domains.
+    _require_unique_option_keys(options)
     domains: list[tuple[Any, ...]] = []
     histograms: dict[str, dict[str, Any]] = {}
     for option in options:
@@ -325,7 +360,7 @@ def aggregate_property_filter_catalog(
                 property_key,
                 NULL::text AS property_name,
                 NULL::text AS property_unit_clean,
-                canonical_unit,
+                MIN(canonical_unit) AS canonical_unit,
                 COUNT(*) AS rows,
                 COUNT(DISTINCT COALESCE(
                   NULLIF(canonical_smiles, ''),
@@ -340,19 +375,19 @@ def aggregate_property_filter_catalog(
               FROM {relation}
               WHERE property_key IS NOT NULL
                 AND canonical_value IS NOT NULL
-              GROUP BY property_key, canonical_unit
+              GROUP BY property_key, COALESCE(canonical_unit, '')
             ),
             raw AS (
               SELECT
                 'raw'::text AS filter_type,
                 'raw:' || md5(property_name || '|' || COALESCE(property_unit_clean, '')) AS option_key,
                 CASE
-                  WHEN COALESCE(NULLIF(property_unit_clean, ''), '') = '' THEN property_name
-                  ELSE property_name || ' (' || property_unit_clean || ')'
+                  WHEN COALESCE(property_unit_clean, '') = '' THEN property_name
+                  ELSE property_name || ' (' || COALESCE(property_unit_clean, '') || ')'
                 END AS label,
                 NULL::text AS property_key,
                 property_name,
-                property_unit_clean,
+                MIN(property_unit_clean) AS property_unit_clean,
                 NULL::text AS canonical_unit,
                 COUNT(*) AS rows,
                 COUNT(DISTINCT COALESCE(
@@ -368,7 +403,7 @@ def aggregate_property_filter_catalog(
               FROM {relation}
               WHERE property_key IS NULL
                 AND property_value_num IS NOT NULL
-              GROUP BY property_name, property_unit_clean
+              GROUP BY property_name, COALESCE(property_unit_clean, '')
             )
             SELECT *
             FROM (
@@ -384,6 +419,8 @@ def aggregate_property_filter_catalog(
         ).format(relation=relation)
     ).fetchall()
     options = [dict(row) for row in rows]
+    for option in options:
+        option["option_key"] = _unambiguous_option_key(option)
     histograms = aggregate_property_filter_histograms(
         connection,
         options,
@@ -498,10 +535,12 @@ def property_filter_catalog_is_current(connection: Any, catalog: PropertyFilterC
     ).fetchone()
     latest_import_batch_id = row["import_batch_id"]
     if latest_import_batch_id is None:
-        return True
+        # Legacy catalogs and imports may both lack batch metadata. A catalog
+        # pointing to a missing or failed batch is not that legacy case.
+        return catalog.import_batch_id is None
     if catalog.import_batch_id is None:
         return False
-    return catalog.import_batch_id >= int(latest_import_batch_id)
+    return catalog.import_batch_id == int(latest_import_batch_id)
 
 
 def _catalog_from_row(row: Any) -> PropertyFilterCatalog:
@@ -510,9 +549,24 @@ def _catalog_from_row(row: Any) -> PropertyFilterCatalog:
         raise RuntimeError("Stored property-filter options snapshot is not a JSON array of objects")
     try:
         for option in options:
-            PropertyFilterOption.model_validate(option)
+            parsed = PropertyFilterOption.model_validate(option)
+            identifier = parsed.property_key if parsed.filter_type == "standardized" else parsed.property_name
+            if identifier is None:
+                raise RuntimeError("Stored property-filter option is missing its query identifier")
+            statistics = (parsed.min_value, parsed.p5_value, parsed.median_value,
+                          parsed.p95_value, parsed.max_value)
+            if any(value is not None and not isfinite(value) for value in statistics):
+                raise RuntimeError("Stored property-filter option has a non-finite statistic")
+            if (parsed.min_value is not None and parsed.max_value is not None
+                    and parsed.min_value > parsed.max_value):
+                raise RuntimeError("Stored property-filter option has an inverted numeric range")
+            if parsed.unique_smiles > parsed.rows:
+                raise RuntimeError("Stored property-filter option has more structures than measurements")
+            if parsed.histogram is not None and parsed.histogram.total_count != parsed.rows:
+                raise RuntimeError("Stored property-filter option histogram does not match its measurement count")
     except ValidationError as exc:
         raise RuntimeError("Stored property-filter options snapshot contains an invalid option") from exc
+    _require_unique_option_keys(options)
     total_records = int(row["total_records"] or 0)
     mapped_records = int(row["mapped_records"] or 0)
     raw_records = int(row["raw_records"] or 0)
