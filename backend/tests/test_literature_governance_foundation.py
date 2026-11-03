@@ -88,9 +88,11 @@ class LiteratureGovernanceTests(unittest.TestCase):
         self.full[0]["checksum"] = "b" * 64
         self.assertNotEqual(self.full, contract.registered_literature_ledger())
 
-    def test_ledger_matches_every_packaged_migration(self):
+    def test_ledger_matches_every_packaged_migration_through_literature(self):
         folder = Path(__file__).resolve().parents[1] / "migrations/postgres"
-        actual = [{"version": entry.version, "checksum": entry.checksum} for entry in validate_migration_manifest_entries(folder)]
+        actual = [{"version": entry.version, "checksum": entry.checksum}
+                  for entry in validate_migration_manifest_entries(folder)
+                  if entry.version <= contract.LITERATURE_MIGRATION]
         self.assertEqual(actual, self.full)
         data = (folder / (contract.LITERATURE_MIGRATION + ".sql")).read_bytes()
         self.assertEqual(hashlib.sha256(data).hexdigest(), contract.LITERATURE_MIGRATION_SHA256)
