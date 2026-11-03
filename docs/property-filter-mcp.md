@@ -8,7 +8,7 @@
 - 统一开发入口：`http://127.0.0.1:9001/mcp`；内部独立服务及本机诊断地址仍为 `http://127.0.0.1:18110/mcp`，健康检查在该直连地址的 `/healthz`。
 - 数据库：既有 `nexpoly_dev-lab-postgres-1` 容器中的 `nexpoly_dev`，通过既有 `nexpoly_dev_default` 网络访问。
 - 数据库角色：`nexpoly_mcp_dev_reader`，仅获四张筛选相关表的 `SELECT`，默认只读事务，无其他角色成员关系或管理员权限。
-- 不启动、迁移、导入、停止或重建现有 NexPoly/数据库/Worker 服务；不连接生产数据库。
+- 独立 MCP 启动器不启动、迁移、导入、停止或重建现有 NexPoly/数据库/Worker 服务；统一入口发布器仅重建 9001 开发前端，不连接生产数据库。
 
 启动器会核对既有数据库容器的 Compose 项目、服务、工作目录 `/data/lzq/gith/nexpoly-dev`、配置文件来源、网络和数据库身份；同时核对 MCP 私有 DSN 的角色、主机、端口、数据库及本地密码是否完全符合该开发目标。身份不符时拒绝操作。MCP 自己的 Compose 命令显式使用 `/dev/null` 作为环境文件，避免加载当前目录的应用 `.env`。
 
@@ -85,11 +85,11 @@ python3 scripts/property_filter_mcp_dev.py down
 ```bash
 python3 scripts/property_filter_mcp_gateway_dev.py apply
 python3 scripts/property_filter_mcp_gateway_dev.py status
-# 需要撤回代理入口时，仅恢复发布前的开发前端；MCP 服务继续运行。
+# 当前仍为本次发布版本时，可恢复发布前的开发前端；MCP 服务继续运行。
 python3 scripts/property_filter_mcp_gateway_dev.py rollback
 ```
 
-私有发布状态位于 `.runtime/property-filter-mcp/gateway/`；源码快照仍保存在现有本机 `ui-releases/` 目录。发布器只支持已确认的开发容器、9001 端口及源码基线，遇到不同基线时拒绝覆盖，需要先审查并合并代理改动。
+私有发布状态位于 `.runtime/property-filter-mcp/gateway/`；源码快照仍保存在现有本机 `ui-releases/` 目录。发布器只支持已确认的开发容器、9001 端口及源码基线，遇到不同基线时拒绝覆盖，需要先审查并合并代理改动。后续页面发布接续该快照后，旧操作的 `apply` 和 `rollback` 都会拒绝覆盖；撤回代理需基于当前页面版本合并，不能回退掉后续页面改动。`status` 中 `phase` 表示已记录操作的阶段，`source_hash` 和 `gateway_configured` 则来自当前运行版本。
 
 普通开发 Compose 模板也支持显式启用：在私有开发环境文件中设置 `NEXPOLY_DEV_MCP_PROXY_TARGET=http://nexpoly_mcp_dev-property-filter-mcp-1:18110`，并设置 `NEXPOLY_DEV_MCP_PROXY_ALLOWED_HOSTS` 为实际入口的 `host:port` 列表。默认不启用，避免其他开发项目意外连接本机 MCP；不要用普通 Compose 命令覆盖当前 9001 的源码快照。
 
@@ -102,7 +102,7 @@ PYTHONPATH=backend .runtime/property-filter-mcp/venv/bin/python \
   scripts/verify_property_filter_mcp.py --endpoint gateway
 ```
 
-验收同时验证真实客户端初始化、三个工具和开发库 SQL 基准，摘要原子写入 `acceptance-gateway.json`（0600）。`--endpoint direct` 保留直连验收并写入 `acceptance.json`。两种模式都禁止重定向和任意 URL；健康探针继续直连 `/healthz`，报告单独标明协议验收入口。现有 OpenScience 客户端仍可沿原内部路径连接，无需修改 9011。
+验收同时验证真实客户端初始化、三个工具和开发库 SQL 基准，摘要原子写入 `acceptance-gateway.json`（0600）。`--endpoint direct` 保留直连验收并写入 `acceptance.json`。两种模式都禁止重定向和任意 URL；健康探针继续直连 `/healthz`，报告单独标明协议验收入口。独立开发 OpenScience 保持原内部连接；本次没有给共享 9011 配置 MCP。
 
 ## 工具合同
 
@@ -141,7 +141,7 @@ AND 表示同一 canonical SMILES 结构组下，各条件分别存在满足要�
 
 ## 开发客户端与 OpenScience
 
-客户端需要支持 MCP Streamable HTTP，并以服务端安全配置提供 `Authorization: Bearer …`；URL 和令牌从本机私有 `client.env` 读取，不应放入模型提示词或工具参数。`smoke` 使用该凭据完成初始化、工具发现和属性目录调用，只输出验证摘要。
+客户端需要支持 MCP Streamable HTTP，并以服务端安全配置提供 `Authorization: Bearer …`；令牌从本机私有 `client.env` 读取，不应放入模型提示词或工具参数。下例使用 9001 统一入口，该文件中的 URL 则保留为 18110 直连地址。`smoke` 使用直连地址和该凭据完成初始化、工具发现和属性目录调用，只输出验证摘要。
 
 以下示例使用独立锁中的官方 Python SDK 2.3.0；在仓库根目录保存后用下述独立虚拟环境运行。`trust_env=False` 和关闭重定向可避免本地令牌转发给代理或其他主机。
 
@@ -156,8 +156,8 @@ from mcp.client.streamable_http import streamable_http_client
 async def main():
     settings = dict(line.split("=", 1) for line in
         Path(".runtime/property-filter-mcp/client.env").read_text().splitlines())
-    url = settings["NEXPOLY_MCP_URL"]
-    assert url == "http://127.0.0.1:18110/mcp"
+    assert settings["NEXPOLY_MCP_URL"] == "http://127.0.0.1:18110/mcp"
+    url = "http://127.0.0.1:9001/mcp"
     async with httpx2.AsyncClient(trust_env=False, follow_redirects=False,
         headers={"Authorization": "Bearer " + settings["NEXPOLY_MCP_TOKEN"]}) as http:
         @asynccontextmanager
@@ -247,6 +247,28 @@ PYTHONPATH=backend .runtime/property-filter-mcp/venv/bin/python \
 
 本次开发库观测：目录四页各 127–288 ms、14,131–18,538 B；标准 Tg 搜索 441 ms / 7,204 B，原始属性搜索 236 ms / 4,789 B，Tg + Td AND 搜索 416 ms / 8,629 B，Tg 直方图 230 ms / 775 B。计数分别保持 18,614、18,558、12,114 个结构组及 45,160 条直方图测量。最新摘要报告位于私有 `.runtime/property-filter-mcp/acceptance.json`，不包含凭据或完整测量数据。
 
-可用的开发 MCP 地址仍为 `http://127.0.0.1:18110/mcp`，通过本机私有 `client.env` 提供 Bearer 凭据。
+本轮独立服务验收使用直连地址 `http://127.0.0.1:18110/mcp`，通过本机私有 `client.env` 提供 Bearer 凭据。
+
+## 9001 统一入口验收（2026-11-03）
+
+已发布并验证 `http://127.0.0.1:9001/mcp`。独立 MCP 容器、数据库角色、三个工具及客户端限流保持不变；本次入口发布只重建开发前端。候选端口与正式 9001 均通过三个工具调用，原 `/`、`/health`、`/api/v1/auth/session` 的状态码和响应类型一致。候选容器和独立依赖卷已清理。
+
+- 新增相关测试 **57 passed**：真实 Vite 代理测试 8 项、发布器测试 33 项、Compose 交付约束 10 项、验收脚本测试 6 项；代理 TypeScript 检查通过。
+- 真实 9001 请求检查通过：缺少/无效令牌返回 401，不受信任的 Origin 返回 403，未列入白名单的 Host 返回 421，URL 查询参数返回 400，超过 32 KiB 的请求返回 413；带有效凭据的 `/mcp/` 无重定向初始化成功。
+- 官方 MCP 客户端只发现三个工具，目录、标准/原始属性搜索、跨测量 AND、证据和直方图与共享服务及独立 SQL 基准一致。数据版本、615,159 条测量和 188 个选项未变，仍使用专用只读角色。
+- 入口发布保留原快照的 664 个其他文件，仅修改 Vite 配置并新增代理模块。随后独立的 `usage-activity` 页面发布接续了该版本；已核对其代理源码和配置完整保留，并于 11:07（北京时间）对该当前运行版本重跑客户端和 SQL 验收通过，没有覆盖后续页面改动。
+- 未修改生产配置或共享 9011；`verify-protected` 返回 `shared_unchanged: true`。本次复审未发现阻断项。
+
+当前运行版本的实测数据如下，耗时不作为延迟保证：
+
+| 验收项 | 基准核对结果 | 耗时 | 响应体积 |
+|---|---|---|---|
+| 目录全部 4 页 | 615,159 条测量，188 个选项 | 每页 123–200 ms | 每页 14,131–18,538 B |
+| 标准 Tg | 18,614 个结构组，证据一致 | 431 ms | 7,204 B |
+| 原始属性 | 18,558 个结构组，证据一致 | 296 ms | 4,789 B |
+| Tg + Td 跨测量 AND | 12,114 个结构组，两条件证据一致 | 413 ms | 8,629 B |
+| Tg 全库直方图 | 45,160 条测量，所有桶及上下溢出计数一致 | 131 ms | 775 B |
+
+私有验收摘要为 `.runtime/property-filter-mcp/acceptance-gateway.json`，入口边界记录为同目录 `gateway-edge-report.json`，均为 0600，不包含凭据或完整测量数据。18110 直连诊断入口继续可用。
 
 这是一份独立开发部署合同；生产暴露、用户 OAuth、会员/计量绑定及生产 OpenScience 配置不在本期范围。
