@@ -78,6 +78,23 @@ POLYMER_MD_OPERATOR_TESTS = (
     "test_polymer_md_backend_full.py",
     "test_polymer_md_backup_dev.py",
 )
+MCP_VERIFY_TEST = "test_verify_property_filter_mcp.py"
+MCP_DEPENDENCY_STEP = '''      - name: Install independent locked MCP test dependencies
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r backend/requirements-property-filter-mcp-test.lock
+          python -m pip check'''
+MCP_TEST_STEP = '''      - name: Run complete MCP suite against disposable PostgreSQL
+        env:
+          NEXPOLY_MCP_TEST_ADMIN_DSN_FILE: ${{ runner.temp }}/mcp-test-admin.dsn
+        run: |
+          umask 077
+          printf '%s\\n' 'postgresql://mcp_test_admin:mcp-ci-disposable-password@127.0.0.1:5432/mcp_test_admin' > "$NEXPOLY_MCP_TEST_ADMIN_DSN_FILE"
+          python -m pytest -c backend/mcp_tests/pytest.ini backend/mcp_tests -q
+          python -m unittest -v scripts/tests/test_verify_property_filter_mcp.py'''
+MCP_NODE_STEP = '''      - name: Run development MCP overlay tests in Chromium
+        run: |
+          ops/openscience-ui-overlay/node_modules/.bin/playwright install --with-deps chromium
+          node --test ops/openscience-mcp-dev/*.test.mjs'''
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 SAFE_DATASET = re.compile(r"^[A-Za-z0-9_.-]+$")
 FROZEN_ASSET_DOC = re.compile(
@@ -637,6 +654,7 @@ OPENSCIENCE_OVERLAY_STEP_HEADERS = (
     "      - name: Set up Node.js",
     "      - name: Install the pinned browser probe package",
     "      - name: Run deterministic overlay patch tests",
+    "      - name: Run development MCP overlay tests in Chromium",
     "      - name: Set up Buildx",
     "      - name: Build the governed overlay without publishing",
     "      - name: Verify the governed overlay image",
@@ -1328,6 +1346,48 @@ def validate_lightweight_backend_tests(ci_text: str, failures: list[str]) -> Non
             failures.append(f"lightweight-backend-tests is missing: {marker}")
     if "      - lightweight-backend-tests\n" not in gate:
         failures.append("ci-gate must require lightweight-backend-tests")
+
+
+def validate_independent_mcp_tests(ci_text: str, failures: list[str]) -> None:
+    """Keep MCP's newer dependencies and disposable database out of the backend."""
+    job = workflow_job_body(ci_text, "property-filter-mcp-tests", failures)
+    scripts = workflow_job_body(ci_text, "script-tests", failures)
+    overlay = workflow_job_body(ci_text, "openscience-overlay", failures)
+    gate = workflow_job_body(ci_text, "ci-gate", failures)
+    if any(body is None for body in (job, scripts, overlay, gate)):
+        return
+    if scripts.count(f"! -name '{MCP_VERIFY_TEST}'") != 1:
+        failures.append("script-tests must exclude the independent MCP verification module exactly once")
+    if gate.count("      - property-filter-mcp-tests\n") != 1:
+        failures.append("ci-gate must require property-filter-mcp-tests")
+    for marker in (
+        "    needs: resolve-sha\n", "    runs-on: ubuntu-24.04\n",
+        "    timeout-minutes: 20\n", "        image: " + EXPECTED_POSTGRES_IMAGE,
+        "          POSTGRES_USER: mcp_test_admin\n",
+        "          POSTGRES_PASSWORD: mcp-ci-disposable-password\n",
+        "          POSTGRES_DB: mcp_test_admin\n", "          - 5432:5432\n",
+        '--health-cmd "pg_isready -U mcp_test_admin -d mcp_test_admin"',
+        "          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}\n",
+        "          persist-credentials: false\n",
+        'run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"',
+        '          python-version: "3.11"\n',
+        "          cache-dependency-path: backend/requirements-property-filter-mcp-test.lock\n",
+    ):
+        if job.count(marker) != 1:
+            failures.append(f"property-filter-mcp-tests must retain its isolated runtime: {marker.strip()}")
+    for body, expected in ((job, MCP_DEPENDENCY_STEP), (job, MCP_TEST_STEP), (overlay, MCP_NODE_STEP)):
+        selected = [step.rstrip() for step in workflow_step_blocks(body)
+                    if step.startswith(expected.splitlines()[0] + "\n")]
+        if selected != [expected]:
+            failures.append(f"Independent MCP CI must retain its full reviewed step: {expected.splitlines()[0].strip()}")
+    for marker in ("continue-on-error:", "    if:", "        if:", "requirements-ci.lock",
+                   "requirements.lock", "APP_POSTGRES_DSN", "PI_POSTGRES_DSN"):
+        if marker in job:
+            failures.append(f"property-filter-mcp-tests must not inherit or bypass application runtime: {marker}")
+    for name in ("backend-tests", "lightweight-backend-tests"):
+        other = workflow_job_body(ci_text, name, failures)
+        if other and "requirements-property-filter-mcp" in other:
+            failures.append(f"{name} must not install the independent MCP dependency lock")
 
 
 def validate_polymer_md_script_tests(ci_text: str, failures: list[str]) -> None:
@@ -2998,6 +3058,7 @@ def main() -> int:
     validate_complete_history_checkouts(ci_text, failures)
     validate_script_tests_budget(ci_text, failures)
     validate_lightweight_backend_tests(ci_text, failures)
+    validate_independent_mcp_tests(ci_text, failures)
     validate_polymer_md_script_tests(ci_text, failures)
     validate_gpu_session_compose_policy(ci_text, failures)
     validate_exact_b_job(ci_text, failures)

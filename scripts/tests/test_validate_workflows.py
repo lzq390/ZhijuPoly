@@ -152,7 +152,7 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
                 cwd=ROOT, check=True, capture_output=True, text=True,
             )
             selections[job_name] = [Path(path).name for path in result.stdout.splitlines()]
-        for job_name in ("backend-tests", "worker-tests"):
+        for job_name in ("backend-tests", "worker-tests", "property-filter-mcp-tests"):
             job = policy.workflow_job_body(CI_TEXT, job_name, [])
             selections[job_name] = re.findall(r"\bscripts/tests/(test_[A-Za-z0-9_]+\.py)\b", job)
         paths = sorted((ROOT / "scripts/tests").glob("test_*.py"))
@@ -170,6 +170,62 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
             if imports_pytest or (any(name.startswith("test_") for name in functions) and "load_tests" not in functions):
                 with self.subTest(pytest_module=path.name):
                     self.assertIn(path.name, pytest_modules)
+
+    def test_mcp_tests_have_an_independent_locked_database_job_and_gate(self) -> None:
+        failures: list[str] = []
+        policy.validate_independent_mcp_tests(CI_TEXT, failures)
+        self.assertEqual(failures, [])
+
+    def test_mcp_suite_cannot_leak_into_script_tests_or_lose_coverage(self) -> None:
+        for marker in (
+            "              ! -name 'test_verify_property_filter_mcp.py' \\\n",
+            "      - property-filter-mcp-tests\n",
+            "          python -m pytest -c backend/mcp_tests/pytest.ini backend/mcp_tests -q\n",
+            "          python -m unittest -v scripts/tests/test_verify_property_filter_mcp.py\n",
+        ):
+            with self.subTest(marker=marker):
+                self.assertEqual(CI_TEXT.count(marker), 1)
+                failures: list[str] = []
+                policy.validate_independent_mcp_tests(CI_TEXT.replace(marker, "", 1), failures)
+                self.assertTrue(failures)
+
+    def test_mcp_database_and_dependency_contract_cannot_be_replaced_or_skipped(self) -> None:
+        job = policy.workflow_job_body(CI_TEXT, "property-filter-mcp-tests", [])
+        for before, after in (
+            ("backend/requirements-property-filter-mcp-test.lock", "backend/requirements-ci.lock"),
+            ("--require-hashes", ""),
+            (policy.EXPECTED_POSTGRES_IMAGE, "postgres:latest"),
+            ("POSTGRES_USER: mcp_test_admin", "POSTGRES_USER: application_admin"),
+            ("127.0.0.1:5432/mcp_test_admin", "production.invalid:5432/nexpoly"),
+            ("umask 077", "umask 022"),
+            ("    timeout-minutes: 20", "    if: false\n    timeout-minutes: 20"),
+            ("python -m pytest -c backend/mcp_tests/pytest.ini backend/mcp_tests -q",
+             "python -m pytest -c backend/mcp_tests/pytest.ini backend/mcp_tests -q -k server_unit"),
+        ):
+            with self.subTest(before=before):
+                self.assertIn(before, job)
+                failures: list[str] = []
+                changed = CI_TEXT.replace(job, job.replace(before, after, 1), 1)
+                policy.validate_independent_mcp_tests(changed, failures)
+                self.assertTrue(failures)
+
+    def test_mcp_lock_cannot_be_installed_into_the_scientific_backend_job(self) -> None:
+        job = policy.workflow_job_body(CI_TEXT, "backend-tests", [])
+        changed = CI_TEXT.replace(job, job + "\n        run: pip install -r backend/requirements-property-filter-mcp-test.lock\n", 1)
+        failures: list[str] = []
+        policy.validate_independent_mcp_tests(changed, failures)
+        self.assertTrue(any("backend-tests" in failure for failure in failures))
+
+    def test_development_overlay_suite_requires_the_locked_browser_and_all_node_tests(self) -> None:
+        for marker in (
+            "          ops/openscience-ui-overlay/node_modules/.bin/playwright install --with-deps chromium\n",
+            "          node --test ops/openscience-mcp-dev/*.test.mjs\n",
+        ):
+            with self.subTest(marker=marker):
+                self.assertEqual(CI_TEXT.count(marker), 1)
+                failures: list[str] = []
+                policy.validate_independent_mcp_tests(CI_TEXT.replace(marker, "", 1), failures)
+                self.assertTrue(failures)
 
     def test_adopted_git_permission_documentation_is_complete(self) -> None:
         failures: list[str] = []
