@@ -3,12 +3,15 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from urllib.parse import urlsplit
 
 import httpx
 from fastapi import HTTPException
 
 from app.config import Settings
+from app.services.ai_proxy import model_proxy_url
+from app.services.ai_responses import AIResponseError, ResponsesTextStream, completed_responses_text, responses_input
 from app.services.private_quotas import PrivateQuotaSettings
 from app.services.usage_provider import ProviderAttempt
 from app.services.assistant_completion import mark_assistant_result
@@ -94,6 +97,11 @@ def _summary_payload(events: list[dict], settings: Settings, *, stream: bool) ->
     quotas = PrivateQuotaSettings.from_environment()
     if len(evidence) > quotas.summary_evidence_characters:
         raise HTTPException(413, "本次记录内容超出 POC 总结容量，请缩小下一次记录的范围")
+    if getattr(settings, "assistant_transport", "chat_completions") == "responses":
+        return {"model": settings.assistant_model, "stream": stream,
+                "max_output_tokens": quotas.summary_max_tokens, "instructions": SUMMARY_PROMPT,
+                "input": responses_input([{"role": "user", "content": evidence}]),
+                "reasoning": {"effort": "medium"}, "store": False}
     payload = {"model": settings.assistant_model, "stream": stream, "max_tokens": quotas.summary_max_tokens, "messages": [
         {"role": "system", "content": SUMMARY_PROMPT}, {"role": "user", "content": evidence},
     ]}
@@ -102,6 +110,11 @@ def _summary_payload(events: list[dict], settings: Settings, *, stream: bool) ->
         # Keep finish_reason validation; usage itself is not exposed to the UI.
         payload["stream_options"] = {"include_usage": True}
     return payload
+
+
+def _summary_endpoint(settings: Settings) -> str:
+    path = "/responses" if getattr(settings, "assistant_transport", "chat_completions") == "responses" else "/chat/completions"
+    return settings.assistant_base_url.rstrip("/") + path
 
 
 def _model_http_error(status: int) -> HTTPException:
@@ -117,38 +130,52 @@ async def generate_knowledge_summary(events: list[dict], settings: Settings, *, 
     if not events:
         return {"summary": EMPTY_SUMMARY, "generated": False}
     payload = _summary_payload(events, settings, stream=False)
+    api = "responses" if "max_output_tokens" in payload else "chat"
     with ProviderAttempt(phase="summary", request_options=payload) as attempt:
         try:
-            async with httpx.AsyncClient(trust_env=False, proxy=settings.ai_proxy_url or None, timeout=timeout_seconds,
+            async with asyncio.timeout(timeout_seconds), httpx.AsyncClient(trust_env=False, proxy=model_proxy_url(settings) or None, timeout=timeout_seconds,
                                         follow_redirects=False) as client:
-                async with client.stream("POST", settings.assistant_base_url.rstrip("/") + "/chat/completions",
+                async with client.stream("POST", _summary_endpoint(settings),
                                          headers={"Authorization": "Bearer " + settings.assistant_api_key},
                                          json=payload) as response:
                     if not response.is_success:
-                        attempt.observe_completion(None, terminal=True)
+                        attempt.observe_completion(None, api=api, terminal=True)
                         raise _model_http_error(response.status_code)
                     content = bytearray()
                     async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
                         content.extend(chunk)
                         if len(content) > 2 * PrivateQuotaSettings.from_environment().summary_output_bytes:
                             raise HTTPException(413, "总结超过大小限制")
-        except httpx.TimeoutException:
+        except (httpx.TimeoutException, TimeoutError):
             raise HTTPException(504, "模型响应超时，记录已保留，可重试总结") from None
         except httpx.HTTPError:
             raise HTTPException(502, "无法连接模型服务，记录已保留，可重试总结") from None
         try:
             data = json.loads(content)
-            attempt.observe(data)
-            attempt.observe_completion(data, terminal=True)
-            attempt.terminal()
-            choice = data["choices"][0]
-            content = choice["message"]["content"]
-            if choice.get("finish_reason") not in (None, "stop") or not isinstance(content, str) or not content.strip():
-                raise ValueError("empty or incomplete output")
-        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            attempt.observe(data, api=api)
+            if api == "responses":
+                attempt.observe_completion(data, api=api, terminal=True)
+                content = completed_responses_text(data)
+            else:
+                attempt.observe_completion(data, terminal=True)
+                attempt.terminal()
+                choice = data["choices"][0]
+                content = choice["message"]["content"]
+                if choice.get("finish_reason") not in (None, "stop") or not isinstance(content, str) or not content.strip():
+                    raise ValueError("empty or incomplete output")
+        except (AIResponseError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+            if api == "responses":
+                attempt.terminal("failed")
             raise HTTPException(502, "模型未返回完整的总结文本，记录已保留，可重试") from None
         if len(content.encode("utf-8")) > PrivateQuotaSettings.from_environment().summary_output_bytes:
+            if api == "responses":
+                attempt.terminal("failed")
             raise HTTPException(413, "总结超过大小限制")
+        if api == "responses":
+            # Preserve observed counters on failure, but qualify completion
+            # only after both the response contract and output limit pass.
+            attempt.observe_completion(data, api=api, completed=True, terminal=True)
+            attempt.terminal()
         mark_assistant_result(validated=True)
         return {"summary": content.strip().replace(settings.assistant_api_key, "[已隐藏]"), "generated": True}
 
@@ -173,6 +200,59 @@ class _StreamRedactor:
         return output
 
 
+async def _responses_summary_parts(response, attempt: ProviderAttempt, secret: str) -> AsyncIterator[str]:
+    text_stream = ResponsesTextStream()
+    redactor = _StreamRedactor(secret)
+    data_lines: list[str] = []
+    received_bytes = output_bytes = 0
+    limit = PrivateQuotaSettings.from_environment().summary_output_bytes
+    try:
+        async for line in response.aiter_lines():
+            received_bytes += len(line.encode("utf-8"))
+            if received_bytes > 2 * limit:
+                raise HTTPException(413, "总结超过大小限制")
+            if line.startswith("data:"):
+                data_lines.append(line[5:].lstrip())
+                continue
+            if line or not data_lines:
+                continue
+            data = "\n".join(data_lines)
+            data_lines.clear()
+            if data == "[DONE]":
+                break
+            event = json.loads(data)
+            if not isinstance(event, dict):
+                raise AIResponseError("Invalid Responses event")
+            kind = event.get("type")
+            if kind in {"response.completed", "response.failed", "response.incomplete"}:
+                terminal = event.get("response")
+                attempt.observe(terminal, api="responses")
+                attempt.observe_completion(terminal, api="responses", terminal=True,
+                    completed=kind == "response.completed" and isinstance(terminal, dict) and terminal.get("status") == "completed")
+            elif kind == "error":
+                attempt.observe_completion(None, api="responses", terminal=True)
+            elif kind in {"response.refusal.delta", "response.refusal.done"}:
+                attempt.observe_completion({"output": [{"content": [{"type": "refusal"}]}]}, api="responses")
+            text = text_stream.feed(event)
+            output_bytes += len(text.encode("utf-8"))
+            if output_bytes > limit:
+                raise HTTPException(413, "总结超过大小限制")
+            safe = redactor.feed(text)
+            if safe:
+                yield safe
+        if data_lines:
+            raise AIResponseError("Unterminated Responses event")
+        text_stream.finish()
+        attempt.terminal()
+        tail = redactor.feed("", final=True)
+        if tail:
+            yield tail
+        mark_assistant_result(validated=True)
+    except AIResponseError:
+        attempt.terminal("failed")
+        raise
+
+
 async def stream_knowledge_summary(
     events: list[dict], settings: Settings, *, timeout_seconds: float = 60.0,
 ) -> AsyncIterator[str]:
@@ -180,6 +260,7 @@ async def stream_knowledge_summary(
         yield EMPTY_SUMMARY
         return
     payload = _summary_payload(events, settings, stream=True)
+    responses = "max_output_tokens" in payload
     with ProviderAttempt(phase="summary", request_options=payload) as attempt:
         redactor = _StreamRedactor(settings.assistant_api_key)
         finished = False
@@ -187,15 +268,20 @@ async def stream_knowledge_summary(
         try:
             # Bound the whole generation, including streams that keep sending tiny chunks.
             async with asyncio.timeout(timeout_seconds), httpx.AsyncClient(
-                trust_env=False, proxy=settings.ai_proxy_url or None, timeout=timeout_seconds, follow_redirects=False,
+                trust_env=False, proxy=model_proxy_url(settings) or None, timeout=timeout_seconds, follow_redirects=False,
             ) as client:
                 async with client.stream(
-                    "POST", settings.assistant_base_url.rstrip("/") + "/chat/completions",
+                    "POST", _summary_endpoint(settings),
                     headers={"Authorization": "Bearer " + settings.assistant_api_key}, json=payload,
                 ) as response:
                     if not response.is_success:
-                        attempt.observe_completion(None, terminal=True)
+                        attempt.observe_completion(None, api="responses" if responses else "chat", terminal=True)
                         raise _model_http_error(response.status_code)
+                    if responses:
+                        async with aclosing(_responses_summary_parts(response, attempt, settings.assistant_api_key)) as parts:
+                            async for text in parts:
+                                yield text
+                        return
                     data_lines: list[str] = []
                     received_bytes = 0
                     async for line in response.aiter_lines():
@@ -242,5 +328,5 @@ async def stream_knowledge_summary(
             raise HTTPException(504, "模型响应超时，记录已保留，可重试总结") from None
         except httpx.HTTPError:
             raise HTTPException(502, "无法连接模型服务，记录已保留，可重试总结") from None
-        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        except (AIResponseError, ValueError, KeyError, IndexError, TypeError, AttributeError):
             raise HTTPException(502, "模型未返回完整的总结文本，记录已保留，可重试") from None

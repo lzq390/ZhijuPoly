@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from openai import DefaultHttpxClient, OpenAI
+from app.services.ai_proxy import model_proxy_url
 
 
 INVALID_EXTRACTION_RESULT = "模型返回的提取结果格式无效"
@@ -19,13 +20,6 @@ _CLEAN_PROVIDER_ERRORS = frozenset(
         "AI provider request failed.",
     }
 )
-
-
-def model_proxy_url(settings: Any) -> str:
-    """Model transport only; never use this override for literature sources."""
-    return getattr(settings, "ai_model_proxy_url", getattr(
-        settings, "ai_proxy_url", getattr(settings, "online_knowledge_proxy_url", "")
-    ))
 
 
 def create_openai_client(
