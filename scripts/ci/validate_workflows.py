@@ -37,6 +37,12 @@ BACKEND_IMAGE_ASSERTION_PATH = (
 POSTGRES_CLIENT_BOOTSTRAP_PATH = (
     REPOSITORY_ROOT / "scripts" / "ci" / "ensure_postgresql_16_client.sh"
 )
+IMAGE_DISK_PREPARATION_PATH = (
+    REPOSITORY_ROOT / "scripts" / "ci" / "prepare_image_build_disk.sh"
+)
+EXPECTED_IMAGE_DISK_PREPARATION_SHA256 = (
+    "9799fca641100c90e8b41688efecb5002dccf1280ab40c863bdad2d3cff903d7"
+)
 OPENSCIENCE_DOCKERFILE_PATH = (
     REPOSITORY_ROOT / "ops" / "openscience-ui-overlay" / "Dockerfile"
 )
@@ -341,6 +347,10 @@ REVIEWED_GIT_CONTEXT_LINE = (
     '${{ needs.resolve-sha.outputs.candidate_sha }}"'
 )
 REVIEWED_GIT_TOKEN_LINE = "          github-token: ${{ github.token }}"
+REVIEWED_GIT_SECRET_LINES = (
+    "          secrets: |",
+    "            GIT_AUTH_TOKEN=${{ github.token }}",
+)
 IMAGE_BUILD_JOB_PREFIX_LINES = (
     "    name: Build ${{ matrix.name }} image without publishing",
     "    if: github.event_name == 'pull_request'",
@@ -364,6 +374,7 @@ IMAGE_BUILD_JOB_PREFIX_LINES = (
 IMAGE_BUILD_STEP_HEADERS = (
     "      - name: Check out candidate",
     "      - name: Assert immutable checkout",
+    "      - name: Prepare disk for scientific images",
     "      - name: Set up Buildx",
     "      - id: backend-identity",
     "      - name: Build image",
@@ -379,6 +390,7 @@ IMAGE_BUILD_STEP_LINES = (
     "        with:",
     REVIEWED_GIT_CONTEXT_LINE,
     REVIEWED_GIT_TOKEN_LINE,
+    *REVIEWED_GIT_SECRET_LINES,
     "          file: ${{ matrix.file }}",
     "          platforms: linux/amd64",
     "          push: false",
@@ -445,6 +457,7 @@ RELEASE_BACKEND_BUILD_STEP_LINES = (
     "        with:",
     REVIEWED_GIT_CONTEXT_LINE,
     REVIEWED_GIT_TOKEN_LINE,
+    *REVIEWED_GIT_SECRET_LINES,
     "          file: Dockerfile",
     "          platforms: linux/amd64",
     "          push: true",
@@ -524,6 +537,7 @@ RELEASE_WEB_BUILD_STEP_LINES = (
     "        with:",
     REVIEWED_GIT_CONTEXT_LINE,
     REVIEWED_GIT_TOKEN_LINE,
+    *REVIEWED_GIT_SECRET_LINES,
     "          file: frontend/Dockerfile",
     "          platforms: linux/amd64",
     "          push: true",
@@ -604,6 +618,7 @@ RELEASE_TAG_SEAL_STEP_LINES = (
 RELEASE_STEP_HEADERS = (
     "      - name: Check out release SHA",
     "      - name: Assert immutable checkout",
+    "      - name: Prepare disk for scientific images",
     "      - name: Validate reviewed image publication policy",
     "      - name: Set up Node.js",
     "      - name: Set up Buildx",
@@ -730,6 +745,55 @@ def workflow_step_blocks(job_body: str) -> list[str]:
         ]
         for index, start in enumerate(starts)
     ]
+
+
+def validate_remote_git_context_auth(ci_text: str, failures: list[str]) -> None:
+    builds = []
+    for job in ("image-build", "release", "openscience-overlay", "openscience-release"):
+        body = workflow_job_body(ci_text, job, failures)
+        for step in workflow_step_blocks(body or ""):
+            if "uses: docker/build-push-action@" not in step:
+                continue
+            builds.append(step)
+            lines = step.splitlines()
+            expected = "\n".join((REVIEWED_GIT_TOKEN_LINE, *REVIEWED_GIT_SECRET_LINES))
+            if (
+                lines.count(REVIEWED_GIT_CONTEXT_LINE) != 1
+                or expected not in step
+                or len(re.findall(r"(?m)^          secrets:", step)) != 1
+            ):
+                failures.append(
+                    f"{job} must explicitly authenticate its immutable Git context "
+                    "with the job token as a BuildKit secret"
+                )
+    if len(builds) != 5:
+        failures.append("CI must retain exactly five authenticated remote Git build steps")
+
+
+def validate_image_disk_preparation(ci_text: str, failures: list[str]) -> None:
+    helper = "scripts/ci/prepare_image_build_disk.sh"
+    for job in ("image-build", "exact-b-bridge", "release"):
+        body = workflow_job_body(ci_text, job, failures)
+        steps = workflow_step_blocks(body or "")
+        expected = ["      - name: Prepare disk for scientific images"]
+        if job == "image-build":
+            expected.append("        if: matrix.name == 'backend'")
+        expected.extend(("        timeout-minutes: 5", f"        run: {helper}"))
+        selected = [step for step in steps if helper in step]
+        if len(selected) != 1 or selected[0].rstrip().splitlines() != expected:
+            failures.append(f"{job} must retain the bounded hosted-runner disk preparation")
+        elif steps.index(selected[0]) != 2:
+            failures.append(f"{job} must prepare image storage immediately after its checkout assertion")
+    if ci_text.count(helper) != 3:
+        failures.append("Only the three heavy image jobs may prepare runner disk space")
+    path = IMAGE_DISK_PREPARATION_PATH
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or stat.S_IMODE(path.stat().st_mode) != 0o755
+        or hashlib.sha256(path.read_bytes()).hexdigest() != EXPECTED_IMAGE_DISK_PREPARATION_SHA256
+    ):
+        failures.append("Image disk preparation must match the reviewed hosted-runner-only implementation")
 
 
 def validate_backend_image_identity_policy(
@@ -2943,6 +3007,8 @@ def main() -> int:
         postgres_client_bootstrap,
         failures,
     )
+    validate_remote_git_context_auth(ci_text, failures)
+    validate_image_disk_preparation(ci_text, failures)
     validate_backend_image_identity_policy(ci_text, failures)
     validate_openscience_release_policy(ci_text, failures)
     validate_backend_dockerfile_identity_policy(

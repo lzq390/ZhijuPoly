@@ -565,6 +565,10 @@ jobs:
           persist-credentials: false
       - name: Assert immutable checkout
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Prepare disk for scientific images
+        if: matrix.name == 'backend'
+        timeout-minutes: 5
+        run: scripts/ci/prepare_image_build_disk.sh
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - id: backend-identity
@@ -603,6 +607,8 @@ jobs:
         with:
           context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
           github-token: ${{ github.token }}
+          secrets: |
+            GIT_AUTH_TOKEN=${{ github.token }}
           file: ${{ matrix.file }}
           platforms: linux/amd64
           push: false
@@ -691,6 +697,9 @@ jobs:
           persist-credentials: false
       - name: Assert immutable checkout
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Prepare disk for scientific images
+        timeout-minutes: 5
+        run: scripts/ci/prepare_image_build_disk.sh
       - name: Install PostgreSQL 16 client
         timeout-minutes: 9
         run: |
@@ -733,6 +742,8 @@ jobs:
         with:
           context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
           github-token: ${{ github.token }}
+          secrets: |
+            GIT_AUTH_TOKEN=${{ github.token }}
           file: ops/openscience-ui-overlay/Dockerfile
           platforms: linux/amd64
           push: false
@@ -820,6 +831,9 @@ jobs:
           persist-credentials: false
       - name: Assert immutable checkout
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Prepare disk for scientific images
+        timeout-minutes: 5
+        run: scripts/ci/prepare_image_build_disk.sh
       - name: Validate reviewed image publication policy
         run: python3 scripts/ci/validate_workflows.py
       - name: Set up Node.js
@@ -871,6 +885,8 @@ jobs:
         with:
           context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
           github-token: ${{ github.token }}
+          secrets: |
+            GIT_AUTH_TOKEN=${{ github.token }}
           file: Dockerfile
           platforms: linux/amd64
           push: true
@@ -910,6 +926,8 @@ jobs:
         with:
           context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
           github-token: ${{ github.token }}
+          secrets: |
+            GIT_AUTH_TOKEN=${{ github.token }}
           file: frontend/Dockerfile
           platforms: linux/amd64
           push: true
@@ -1036,6 +1054,8 @@ jobs:
         with:
           context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
           github-token: ${{ github.token }}
+          secrets: |
+            GIT_AUTH_TOKEN=${{ github.token }}
           file: ops/openscience-ui-overlay/Dockerfile
           platforms: linux/amd64
           push: true
