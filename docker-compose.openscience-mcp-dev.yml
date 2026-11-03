@@ -120,8 +120,11 @@ services:
       start_period: 20s
 
   openscience-ui:
-    # Existing UI binary reused by immutable local image identity, with new state/network only.
-    image: sha256:7dfa854a2a934cd8a6f7f62ec6bda97c6d9ab6faaa6a67c12c24cebf95d6809a
+    # Guarded results assets appended to the approved local UI base image.
+    image: nexpoly-openscience-mcp-ui:dev
+    build:
+      context: ./ops/openscience-mcp-dev
+      dockerfile: UI.Dockerfile
     pull_policy: never
     user: "${NEXPOLY_OPENSCIENCE_DEV_UID}:${NEXPOLY_OPENSCIENCE_DEV_GID}"
     depends_on:

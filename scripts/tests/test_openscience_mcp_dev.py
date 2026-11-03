@@ -276,6 +276,59 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
             with self.assertRaises(dev.DevError):
                 dev.verify_project_ownership()
 
+    def test_ui_overlay_validation_is_explicit_after_upgrade_and_on_smoke(self):
+        container = self.owned_container()
+        container["Image"] = "derived-image"
+        container["Config"]["Labels"]["com.docker.compose.service"] = "openscience-ui"
+        container["Mounts"] = [{"Type": "tmpfs", "Destination": "/tmp"}]
+        with patch.object(dev, "run", return_value="container\n"), \
+                patch.object(dev, "inspect", return_value=container), \
+                patch.object(dev, "verify_ui_overlay") as verify:
+            # An existing development UI can be upgraded by `up --build`.
+            self.assertTrue(dev.verify_project_ownership())
+            verify.assert_not_called()
+            self.assertTrue(dev.verify_project_ownership(require_ui_overlay=True))
+            verify.assert_called_once_with("derived-image")
+        with patch.object(dev, "verify_project_ownership", return_value=False) as ownership:
+            with self.assertRaises(dev.DevError):
+                dev.smoke()
+        ownership.assert_called_once_with(require_ui_overlay=True)
+
+    def test_ui_overlay_requires_approved_base_layers_labels_and_nonroot_user(self):
+        base = {"Id": dev.UI_IMAGE, "RootFS": {"Layers": ["base-layer-one", "base-layer-two"]}}
+        derived = {"Id": "derived-image", "RootFS": {"Layers": ["base-layer-one", "base-layer-two", "overlay-layer"]},
+                   "Config": {"User": "1001:1001", "Labels": {
+                       "org.nexpoly.purpose": "openscience-mcp-ui-development",
+                       "org.nexpoly.expected-base-image": dev.UI_IMAGE,
+                       "org.nexpoly.expected-base-index-sha256": dev.UI_BASE_INDEX_SHA256,
+                       "org.nexpoly.ui-overlay-format": "1"}}}
+        for mutation in (None, "base-id", "derived-id", "purpose", "base-label", "index-label",
+                         "format", "user", "layers", "missing-base-layers", "no-overlay-layer"):
+            candidate_base, candidate_derived = json.loads(json.dumps([base, derived]))
+            if mutation == "base-id":
+                candidate_base["Id"] = "other-base"
+            elif mutation == "derived-id":
+                candidate_derived["Id"] = "other-image"
+            elif mutation in {"purpose", "base-label", "index-label", "format"}:
+                label = {"purpose": "org.nexpoly.purpose", "base-label": "org.nexpoly.expected-base-image",
+                         "index-label": "org.nexpoly.expected-base-index-sha256", "format": "org.nexpoly.ui-overlay-format"}[mutation]
+                candidate_derived["Config"]["Labels"][label] = "wrong"
+            elif mutation == "user":
+                candidate_derived["Config"]["User"] = "0:0"
+            elif mutation == "layers":
+                candidate_derived["RootFS"]["Layers"][0] = "other-base-layer"
+            elif mutation == "missing-base-layers":
+                candidate_base["RootFS"]["Layers"] = []
+            elif mutation == "no-overlay-layer":
+                candidate_derived["RootFS"]["Layers"].pop()
+            with self.subTest(mutation=mutation), \
+                    patch.object(dev, "run", return_value=json.dumps([candidate_base, candidate_derived])):
+                if mutation is None:
+                    dev.verify_ui_overlay("derived-image")
+                else:
+                    with self.assertRaises(dev.DevError):
+                        dev.verify_ui_overlay("derived-image")
+
     def test_both_relays_require_own_script_socket_directory_and_exact_network(self):
         for service in ("model-proxy", "model-egress"):
             for mutation in (None, "source", "writable", "network", "extra", "socket-source",
@@ -349,6 +402,41 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
             with self.assertRaises(dev.DevError):
                 dev.verify_shared()
         source.assert_not_called()
+
+    def test_all_local_build_tags_are_pinned_before_source_configuration_is_read(self):
+        backend = {"Image": dev.BACKEND_IMAGE, "Config": {"Labels": {
+            "com.docker.compose.project": "openscience-backend-poc",
+            "com.docker.compose.service": "openscience-backend",
+            "com.docker.compose.project.working_dir": str(dev.SHARED_ROOT)}}}
+        ui = {"Image": dev.UI_IMAGE, "Config": {"Labels": {
+            "com.docker.compose.project": "openscience-ui-poc",
+            "com.docker.compose.service": "openscience-ui",
+            "com.docker.compose.project.working_dir": str(dev.SHARED_UI_ROOT)}}}
+        approved = [dev.BACKEND_IMAGE, dev.UI_IMAGE, dev.UI_PATCH_IMAGE]
+        tags = ["openscience-backend-poc:38ba323-demo-rc1", dev.UI_BASE_TAG, dev.UI_PATCH_TAG]
+        for index, tag in enumerate(tags):
+            responses = [json.dumps([{"Id": value}]) for value in approved[:index]]
+            responses.append(json.dumps([{"Id": "unexpected-image"}]))
+            with self.subTest(tag=tag), patch.object(dev, "inspect", side_effect=[backend, ui]), \
+                    patch.object(dev, "run", side_effect=responses) as command, \
+                    patch.object(dev, "read_source") as source:
+                with self.assertRaises(dev.DevError):
+                    dev.verify_shared()
+            source.assert_not_called()
+            self.assertEqual(command.call_args.args[0], ["docker", "image", "inspect", tag])
+
+    def test_up_builds_then_requires_the_derived_ui_contract(self):
+        with patch.object(dev.sys, "argv", ["openscience_mcp_dev.py", "up"]), \
+                patch.object(dev, "operation_lock", return_value=contextlib.nullcontext()), \
+                patch.object(dev, "verify_project_ownership", return_value=True) as ownership, \
+                patch.object(dev, "verify_development_network"), patch.object(dev, "verify_prepared"), \
+                patch.object(dev, "compose", return_value="") as compose, \
+                patch.object(dev, "verify_shared", return_value=({}, {})), \
+                patch.object(dev, "protected_unchanged"), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(dev.main(), 0)
+        compose.assert_called_once_with("up", "-d", "--build", "--wait", "--wait-timeout", "120")
+        self.assertEqual(ownership.call_count, 2)
+        ownership.assert_called_with(require_ui_overlay=True)
 
     def test_private_baseline_detects_protected_changes(self):
         dev.private_directory()

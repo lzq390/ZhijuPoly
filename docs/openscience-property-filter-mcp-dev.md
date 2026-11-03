@@ -4,6 +4,8 @@
 
 **当前验收状态（2026-11-03）：真实对话验收通过。** 更新开发模型凭据后，从独立页面提交了一次提示，三个工具均真实完成、结果版本一致，最终回答已渲染且刷新后内容保持一致。Tg 搜索命中 18,614 个结构组、返回 2 组，直方图包含 45,160 条测量；MCP 审计中的三个调用均为 `ok`。生产、共享 OpenScience 与原有 `9001` 入口保持不变。
 
+开发页面已增加直接读取原始工具结果的图形展示：查询概览、材料与测量证据卡片、可悬停和键盘聚焦的直方图。无需要求模型输出 JSON；已有对话刷新后也会自动展示。模型原始回答若为完整 JSON，默认收起，可通过“查看原始回答”展开。
+
 浏览器不在开发机上时，先建立 SSH 转发，再访问本机的 `http://127.0.0.1:19111/`：
 
 ```bash
@@ -15,7 +17,7 @@ ssh -N -L 19111:127.0.0.1:19111 <开发机SSH地址>
 | 资源 | 配置 |
 |---|---|
 | OpenScience Compose 项目 | `nexpoly_openscience_dev` |
-| UI | `127.0.0.1:19111`，独立使用现有 UI 镜像的固定 image ID |
+| UI | `127.0.0.1:19111`，独立派生镜像 `nexpoly-openscience-mcp-ui:dev`，基底 image ID 固定 |
 | 后端 API | `127.0.0.1:14096`，独立派生镜像 `nexpoly-openscience-mcp:dev` |
 | 开发 Agent | `property-filter`，默认模型继承已配置的 `lab-openai-compatible/gpt-5.6-sol` |
 | MCP 配置名 | `nexpoly_property_filter` |
@@ -66,7 +68,11 @@ Authorization 配置为 `Bearer {file:/run/openscience/mcp-token}`。启动器�
 
 用户可以用自然语言提出属性范围、结果数量和分布需求，由模型依据工具描述及 Agent 指引选择调用。验收提示中写出工具名用于逐项验证接口，正常查询不要求用户掌握工具名或内部参数。
 
-结构化结果有两层：筛选 MCP 本身返回经过数据模型校验的 `structuredContent` JSON 对象及 `outputSchema`，包含材料、测量证据、单位、计数和版本；本期 OpenScience 适配层把该对象序列化后保存在工具输出文本中，供模型读取。聊天最终回复默认是模型生成的文本，也可要求输出 JSON；它与 MCP 原始结果的契约不同。当前没有材料表格、来源卡片或直方图的专用渲染组件。外部程序可以直接消费 MCP 的结构化结果。
+结构化结果有两层：筛选 MCP 本身返回经过数据模型校验的 `structuredContent` JSON 对象及 `outputSchema`，包含材料、测量证据、单位、计数和版本；本期 OpenScience 适配层把该对象序列化后保存在工具输出文本中，供模型读取。聊天最终回复是模型生成的文本，它与 MCP 原始结果的契约不同。开发 UI 的卡片和直方图直接读取对应工具原始结果，不把模型最终 JSON 作为展示数据源。其他 MCP 客户端可直接消费结构化结果，并按自身能力展示。
+
+`UI.Dockerfile` 从已核验的 UI 基底派生镜像，仅在已知 SHA-256 的 `index.html` 前置新增模块与样式；原应用 bundle、Nginx 配置和共享部署不改。新增静态资产位于共同内容哈希目录，浏览器产物使用 `.js` 以匹配现有 Nginx MIME。启动器同时核验基底、构建阶段镜像和派生 UI 的标签、原始层及运行用户。
+
+展示模块只观察同源 API 的会话目录与原始消息，补充请求也仅为读取已有消息；不会发送提示或重新调用 MCP。缓存按工作区目录和会话区分，结果绑定用户消息及数据版本，旧请求回包不能覆盖新快照。搜索零命中正常显示；目录/版本或数据校验失败会提示重新查询。材料保留完整 SMILES、原始值、标准值、来源与证据截断信息；直方图明确标注全库该属性的测量口径及范围外计数。极小/极大数值采用科学计数，避免显示为零。
 
 ## 启动、停止和令牌轮换
 
@@ -160,5 +166,19 @@ node --test ops/openscience-mcp-dev/patch.test.mjs ops/openscience-mcp-dev/dev-b
 同日的自然语言实测会话为 `http://127.0.0.1:19111/chat/ses_e60eb9693ffei3Y8AvJIX0I20T`，用户提示只提出玻璃化转变温度 100–200°C、两个结构、每结构一条测量证据及来源、全库分布和 JSON 输出等业务要求。模型自主完成目录解析、搜索和直方图查询：命中 5,026 个结构组，返回 2 组，全库直方图仍为 45,160 条测量。最终 JSON 可解析，命中数与数据版本均与工具原始结果一致。
 
 自然语言证据目录为 `.runtime/openscience-mcp-dev/browser-evidence/2026-11-03T01-44-36-155Z/`。原探针曾因编辑器合并换行而触发文本比较断言，失败的 `report.json` 保留；修正比较方式后，只读打开同一个已提交会话完成核对，未发送第二条提示。`readback-report.json` 记录工具与最终 JSON 核对、页面渲染及刷新一致性均通过。`mcp-results.json` 保存三工具原始结构化字段，`answer.json` 保存模型生成的业务 JSON；两者均为私有 `0600` 文件。界面证据为 `natural-language-conversation.png`。
+
+图形界面相关检查包括 36 项启动器测试和 18 项前端解析、目录绑定、构建及浏览器组件测试。复现命令：
+
+```bash
+python3 -m unittest scripts.tests.test_openscience_mcp_dev
+/home/devuser/.nvm/versions/node/v22.23.2/bin/node --test ops/openscience-mcp-dev/ui-patch.test.mjs ops/openscience-mcp-dev/results-controller.test.mjs ops/openscience-mcp-dev/results-view.test.mjs
+/home/devuser/.nvm/versions/node/v22.23.2/bin/node scripts/verify_openscience_results_ui.mjs
+```
+
+真实页面只读验收使用已有会话，依次检查桌面、刷新、切换历史会话、返回原会话和 390px 手机宽度，五阶段均通过；没有发送提示、调用工具或写入数据。卡片展示完整结构、原始/标准值、来源和截断说明；18 根 SVG 柱的数值及高度比例与真实直方图一致，悬停和键盘聚焦均显示真实区间计数。原模型 JSON 默认收起且可切换查看，普通文本回答保留。当前 Tg 100–200°C 会话显示 5,026 个结构组、2 个材料卡片，全库分布为 45,160 条测量；切换到全范围会话显示 18,614 组，返回后恢复原查询。
+
+最新私有验收目录为 `.runtime/openscience-mcp-dev/results-ui-evidence/2026-11-03T02-06-20-141Z/`，含 `report.json`、清晰图表 `histogram.png`、材料卡片 `material-card.png` 和各阶段页面截图。用户可在开发页面直接提问“找 Tg 在 100 到 200 摄氏度之间的聚合物，展示两个材料及测量来源，并画出 Tg 的全库分布”，无需指定工具名或 JSON。
+
+另以隔离的本地 mock 验证六个消息回包边界：跨工作区的旧响应、同工作区的旧空快照均不能覆盖当前结果，最新空快照正常移除面板并恢复原回答。10 个浏览器请求均为本地拦截的 GET，不修改服务数据；此证据与真实界面验收分开，记录在 `.runtime/openscience-mcp-dev/friendly-results-evidence/2026-11-03T02-08-05-680Z/local-fixture-report.json`。
 
 工具的单位、AND、版本、证据计数和错误码合同见 [数据库筛选 MCP 文档](property-filter-mcp.md)。独立开发实例验收不代表已接入共享或生产 OpenScience。

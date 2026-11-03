@@ -30,6 +30,11 @@ SHARED_BACKEND = "openscience-backend-20260928"
 SHARED_UI = "openscience-ui-20260922"
 BACKEND_IMAGE = "sha256:41a2b6929bc74a1bf3c0bac54df09f8e5f835954b3ba58dfba81f703b3ffe17a"
 UI_IMAGE = "sha256:7dfa854a2a934cd8a6f7f62ec6bda97c6d9ab6faaa6a67c12c24cebf95d6809a"
+UI_BASE_TAG = "openscience-ui-poc:4522be0-production-dual"
+UI_DEV_IMAGE = "nexpoly-openscience-mcp-ui:dev"
+UI_BASE_INDEX_SHA256 = "5647ece9a54520ad8df4b04b2424293a54f3537f21293649729522144ddd3157"
+UI_PATCH_TAG = "node:22-bookworm-slim"
+UI_PATCH_IMAGE = "sha256:d9f850096136edbc402debdd8729579a288aac64574ada0ff4db26b6ae58b0b2"
 PROVIDER = "lab-openai-compatible"
 MCP_NAME = "nexpoly_property_filter"
 MCP_HOST = "nexpoly_mcp_dev-property-filter-mcp-1"
@@ -139,7 +144,23 @@ def inspect(container: str) -> dict:
     return json.loads(run(["docker", "inspect", container]))[0]
 
 
-def verify_project_ownership() -> bool:
+def verify_ui_overlay(image_id: str) -> None:
+    base, derived = json.loads(run(["docker", "image", "inspect", UI_IMAGE, UI_DEV_IMAGE]))
+    labels = derived.get("Config", {}).get("Labels") or {}
+    base_layers = base.get("RootFS", {}).get("Layers", [])
+    derived_layers = derived.get("RootFS", {}).get("Layers", [])
+    if (base.get("Id") != UI_IMAGE or derived.get("Id") != image_id or image_id == UI_IMAGE
+            or labels.get("org.nexpoly.purpose") != "openscience-mcp-ui-development"
+            or labels.get("org.nexpoly.expected-base-image") != UI_IMAGE
+            or labels.get("org.nexpoly.expected-base-index-sha256") != UI_BASE_INDEX_SHA256
+            or labels.get("org.nexpoly.ui-overlay-format") != "1"
+            or derived.get("Config", {}).get("User") != "1001:1001"
+            or not base_layers or len(derived_layers) <= len(base_layers)
+            or derived_layers[:len(base_layers)] != base_layers):
+        raise DevError("Development UI overlay identity, base layers or build contract differs from the approved image.")
+
+
+def verify_project_ownership(*, require_ui_overlay: bool = False) -> bool:
     containers = run(["docker", "ps", "--all", "--filter", "label=com.docker.compose.project=" + PROJECT,
                       "--format", "{{.ID}}"])
     running = False
@@ -156,6 +177,8 @@ def verify_project_ownership() -> bool:
         if service == "openscience-ui" and any(
                 mount.get("Type") != "tmpfs" or mount.get("Destination") != "/tmp" for mount in mounts):
             raise DevError("Development UI unexpectedly mounts external state.")
+        if service == "openscience-ui" and require_ui_overlay:
+            verify_ui_overlay(value["Image"])
         if service in {"model-proxy", "model-egress"}:
             expected = {
                 "/app/model_proxy.py": (ROOT / "ops/openscience-mcp-dev/model_proxy.py", False),
@@ -231,10 +254,14 @@ def verify_shared() -> tuple[dict, dict]:
                 or labels.get("com.docker.compose.service") != service
                 or labels.get("com.docker.compose.project.working_dir") != str(source_root)):
             raise DevError("Shared OpenScience image or deployment identity differs from the approved source.")
-    # Also pin the mutable build FROM tag to the inspected immutable backend.
-    tagged = json.loads(run(["docker", "image", "inspect", "openscience-backend-poc:38ba323-demo-rc1"]))[0]
-    if tagged["Id"] != BACKEND_IMAGE:
-        raise DevError("The backend base-image tag no longer identifies the approved image.")
+    # Pin every mutable build FROM tag before building only from local images.
+    for tag, expected_image, kind in (
+            ("openscience-backend-poc:38ba323-demo-rc1", BACKEND_IMAGE, "backend base"),
+            (UI_BASE_TAG, UI_IMAGE, "UI base"),
+            (UI_PATCH_TAG, UI_PATCH_IMAGE, "UI patch-stage")):
+        tagged = json.loads(run(["docker", "image", "inspect", tag]))[0]
+        if tagged["Id"] != expected_image:
+            raise DevError(f"The {kind}-image tag no longer identifies the approved image.")
     expected = {
         "/run/openscience/openscience.jsonc": ("bind", str(SHARED_ROOT / "config/openscience.jsonc"), False),
         "/openscience/files": ("bind", str(SHARED_ROOT / "data/files"), True),
@@ -459,7 +486,7 @@ def get_local(url: str):
 
 
 def smoke() -> dict:
-    if not verify_project_ownership():
+    if not verify_project_ownership(require_ui_overlay=True):
         raise DevError("The isolated development stack must be running before smoke validation.")
     verify_prepared()
     if get_local(UI_URL + "/healthz").strip() != b"ok":
@@ -495,7 +522,7 @@ def main() -> int:
                     verify_development_network()
                     verify_prepared()
                     compose("up", "-d", "--build", "--wait", "--wait-timeout", "120")
-                    verify_project_ownership()
+                    verify_project_ownership(require_ui_overlay=True)
                     protected_unchanged(verify_shared()[0])
                     result = {"action": "up", "project": PROJECT, "ui": UI_URL, "api": API_URL}
                 elif args.action == "down":
