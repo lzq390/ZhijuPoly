@@ -184,6 +184,7 @@ export function AppShell({
   const isDatabaseAnalysisWorkbench = activeModule === "database";
   const isKnowledgeWorkbench = activeModule === "knowledge";
   const isPolytaoWorkbench = activeModule === "polytaoGeneration";
+  const isUsagePage = activeModule === "personalUsage";
   const isResearchWorkbench =
     isSimilarityExplorerWorkbench ||
     isDatabaseQueryWorkbench ||
@@ -201,6 +202,9 @@ export function AppShell({
     isStructureWorkbench ||
     isReverseDesignWorkbench ||
     isConditionalGenerationWorkbench;
+  // Usage owns a fixed header and an inner scroll region, so its containing
+  // block must have a bounded height just like the workbenches.
+  const hasViewportLayout = isResearchWorkbench || isUsagePage;
 
   const activeGroupId =
     moduleGroups.find((group) => group.items.some((item) => item.isActive))?.id ?? null;
@@ -438,8 +442,9 @@ export function AppShell({
           className={
             isHome
               ? "min-h-0 flex-1 overflow-hidden"
-              : isResearchWorkbench
+              : hasViewportLayout
                 ? `min-h-0 flex-1 overflow-hidden ${
+                    isUsagePage ||
                     isReverseDesignWorkbench ||
                     isConditionalGenerationWorkbench ||
                     isStructureWorkbench ||
@@ -471,7 +476,7 @@ export function AppShell({
                 ? "flex h-full min-h-0 flex-col"
                 : [
                     "relative mx-auto flex flex-col",
-                    isResearchWorkbench ? "h-full gap-0" : "gap-8",
+                    isUsagePage ? "h-full min-h-0 gap-0" : isResearchWorkbench ? "h-full gap-0" : "gap-8",
                     fullBleed ? "max-w-none" : "max-w-[1480px]"
                   ].join(" ")
             }

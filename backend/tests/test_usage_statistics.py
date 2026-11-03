@@ -13,7 +13,7 @@ from app.auth.context import Identity, user_context
 from app.postgres_database import postgres_connection
 from app.routers.usage import router
 from app.services.usage_schema import validate_usage_schema
-from app.services.usage_statistics import UsageStatistics, period
+from app.services.usage_statistics import UsageQueryError, UsageStatistics, period
 from task_usage.ledger import record_event
 from test_usage_repository import usage_db, enabled, event, A, B, T0, ROOT
 
@@ -31,7 +31,8 @@ def unique_module():
 
 def summary(dsn,module,**kwargs):
     with user_context(Identity(A)):
-        return UsageStatistics(dsn).summary(start=kwargs.get('start',T0),end=kwargs.get('end',T0+timedelta(days=1)),module=module)
+        return UsageStatistics(dsn).summary(start=kwargs.get('start',T0),end=kwargs.get('end',T0+timedelta(days=1)),
+                                            module=module,timezone=kwargs.get('timezone','UTC'))
 
 
 def test_child_after_midnight_inherits_root_cohort_and_metrics_do_not_double_count(usage_db):
@@ -88,6 +89,31 @@ def test_retry_numeric_ten_after_two_and_opaque_attempts_use_start_order(usage_d
         prepare(connection,module,task='opaque',attempt_id='instance:new:1',status='running',at=T0+timedelta(minutes=2))
         record_event(connection,**{**first,'event_key':uuid4().hex,'status':'failed','occurred_at':T0+timedelta(minutes=3)})
     assert summary(usage_db,module)['totals']['states']=={'completed':1,'running':1}
+
+
+def test_summary_beijing_daily_buckets_use_submission_cohort_not_retry_or_child_time(usage_db):
+    module = unique_module()
+    before_midnight = T0 + timedelta(hours=16) - timedelta(microseconds=1)
+    midnight = T0 + timedelta(hours=16)
+    with psycopg.connect(usage_db) as connection:
+        prepare(connection, module, task='before', at=before_midnight, submitted_at=before_midnight)
+        prepare(connection, module, task='at', at=midnight, submitted_at=midnight, status='running')
+        prepare(connection, module, task='retry', attempt_id='1', at=before_midnight, submitted_at=before_midnight)
+        prepare(connection, module, task='retry', attempt_id='2', at=midnight + timedelta(hours=1),
+                submitted_at=midnight + timedelta(hours=1), status='completed')
+        prepare(connection, module, task='provider', kind='provider', parent_task_id=module + ':retry',
+                root_task_id=module + ':retry', at=T0 + timedelta(days=1), metrics={'provider_total_tokens':7})
+    utc = summary(usage_db, module)
+    beijing = summary(usage_db, module, timezone='Asia/Shanghai')
+    assert utc['period']['timezone'] == 'UTC'
+    assert utc['daily'] == [{'date':'2026-01-01','tasks':3,'states':{'queued':1,'running':1,'completed':1}}]
+    assert beijing['period'] == {**utc['period'], 'timezone':'Asia/Shanghai'}
+    assert beijing['daily'] == [
+        {'date':'2026-01-01','tasks':2,'states':{'queued':1,'completed':1}},
+        {'date':'2026-01-02','tasks':1,'states':{'running':1}},
+    ]
+    assert beijing['totals'] == utc['totals']
+    assert beijing['totals']['attempts'] == 4 and beijing['totals']['child_calls'] == 1
 
 
 def test_owner_isolation_default_denial_and_half_open_bounds(usage_db):
@@ -192,13 +218,54 @@ def test_api_ignores_untrusted_owner_filter_and_returns_only_personal_rows(api,u
     assert 'coverage' in summary_response.json()
 
 
-def test_api_storage_error_is_redacted(api,monkeypatch):
+def test_api_beijing_natural_day_keeps_half_open_instant_bounds_and_records_match(api, usage_db):
+    app, client = api
+    app.state.owner = A
+    module = unique_module()
+    start, end = T0 - timedelta(hours=8), T0 + timedelta(hours=16)
+    with psycopg.connect(usage_db) as connection:
+        for task, stamp in [('before', start - timedelta(microseconds=1)), ('start', start),
+                            ('last', end - timedelta(microseconds=1)), ('end', end)]:
+            prepare(connection, module, task=task, at=stamp, submitted_at=stamp)
+        prepare(connection, module, task='foreign', owner=B, at=start, submitted_at=start)
+    params = {'start':start.isoformat(), 'end':end.isoformat(), 'module':module, 'owner_user_id':B}
+    beijing_response = client.get('/api/v1/usage/summary', params={**params, 'timezone':'Asia/Shanghai'})
+    assert beijing_response.status_code == 200
+    beijing = beijing_response.json()
+    assert beijing['period'] == {'start':start.isoformat(), 'end':end.isoformat(),
+                                'timezone':'Asia/Shanghai', 'basis':'task_submitted_at'}
+    assert beijing['daily'] == [{'date':'2026-01-01','tasks':2,'states':{'queued':2}}]
+    default = client.get('/api/v1/usage/summary', params=params).json()
+    explicit_utc = client.get('/api/v1/usage/summary', params={**params, 'timezone':'UTC'}).json()
+    assert default == explicit_utc
+    assert default['period']['timezone'] == 'UTC'
+    assert default['daily'] == [{'date':'2025-12-31','tasks':1,'states':{'queued':1}},
+                                {'date':'2026-01-01','tasks':1,'states':{'queued':1}}]
+    assert default['totals'] == beijing['totals']
+    records = client.get('/api/v1/usage/records', params=params).json()
+    assert records['total'] == 2
+    assert {row['task_id'] for row in records['items']} == {module + ':start', module + ':last'}
+
+
+@pytest.mark.parametrize('value', ['', 'UTC+08:00', 'Asia/Tokyo', "Asia/Shanghai'); SELECT 1; --"])
+def test_summary_rejects_unsupported_timezone_before_database(api, monkeypatch, value):
+    app, client = api
+    app.state.owner = A
+    with user_context(Identity(A)), pytest.raises(UsageQueryError, match='Invalid timezone'):
+        UsageStatistics('never-connect').summary(start=T0, end=T0 + timedelta(days=1), timezone=value)
+    monkeypatch.setattr(UsageStatistics, 'summary', lambda **kwargs: pytest.fail('invalid timezone reached service'))
+    assert client.get('/api/v1/usage/summary', params={'timezone':value}).status_code == 422
+
+
+@pytest.mark.parametrize('endpoint', ['summary', 'records'])
+@pytest.mark.parametrize('exception', [RuntimeError, ValueError])
+def test_api_storage_error_is_redacted(api,monkeypatch,caplog,endpoint,exception):
     app,client=api
     app.state.owner=A
-    def fail(*args,**kwargs):raise RuntimeError('password=synthetic-must-not-leak')
-    monkeypatch.setattr(UsageStatistics,'summary',fail)
-    result=client.get('/api/v1/usage/summary')
-    assert result.status_code==503 and 'synthetic-must-not-leak' not in result.text
+    def fail(*args,**kwargs):raise exception('password=synthetic-must-not-leak')
+    monkeypatch.setattr(UsageStatistics,endpoint,fail)
+    result=client.get('/api/v1/usage/'+endpoint)
+    assert result.status_code==503 and 'synthetic-must-not-leak' not in result.text + caplog.text
 
 
 def test_api_partial_coverage_is_not_called_external_uncovered(api,monkeypatch):

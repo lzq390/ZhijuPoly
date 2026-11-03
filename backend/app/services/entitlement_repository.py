@@ -85,8 +85,28 @@ def _read_saved(self,name,*,owner_user_id,connection=None,**kwargs):
 def _read_saved_operation(self,*,owner_user_id,operation_id,connection=None):
     return _read_saved(self,"get",owner_user_id=owner_user_id,operation_id=operation_id,connection=connection)
 
-def _read_saved_operations(self,*,owner_user_id,module=None,limit=50,offset=0,connection=None):
-    return _read_saved(self,"list_operations",owner_user_id=owner_user_id,module=module,limit=limit,offset=offset,connection=connection)
+def _read_saved_operations(self,*,owner_user_id,module=None,module_group=None,limit=50,offset=0,connection=None):
+    from app.usage_groups import resolve_group_modules
+    from task_usage import _entitlement_store as store
+    members = resolve_group_modules(module, module_group)
+    if members is None:
+        return _read_saved(self,"list_operations",owner_user_id=owner_user_id,module=module,limit=limit,offset=offset,connection=connection)
+    # Keep the worker-safe quota protocol unchanged: this is only a grouped
+    # historical read, using the same schema checks, ordering and receipt DTO.
+    def read(active):
+        if not _saved_schema_available(active):
+            return []
+        if type(limit) is not int or not 1 <= limit <= 200 or type(offset) is not int or not 0 <= offset <= 100000:
+            raise ValueError("Invalid pagination")
+        rows = store._rows(active, """SELECT * FROM usage_entitlements.operations
+            WHERE owner_user_id=%s AND module=ANY(%s)
+            ORDER BY created_at DESC,operation_id LIMIT %s OFFSET %s""",
+            (store._owner(owner_user_id), list(members), limit, offset))
+        return [store._dto(row) for row in rows]
+    if connection is not None:
+        return read(connection)
+    with postgres_connection(self.dsn,readonly_snapshot=True) as active:
+        return read(active)
 
 EntitlementRepository.read_saved_operation = _read_saved_operation
 EntitlementRepository.read_saved_operations = _read_saved_operations

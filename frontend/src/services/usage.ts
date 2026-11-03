@@ -1,5 +1,5 @@
 import { privateFetch } from "../auth/session";
-import type { UsageCatalog, UsagePeriod, UsageRecords, UsageRecordsQuery, UsageSummary } from "../types/usage";
+import type { UsageActivity, UsageCatalog, UsagePeriod, UsageRecords, UsageRecordsQuery, UsageSummary } from "../types/usage";
 
 const BASE = `${import.meta.env.VITE_API_BASE_URL ?? "/api/v1"}/usage`;
 export class UsageRequestError extends Error {
@@ -19,17 +19,35 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
 }
 function periodParams(period: UsagePeriod) {
   // Deliberate allowlist: caller-supplied owner/user fields never reach the API.
+  if (period.module && period.module_group) throw new Error("功能模块与具体任务类型不能同时筛选。");
   const query = new URLSearchParams({ start: period.start, end: period.end });
   if (period.module) query.set("module", period.module);
+  if (period.module_group) query.set("module_group", period.module_group);
   return query;
 }
 export const fetchUsageCatalog = (signal?: AbortSignal) => get<UsageCatalog>("/catalog", signal);
-export const fetchUsageSummary = (period: UsagePeriod, signal?: AbortSignal) =>
-  get<UsageSummary>(`/summary?${periodParams(period)}`, signal);
+export function fetchUsageSummary(period: UsagePeriod, signal?: AbortSignal) {
+  const query = periodParams(period);
+  if (period.timezone) query.set("timezone", period.timezone);
+  return get<UsageSummary>(`/summary?${query}`, signal);
+}
 export function fetchUsageRecords(filter: UsageRecordsQuery, signal?: AbortSignal) {
   const query = periodParams(filter);
   if (filter.status) query.set("status", filter.status);
   query.set("page", String(filter.page)); query.set("page_size", String(filter.page_size));
   query.set("include_children", String(filter.include_children));
   return get<UsageRecords>(`/records?${query}`, signal);
+}
+
+/** Independent task history; this endpoint never reserves or settles entitlements. */
+export function fetchUsageActivity(offset: number, module?: string, signal?: AbortSignal) {
+  const query = new URLSearchParams({ offset: String(offset), limit: "25" });
+  if (module) query.set("module", module);
+  return get<UsageActivity>(`/activity?${query}`, signal);
+}
+
+export function fetchUsageActivityByGroup(offset: number, moduleGroup?: string, signal?: AbortSignal) {
+  const query = new URLSearchParams({ offset: String(offset), limit: "25" });
+  if (moduleGroup) query.set("module_group", moduleGroup);
+  return get<UsageActivity>(`/activity?${query}`, signal);
 }

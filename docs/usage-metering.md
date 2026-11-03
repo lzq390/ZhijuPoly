@@ -4,13 +4,40 @@
 
 ## 用户入口与接口
 
-账户菜单“我的用量”，路由 `/account/usage`。默认最近 30 天，UTC 日期范围最多 366 天，结束日期在界面包含当日、请求中转换为次日零点的排他上界。可按模块筛选，查看状态、日趋势、指标、分页任务明细及子调用。
+账户菜单“我的用量”，路由 `/account/usage`。页面统一显示北京时间（UTC+8），默认最近 30 天，日期范围最多 366 天；结束日期在界面包含当日，请求中将北京次日零点转换为 UTC 瞬时值作为排他上界。额度周期只转换展示时区，仍使用服务端原有起止时刻。可按模块筛选，查看状态、日趋势、指标、分页任务明细及子调用。
 
 三个接口均使用现有会话身份，既不接受也不返回其他用户的标识：
 
 * `GET /api/v1/usage/catalog`：模块、覆盖范围和指标单位；关闭时仍可说明未启用。
-* `GET /api/v1/usage/summary`：时间范围、汇总、模块统计、日趋势及覆盖说明。
+* `GET /api/v1/usage/summary`：时间范围、汇总、模块统计、日趋势及覆盖说明。可选 `timezone=UTC|Asia/Shanghai` 控制每日分桶并在 `period.timezone` 回显，省略时沿用 UTC；页面明确请求 `Asia/Shanghai`。`start` / `end` 始终是带时区的瞬时范围。
 * `GET /api/v1/usage/records`：分页记录；支持 `status`、`include_children`。
+
+操作记录、计次回执和资源观测的下拉严格对应侧边栏的 16 个模块，名称和顺序与 `frontend/src/App.tsx` 一致，列表和详情保留具体任务类型。分组由 `app/usage_groups.py` 统一定义；`catalog`、`activity`、`operations` 返回 `module_groups`（`id`、`label`、`modules`）。
+
+| 侧边栏模块 | 内部任务类型 |
+| --- | --- |
+| 结构工作台 | `structure`、`ocsr` |
+| 知识检索 | `knowledge`、`online_knowledge` |
+| 聚合物生成 | `polytao` |
+| 单体逆合成反推 | `retrosynthesis` |
+| 聚合物相似性探索 | `query` |
+| 数据库查询 | `database_query` |
+| 数据库筛选 | `database_filter` |
+| 数据库分析 | `database_analysis`、`dft_history` |
+| 均聚物性质预测 | `predict` |
+| 单体正向聚合 | `polymerization`、`polymerization_batch`、`batch_preflight` |
+| MD 模拟 | `polymer_md`、`md_demo` |
+| 单体 MD 模拟 | `monomer_md` |
+| 单体 DFT | `monomer_dft` |
+| 条件聚合物生成 | `conditional_generation` |
+| Tg 逆向设计 | `reverse_design`、`tg_assistant` |
+| 高通量优化演示 | 暂无观测写入，筛选为空 |
+
+两个 MD 模块、两种聚合物生成各自独立；DFT 历史查询属于数据库分析，不与新 DFT 计算合并。高通量优化演示保留侧边栏选项，不生成模拟用量记录。
+
+旧 `database_browser` 记录未保存请求路由，无法可靠区分数据库查询、筛选、分析；与旧 `assistant`、跨模块 `recording_summary`、外部 `openscience` 一样，保留在“全部模块”，显示未归属侧栏模块，不复制到多个分组。后续数据库请求按受控路由记录为 `database_query`（SMILES 查询）、`database_filter`（性质筛选）或 `database_analysis`（其他数据库分析任务）；仅细化观测上下文，不改变路由授权或计次政策中的 `database_browser`。
+
+四个列表／统计接口（`summary`、`records`、`activity`、`operations`）支持 `module_group`。旧 `module` 参数仍按具体任务类型精确筛选；两者互斥，未知组或同时指定返回 422。模块筛选在数据库排序和分页前执行，不能只筛当前页或在客户端拼接多个分页结果。分组不合并已有任务身份、不改写历史记录，也不把查询或演示解释为新计算。任务短 ID 去掉与任务类型匹配的前缀后显示，详情和复制仍保留完整观测 ID。
 
 汇总和明细由 SQL 显式限定当前用户，并同时受数据库 RLS 保护。重复可读快照保证同一次响应中的计数和指标一致。界面沿用既有离开编辑页保护，登录身份切换会清空旧结果、取消请求并拒绝迟到响应。
 
@@ -30,15 +57,15 @@
 
 ## 采集边界
 
-21 个受控模块全部标记为 `partial`（部分覆盖），包含 36 条同步任务路由、7 条原生异步提交路由及 54 条显式观察路由（含个人结构库保存、重取和管理）。路由分类来自 `app/usage_catalog.py`。机械覆盖测试验证路由分类，没有证明所有执行分支或所有资源指标均已采集；OpenScience 也不是唯一缺口。新增 API 必须明确归类，避免遗漏或重复创建根任务。
+25 个受控任务类型（含保留的历史类型）全部标记为 `partial`（部分覆盖），包含同步请求、8 类原生异步提交及显式观察路由（含个人结构库保存、重取和管理）。路由分类来自 `app/usage_catalog.py`。机械覆盖测试验证路由分类，没有证明所有执行分支或所有资源指标均已采集；OpenScience 也不是唯一缺口。新增 API 必须明确归类，避免遗漏或重复创建根任务。
 
-原生异步任务包括 MD、DFT、批量聚合、在线知识抽取、Tg 条件生成、PolyTAO 和逆向设计。持久任务在业务事务中写入观测；分块与重试保留独立 attempt。保留原有取消、租约、终态与启动授权机制，不新增可绕过保护的任务操作。
+原生异步任务包括单体 MD、聚合物 MD、DFT、批量聚合、在线知识抽取、Tg 条件生成、PolyTAO 和逆向设计。持久任务在业务事务中写入观测；分块与重试保留独立 attempt。保留原有取消、租约、终态与启动授权机制，不新增可绕过保护的任务操作。
 
 同步任务覆盖性质预测、结构查询和处理、OCSR、逆合成、单次聚合、批量导入校验、数据库检索、历史 DFT、知识检索、MD 演示，以及助手、Tg 助手和浏览总结。局部模型调用保留独立 execution 观测。轮询、事件订阅、下载、登录、健康检查、清理操作和用量查询自身不产生新的计算任务。演示 MD 与历史 DFT 查询明确区别于真实科学计算。
 
 供应商包装器已接入现有 Chat/Responses 同步与流调用、在线抽取、文献 HTTP 和原始 HTTP 浏览总结；fallback 是独立子尝试。这里只说明插桩入口，不保证供应商一定返回 usage。助手 Chat 流当前未附加 `stream_options.include_usage`，因而常缺 token；包装器保持原请求参数，不擅自给兼容端点增加此选项。浏览总结流原有请求已带 `include_usage`，仍只记录真实回传值。Responses 仅按收到的终态事件读取 usage。计量不增加付费调用、不改变认证和重试策略。生产者实际结束才结束对应观测，客户端断开不等于后台计算结束。
 
-### 21 个模块当前实际指标
+### 25 个任务类型当前实际指标
 
 下表列代码已有写入点，所有行的覆盖等级均为 **partial**；未到达对应调用或未可靠写入终态时，指标仍可未知。
 
@@ -62,9 +89,13 @@
 | `reverse_design` | 同步查询／原生任务 W | 当前没有独立模型 E 插桩 |
 | `query` | 请求 W；性质匹配实际调用预测器时有 E 子记录 | 普通 lookup／PG／SVG 路径仅 W |
 | `structure` | 2D／3D／标准化请求 W | 结构计算没有独立 E 插桩 |
-| `database_browser` | 已列入目录的浏览／筛选请求 W | 未采集数据库资源；观察接口不另建根任务 |
+| `database_browser` | 历史浏览／筛选请求 W | 原始记录未保存路由，不能补推侧边栏归属 |
+| `database_query` | SMILES 查询请求 W | 未采集数据库 CPU、IO 或独立执行指标 |
+| `database_filter` | 性质筛选选项、直方图和检索请求 W | 只细化观测归属，不改变原准入／计次政策 |
+| `database_analysis` | 数据集、统计、结构性质、DFT 数据等分析请求 W | 观察接口不另建根任务；未采集数据库资源 |
 | `dft_history` | 历史查询 W | 不代表本次运行了 DFT |
 | `monomer_md` | 原生根 W；已观察到开始时 Q | 没有科学执行 E；计划步数不是已测执行量 |
+| `polymer_md` | 原生根 W；数据库授权开始后 Q | 当前仅整项任务；没有阶段级 E、重试子记录或产物字节 |
 | `monomer_dft` | 持久 attempt 创建到终态观测 W | 无 Q 或科学 E；仅收到终态不能补造开始时间 |
 | `polymerization` | 单次聚合请求 W | 没有独立 CPU／模型执行指标 |
 | `polymerization_batch` | 原生根 W；chunk 另有 observed wall 子记录 | chunk 的 `execution_ms` 仍未知；重启中断 chunk 不估算时长 |
