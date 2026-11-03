@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from app.auth.context import service_context
-
 import inspect
 from concurrent.futures import Future, ThreadPoolExecutor, wait as wait_for_futures
 from dataclasses import dataclass, field
@@ -10,7 +8,7 @@ from threading import Lock
 from time import monotonic
 from typing import Callable
 
-from app.services.private_execution import submit_private_job
+from app.services.private_execution import capture_job_owner_scope, submit_private_job
 from app.services.entitlement_memory import submit_memory_job
 from app.services.usage_background import finish_background_usage
 
@@ -135,6 +133,7 @@ class PolytaoJobManager:
             if replay is not None:
                 return replay
         accepted_deadline = self._monotonic() + max(0.0, float(timeout_seconds))
+        owner_scope = capture_job_owner_scope()
         with self._lock:
             if self._shutdown_started:
                 raise RuntimeError("PolyTAO job manager is shutting down")
@@ -179,6 +178,7 @@ class PolytaoJobManager:
             lambda completed_future, submitted_job_id=job.job_id: self._on_future_done(
                 submitted_job_id,
                 completed_future,
+                owner_scope,
             )
         )
         return entitlement.replay() if entitlement is not None else snapshot
@@ -342,14 +342,17 @@ class PolytaoJobManager:
 
         self._store.mutate(NAMESPACE, job_id, update, terminal=True)
 
-    def _on_future_done(self, job_id: str, future: Future[None]) -> None:
-        entitlement = self._entitlements.get(job_id)
-        if entitlement is not None:
-            with entitlement.owner_scope():
+    def _on_future_done(self, job_id: str, future: Future[None], owner_scope) -> None:
+        try:
+            with owner_scope():
                 self._finish_future(job_id, future)
-        else:
-            with service_context():
-                self._finish_future(job_id, future)
+        finally:
+            # Releasing execution capacity does not authorize result eviction
+            # or release an entitlement whose settlement is still unconfirmed.
+            if future.done():
+                with self._lock:
+                    if self._futures.get(job_id) is future:
+                        self._futures.pop(job_id, None)
 
     def _finish_future(self, job_id: str, future: Future[None]) -> None:
         try:
@@ -364,16 +367,15 @@ class PolytaoJobManager:
                     )
         finally:
             entitlement = self._entitlements.get(job_id)
-            persisted = entitlement is None or entitlement.finish(
-                self._store.read(NAMESPACE, job_id, self._snapshot), future)
-            if getattr(future, "_nexpoly_usage", None) is not None:
-                finish_background_usage(future, self._store.read(NAMESPACE, job_id, self._snapshot))
+            snapshot = self._store.read(NAMESPACE, job_id, self._snapshot)
+            try:
+                persisted = entitlement is None or entitlement.finish(snapshot, future)
+            finally:
+                if getattr(future, "_nexpoly_usage", None) is not None:
+                    finish_background_usage(future, snapshot)
             if persisted:
                 self._store.mark_reapable(NAMESPACE, job_id)
                 self._entitlements.pop(job_id, None)
-            with self._lock:
-                if self._futures.get(job_id) is future:
-                    self._futures.pop(job_id, None)
 
     @staticmethod
     def _complete_job(job: _PolytaoJob, response: PolytaoGenerationResponse) -> None:

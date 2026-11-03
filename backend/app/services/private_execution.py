@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Executor, Future
+from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 from threading import RLock
@@ -13,12 +14,30 @@ import anyio
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.auth.context import current_identity, current_owner_id, user_context, database_settings
+from app.auth.context import (
+    Identity, current_identity, current_owner_id, user_context, database_settings, service_context,
+)
 from app.task_control import acquire_admission, authorize_memory_start
 from app.task_observability import TaskExecutionContext, log_task_event
 
 held_channel: ContextVar[str | None] = ContextVar("private_execution_channel", default=None)
 held_task_context: ContextVar[TaskExecutionContext | None] = ContextVar("private_task_context", default=None)
+
+
+def capture_job_owner_scope():
+    """Bind a trusted completion callback to its submitting owner, with or without quotas."""
+    identity = Identity(current_owner_id())
+    settings = database_settings()
+
+    @contextmanager
+    def owner_scope():
+        # Future callbacks execute after the worker's user_context has exited,
+        # or synchronously in the cancelling thread. Keep public store reads
+        # owner-strict; retain neither a session nor an arbitrary caller actor.
+        with user_context(identity, settings), service_context():
+            yield
+
+    return owner_scope
 
 
 def bounded_sync(channel: str):
