@@ -11,9 +11,10 @@ export type UsageCatalog = {
   modules: Array<{ id: string; label: string; category: string; coverage: "measured" | "partial" | "external"; note?: string }>;
   metrics: Array<{ id: string; label: string; unit: string }>;
 };
-export type UsagePeriod = { start: string; end: string; module?: string };
+export type UsageTimezone = "UTC" | "Asia/Shanghai";
+export type UsagePeriod = { start: string; end: string; module?: string; timezone?: UsageTimezone };
 export type UsageSummary = {
-  period: { start: string; end: string; timezone: "UTC"; basis: "task_submitted_at" };
+  period: { start: string; end: string; timezone: UsageTimezone; basis: "task_submitted_at" };
   totals: UsageTotals;
   modules: Array<UsageTotals & { module: string; label: string }>;
   daily: Array<{ date: string; tasks: number; states: Partial<Record<UsageStatus, number>> }>;
@@ -28,4 +29,15 @@ export type UsageRecord = {
 export type UsageRecords = { items: UsageRecord[]; page: number; page_size: number; total: number };
 export type UsageRecordsQuery = UsagePeriod & {
   status?: UsageStatus; page: number; page_size: number; include_children: boolean;
+};
+
+export type UsageActivityRecord = UsageRecord & { attempt_count: number; updated_at: string };
+export type UsageActivity = {
+  mode: "activity_only";
+  items: UsageActivityRecord[];
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  modules: Array<{ id: string; label: string }>;
+  warnings: string[];
 };

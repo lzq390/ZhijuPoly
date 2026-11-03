@@ -1,0 +1,42 @@
+.np-usage-drawer-layer { position: fixed; inset: 0; z-index: 120; }
+.np-usage-drawer-backdrop { position: absolute; inset: 0; background: color-mix(in srgb, var(--np-theme-ink) 28%, transparent); opacity: 0; transition: opacity var(--np-motion-backdrop, 240ms) var(--np-ease-exit, ease-in-out); touch-action: none; }
+.np-usage-drawer-layer[data-motion-active="true"] .np-usage-drawer-backdrop { opacity: 1; }
+.np-usage-drawer { position: absolute; inset: 0 0 0 auto; display: flex; flex-direction: column; width: min(380px, 100%); height: 100%; min-width: 0; background: var(--np-theme-surface); color: var(--np-theme-ink); border-left: 1px solid var(--np-theme-surface-border); box-shadow: var(--np-theme-surface-shadow); transform: translateX(100%); transition: transform var(--np-motion-drawer-exit, 320ms) var(--np-ease-exit, ease-in-out); }
+.np-usage-drawer[data-motion-active="true"] { transform: translateX(0); transition-duration: var(--np-motion-drawer-enter, 400ms); transition-timing-function: var(--np-ease-enter, ease-in-out); }
+.np-usage-drawer-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px; border-bottom: 1px solid var(--np-theme-border-soft); }
+.np-usage-drawer-header p { color: var(--np-theme-muted); font-size: 12px; }
+.np-usage-drawer-header h2 { margin: 4px 0 0; font-size: 20px; }
+.np-usage-drawer-header button { display: grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; }
+.np-usage-drawer button svg { width: 16px; height: 16px; }
+.np-usage-drawer-content { display: flex; flex-direction: column; gap: 20px; padding: 24px; overflow: auto; overscroll-behavior: contain; min-height: 0; }
+.np-usage-drawer h3 { margin: 0; font-size: 15px; }
+.np-usage-drawer-receipt, .np-usage-drawer-results { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.np-usage-drawer-results { padding-top: 20px; border-top: 1px solid var(--np-theme-border-soft); }
+.np-usage-drawer-results > button { align-self: start; }
+.np-usage-drawer-id { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; color: var(--np-theme-muted); }
+.np-usage-drawer-id code { flex: 0 0 100%; color: var(--np-theme-ink); user-select: all; overflow-wrap: anywhere; }
+.np-usage-drawer-id button { display: inline-flex; gap: 6px; align-items: center; }
+.np-usage-drawer-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0; font-size: 13px; }
+.np-usage-drawer-facts > div:nth-child(n+5) { grid-column: 1 / -1; }
+.np-usage-drawer-facts dt { color: var(--np-theme-muted); }
+.np-usage-drawer-facts dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+.np-usage-drawer details { max-width: 100%; min-width: 0; }
+.np-usage-drawer pre { margin: 12px 0 0; padding: 12px; max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 8px; background: var(--np-theme-neutral-soft); font-size: 12px; line-height: 1.6; }
+.np-usage-drawer :is(code, pre) { font-family: var(--font-mono); }
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-usage-drawer { width: 540px; }
+  .np-usage-drawer-header, .np-usage-drawer-content { padding: 32px; }
+  .np-usage-drawer-header { gap: 22px; }
+  .np-usage-drawer-header p, .np-usage-drawer-id, .np-usage-drawer pre { font-size: 15px; }
+  .np-usage-drawer-header h2 { margin-top: 6px; font-size: 27px; }
+  .np-usage-drawer-header button { flex-basis: 52px; width: 52px; height: 52px; }
+  .np-usage-drawer button svg { width: 20px; height: 20px; }
+  .np-usage-drawer-content { gap: 28px; }
+  .np-usage-drawer h3 { font-size: 20px; }
+  .np-usage-drawer-receipt, .np-usage-drawer-results { gap: 22px; }
+  .np-usage-drawer-results { padding-top: 28px; }
+  .np-usage-drawer-facts { gap: 22px; font-size: 16px; }
+  .np-usage-drawer pre { padding: 16px; max-height: 480px; }
+}
+@media (max-width: 599px) { .np-usage-drawer { width: 100%; } .np-usage-drawer-header, .np-usage-drawer-content { padding: 18px; } .np-usage-drawer-facts { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .np-usage-drawer, .np-usage-drawer-backdrop { transition: none; } }

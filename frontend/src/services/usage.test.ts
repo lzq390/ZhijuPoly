@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GUEST_SESSION, installSession, retireSession } from "../auth/session";
-import { fetchUsageCatalog, fetchUsageRecords, fetchUsageSummary } from "./usage";
+import { fetchUsageActivity, fetchUsageCatalog, fetchUsageRecords, fetchUsageSummary } from "./usage";
 
 function account(id: string) {
   installSession({ authenticated: true, user: { id, username: id, must_change_password: false }, session_id: `session-${id}`, csrf_token: "fixture-csrf", capabilities: {} });
@@ -22,9 +22,31 @@ describe("private usage transport", () => {
     expect(init.credentials).toBe("same-origin"); expect(init.cache).toBe("no-store");
     expect(init.headers.get("X-Session-Context")).toBe("session-a");
   });
+  it("requests Beijing daily buckets only for summary while preserving absolute record bounds", async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(response({}))); vi.stubGlobal("fetch", fetch);
+    const period = { start: "2026-09-30T16:00:00Z", end: "2026-10-01T16:00:00Z", timezone: "Asia/Shanghai" as const };
+    await fetchUsageSummary(period);
+    expect(new URL(fetch.mock.calls[0][0], "http://localhost").searchParams.get("timezone")).toBe("Asia/Shanghai");
+    await fetchUsageRecords({ ...period, page: 1, page_size: 25, include_children: false });
+    const params = new URL(fetch.mock.calls[1][0], "http://localhost").searchParams;
+    expect(params.has("timezone")).toBe(false);
+    expect(params.get("start")).toBe(period.start); expect(params.get("end")).toBe(period.end);
+  });
+  it("reads independent activity with only offset, limit and module through the private GET transport", async () => {
+    const fetch = vi.fn().mockResolvedValue(response({ mode: "activity_only", items: [] })); vi.stubGlobal("fetch", fetch);
+    const controller = new AbortController();
+    await fetchUsageActivity(25, "monomer_md", controller.signal);
+    const [input, init] = fetch.mock.calls[0]; const url = new URL(input, "http://localhost");
+    expect(url.pathname).toBe("/api/v1/usage/activity");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ offset: "25", limit: "25", module: "monomer_md" });
+    expect(init.method ?? "GET").toBe("GET"); expect(init.cache).toBe("no-store");
+    expect(init.headers.get("X-Session-Context")).toBe("session-a");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
   it("does not call fetch as a guest", async () => {
     installSession(GUEST_SESSION); const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
-    await expect(fetchUsageCatalog()).rejects.toThrow("请登录"); expect(fetch).not.toHaveBeenCalled();
+    await expect(fetchUsageCatalog()).rejects.toThrow("请登录");
+    await expect(fetchUsageActivity(0)).rejects.toThrow("请登录"); expect(fetch).not.toHaveBeenCalled();
   });
   it("preserves the disabled service code without changing the session", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ code: "usage_metering_disabled", detail: "尚未启用" }, 503)));
@@ -33,7 +55,7 @@ describe("private usage transport", () => {
   it("rejects a late response from the account retired while reading usage", async () => {
     let finish!: (response: Response) => void;
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })));
-    const pending = fetchUsageCatalog();
+    const pending = fetchUsageActivity(0);
     retireSession(); account("b"); finish(response({ enabled: true }));
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });

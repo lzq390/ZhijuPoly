@@ -1,5 +1,5 @@
 import { privateFetch } from "../auth/session";
-import type { UsageCatalog, UsagePeriod, UsageRecords, UsageRecordsQuery, UsageSummary } from "../types/usage";
+import type { UsageActivity, UsageCatalog, UsagePeriod, UsageRecords, UsageRecordsQuery, UsageSummary } from "../types/usage";
 
 const BASE = `${import.meta.env.VITE_API_BASE_URL ?? "/api/v1"}/usage`;
 export class UsageRequestError extends Error {
@@ -24,12 +24,22 @@ function periodParams(period: UsagePeriod) {
   return query;
 }
 export const fetchUsageCatalog = (signal?: AbortSignal) => get<UsageCatalog>("/catalog", signal);
-export const fetchUsageSummary = (period: UsagePeriod, signal?: AbortSignal) =>
-  get<UsageSummary>(`/summary?${periodParams(period)}`, signal);
+export function fetchUsageSummary(period: UsagePeriod, signal?: AbortSignal) {
+  const query = periodParams(period);
+  if (period.timezone) query.set("timezone", period.timezone);
+  return get<UsageSummary>(`/summary?${query}`, signal);
+}
 export function fetchUsageRecords(filter: UsageRecordsQuery, signal?: AbortSignal) {
   const query = periodParams(filter);
   if (filter.status) query.set("status", filter.status);
   query.set("page", String(filter.page)); query.set("page_size", String(filter.page_size));
   query.set("include_children", String(filter.include_children));
   return get<UsageRecords>(`/records?${query}`, signal);
+}
+
+/** Independent task history; this endpoint never reserves or settles entitlements. */
+export function fetchUsageActivity(offset: number, module?: string, signal?: AbortSignal) {
+  const query = new URLSearchParams({ offset: String(offset), limit: "25" });
+  if (module) query.set("module", module);
+  return get<UsageActivity>(`/activity?${query}`, signal);
 }
