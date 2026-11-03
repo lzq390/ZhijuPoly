@@ -1,6 +1,7 @@
 export const USAGE_STATUSES = ["queued", "running", "completed", "failed", "cancelled", "timed_out", "interrupted", "rejected"] as const;
 export type UsageStatus = typeof USAGE_STATUSES[number];
 export type UsageMetric = { value: number | null; known_count: number; unknown_count: number };
+export type UsageModuleGroup = { id: string; label: string; modules: string[] };
 export type UsageTotals = {
   tasks: number; attempts: number; child_calls: number;
   states: Partial<Record<UsageStatus, number>>;
@@ -9,10 +10,11 @@ export type UsageTotals = {
 export type UsageCatalog = {
   enabled: boolean; mode: "statistics_only"; retention_days: number;
   modules: Array<{ id: string; label: string; category: string; coverage: "measured" | "partial" | "external"; note?: string }>;
+  module_groups: UsageModuleGroup[];
   metrics: Array<{ id: string; label: string; unit: string }>;
 };
 export type UsageTimezone = "UTC" | "Asia/Shanghai";
-export type UsagePeriod = { start: string; end: string; module?: string; timezone?: UsageTimezone };
+export type UsagePeriod = { start: string; end: string; module?: string; module_group?: string; timezone?: UsageTimezone };
 export type UsageSummary = {
   period: { start: string; end: string; timezone: UsageTimezone; basis: "task_submitted_at" };
   totals: UsageTotals;
@@ -39,5 +41,6 @@ export type UsageActivity = {
   limit: number;
   has_more: boolean;
   modules: Array<{ id: string; label: string }>;
+  module_groups: UsageModuleGroup[];
   warnings: string[];
 };

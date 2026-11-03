@@ -4,7 +4,7 @@ from uuid import uuid4
 import anyio
 from starlette.responses import JSONResponse
 from app.auth.context import current_identity, is_service_context
-from app.usage_catalog import match_usage_route
+from app.usage_catalog import match_usage_route, observation_module
 from app.usage_context import (
     UsageCollector, UsageContext, UsageMeteringUnavailable, UsageSpan,
     _status_for_exception, usage_scope,
@@ -22,7 +22,7 @@ class UsageMeteringMiddleware:
         identity = current_identity(required=False)
         if route is None or route.mode == "observe" or identity is None or is_service_context():
             return await self.app(scope, receive, send)
-        context = (UsageContext(identity.user_id, route.module, "request:" + str(uuid4()))
+        context = (UsageContext(identity.user_id, observation_module(route), "request:" + str(uuid4()))
                    if route.mode == "sync" else None)
         span = UsageSpan(context, self.collector)
         response_started, response_finished, disconnected = False, False, False

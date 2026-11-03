@@ -6,7 +6,9 @@ import { useMotionPresence } from "../../hooks/useMotionPresence";
 import { useUsageRead } from "../../hooks/useUsageRead";
 import { fetchUsageOperation, fetchUsageOperationResult } from "../../services/entitlements";
 import type { OperationState, UsageOperationResult } from "../../types/entitlements";
+import type { UsageModuleGroup } from "../../types/usage";
 import { beijingTimestamp } from "./format";
+import { usageModuleGroupLabel, usageTaskTypeLabel } from "./moduleGroups";
 import "./UsageOperationDrawer.css";
 
 export const operationStateLabels: Record<OperationState, string> = {
@@ -20,11 +22,12 @@ type Props = {
   requestKey: number;
   readResultOnOpen?: boolean;
   moduleLabels: Record<string, string>;
+  moduleGroups: UsageModuleGroup[];
   onClose: () => void;
   restoreFocusTarget?: HTMLElement | null;
 };
 
-export function UsageOperationDrawer({ operationId, requestKey, readResultOnOpen = false, moduleLabels, onClose, restoreFocusTarget }: Props) {
+export function UsageOperationDrawer({ operationId, requestKey, readResultOnOpen = false, moduleLabels, moduleGroups, onClose, restoreFocusTarget }: Props) {
   const open = operationId !== null;
   const titleId = useId();
   const anchor = useRef<HTMLSpanElement>(null);
@@ -106,15 +109,17 @@ export function UsageOperationDrawer({ operationId, requestKey, readResultOnOpen
     <aside ref={presence.ref} {...presence.motionProps} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-hidden={!open} inert={!open} tabIndex={-1} className="np-usage-drawer">
       <header className="np-usage-drawer-header"><div><p>操作回执</p><h2 id={titleId}>操作详情</h2></div><button ref={closeButton} type="button" aria-label="关闭操作详情" onClick={onClose}><X aria-hidden="true" /></button></header>
       <div className="np-usage-drawer-content">
-        <p className="np-usage-note">这里只读取已有回执和结果，不提交、重试或重算任务。</p>
+        <p hidden className="np-usage-note">这里只读取已有回执和结果，不提交、重试或重算任务。</p>
         {receipt.loading && <p role="status">正在读取已有回执…</p>}
         {receipt.error != null && <div className="np-usage-error"><p role="alert">{failure(receipt.error)}</p><button type="button" onClick={receipt.retry}>重试读取回执</button></div>}
         {operation && <>
           <section aria-label="所选操作回执" className="np-usage-drawer-receipt">
-            <div className="np-usage-section-header"><h3>{moduleLabels[operation.module] ?? operation.module}</h3><span className={`np-usage-state np-usage-operation-state-${operation.state}`}>{operationStateLabels[operation.state]}</span></div>
+            <div className="np-usage-section-header"><h3>{usageModuleGroupLabel(operation.module, moduleGroups)}</h3><span className={`np-usage-state np-usage-operation-state-${operation.state}`}>{operationStateLabels[operation.state]}</span></div>
             <div className="np-usage-drawer-id"><span>操作 ID</span><code>{operation.operation_id}</code><button type="button" onClick={() => void copyId()}><Copy aria-hidden="true" />复制操作 ID</button></div>
             {copyState?.key === scopeKey && <p role="status" className="np-usage-note">{copyState.message}</p>}
             <dl className="np-usage-drawer-facts">
+              <div><dt>功能模块</dt><dd>{usageModuleGroupLabel(operation.module, moduleGroups)}</dd></div>
+              <div><dt>任务类型</dt><dd>{usageTaskTypeLabel(operation.module, moduleLabels)}</dd></div>
               <div><dt>创建时间（北京时间）</dt><dd>{beijingTimestamp(operation.created_at)}</dd></div>
               <div><dt>更新时间（北京时间）</dt><dd>{beijingTimestamp(operation.updated_at)}</dd></div>
               <div><dt>策略版本</dt><dd>{operation.policy_version}</dd></div>
@@ -125,14 +130,14 @@ export function UsageOperationDrawer({ operationId, requestKey, readResultOnOpen
             <details className="np-usage-disclosure"><summary tabIndex={0}>已确认的提交规格</summary><pre>{JSON.stringify(operation.spec, null, 2)}</pre></details>
           </section>
           <section className="np-usage-drawer-results" aria-label="操作结果读取">
-            <h3>已有结果</h3><p className="np-usage-note">结果待确认时，预留仍保留。确认结束后，在原功能中主动再次提交会创建新操作。</p>
+            <h3>已有结果</h3><p hidden className="np-usage-note">结果待确认时，预留仍保留。确认结束后，在原功能中主动再次提交会创建新操作。</p>
             <button type="button" className="np-usage-primary" disabled={result?.loading} onClick={() => void readResult()}>读取已有结果</button>
             {result?.loading && <p role="status">正在读取已有结果…</p>}
             {result?.error != null && <p role="alert" className="np-usage-error">{failure(result.error)}</p>}
             {result?.data && <div aria-label="已恢复操作结果">
               <p role="status">已有结果已读取，未重新执行任务。</p>
               {result.data.result != null && <details open className="np-usage-disclosure"><summary tabIndex={0}>已有结果内容</summary><pre>{JSON.stringify(result.data.result, null, 2)}</pre></details>}
-              {result.data.result_ref != null && <details className="np-usage-disclosure"><summary tabIndex={0}>原生结果引用</summary><pre>{JSON.stringify(result.data.result_ref, null, 2)}</pre><p className="np-usage-note">此处展示原引用，不自动访问外部地址或重新计算。可在对应功能的任务历史中查阅产物。</p></details>}
+              {result.data.result_ref != null && <details className="np-usage-disclosure"><summary tabIndex={0}>原生结果引用</summary><pre>{JSON.stringify(result.data.result_ref, null, 2)}</pre><p hidden className="np-usage-note">此处展示原引用，不自动访问外部地址或重新计算。可在对应功能的任务历史中查阅产物。</p></details>}
             </div>}
           </section>
         </>}

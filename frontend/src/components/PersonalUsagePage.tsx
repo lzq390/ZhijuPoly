@@ -13,7 +13,7 @@ export function PersonalUsagePage() {
   if (auth?.status !== "authenticated") return <section className="np-module-page np-usage-page">
     <ModulePageHeader>我的用量</ModulePageHeader>
     <div className="np-module-page-body np-usage-body"><div className="np-usage-content"><div className="np-usage-panel np-usage-empty">
-      <BarChart3 aria-hidden="true" /><h2>登录后查看我的用量</h2><p>这里仅展示当前账号自己的统计记录。</p>
+      <BarChart3 aria-hidden="true" /><h2>登录后查看我的用量</h2><p hidden>这里仅展示当前账号自己的统计记录。</p>
       <button type="button" onClick={() => auth ? auth.login() : requestServiceAccess()}>登录账号</button>
     </div></div></div>
   </section>;

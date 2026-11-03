@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from app.auth.context import Identity, current_owner_id, user_context
-from app.usage_catalog import ROUTES, catalog_modules, match_usage_route
+from app.usage_catalog import ROUTES, catalog_modules, match_usage_route, observation_module
 from app.usage_context import (UsageCollector, UsageContext, UsageSpan, UsageMeteringUnavailable,
     current_usage_context, current_usage_collector, emit_usage_event, usage_scope, usage_span)
 from app.usage_middleware import UsageMeteringMiddleware
@@ -164,6 +164,40 @@ def test_middleware_outcome_and_owner_are_server_captured(code, terminal):
     run_request(app,usage)
     assert [event["status"] for event in repo.events] == ["running",terminal]
     assert all("private" not in str(event) for event in repo.events)
+
+
+@pytest.mark.parametrize("method,path,module", [
+    ("POST", "/api/v1/database-browser/smiles-lookup", "database_query"),
+    ("POST", "/api/v1/database-browser/property-filter/search", "database_filter"),
+    ("GET", "/api/v1/database-browser/property-filter/options", "database_filter"),
+    ("GET", "/api/v1/database-browser/property-filter/histogram", "database_filter"),
+    *[("GET", "/api/v1/database-browser/" + path, "database_analysis") for path in (
+        "datasets/summary", "datasets/analytics", "structure-property", "dft/molecules", "dft/steps",
+        "formulation", "experimental-process", "experimental-property")],
+])
+def test_database_observation_modules_follow_server_routes_without_changing_entitlement_modules(method, path, module):
+    route = match_usage_route(method, path)
+    assert route.module == "database_browser" and route.mode == "sync"
+    assert observation_module(route) == module
+    usage, repo = collector()
+    async def app(scope, receive, send):
+        assert current_usage_context().module == module
+        assert current_usage_context().owner_user_id == OWNER
+        # The request body is deliberately unread; classification is not supplied by a client.
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}"})
+    run_request(app, usage, method=method, path=path)
+    assert [event["status"] for event in repo.events] == ["running", "completed"]
+    assert all(event["module"] == module and event["owner_user_id"] == OWNER for event in repo.events)
+    assert match_usage_route(method, path).module == "database_browser"
+
+
+def test_database_observation_classification_preserves_observe_only_routes_and_other_modules():
+    observed = match_usage_route("POST", "/api/v1/database-browser/property-filter/observations")
+    assert observed.mode == "observe" and observation_module(observed) is None
+    for route in ROUTES:
+        if route.module != "database_browser":
+            assert observation_module(route) == route.module
 
 
 def test_native_submit_only_binds_collector_without_http_root():

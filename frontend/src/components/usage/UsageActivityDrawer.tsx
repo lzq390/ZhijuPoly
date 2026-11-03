@@ -18,11 +18,12 @@ export const ACTIVITY_NOTE = "独立记录不扣减次数；显示已接入任�
 type Props = {
   record: UsageActivityRecord | null;
   moduleLabel: string;
+  taskTypeLabel: string;
   onClose: () => void;
   restoreFocusTarget?: HTMLElement | null;
 };
 
-export function UsageActivityDrawer({ record, moduleLabel, onClose, restoreFocusTarget }: Props) {
+export function UsageActivityDrawer({ record, moduleLabel, taskTypeLabel, onClose, restoreFocusTarget }: Props) {
   const open = record !== null;
   const titleId = useId();
   const anchor = useRef<HTMLSpanElement>(null);
@@ -64,13 +65,15 @@ export function UsageActivityDrawer({ record, moduleLabel, onClose, restoreFocus
     <aside ref={presence.ref} {...presence.motionProps} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-hidden={!open} inert={!open} tabIndex={-1} className="np-usage-drawer">
       <header className="np-usage-drawer-header"><div><p>任务记录</p><h2 id={titleId}>任务记录详情</h2></div><button ref={closeButton} type="button" aria-label="关闭任务记录详情" onClick={onClose}><X aria-hidden="true" /></button></header>
       <div className="np-usage-drawer-content">
-        <p className="np-usage-note">{ACTIVITY_NOTE}</p>
+        <p hidden className="np-usage-note">{ACTIVITY_NOTE}</p>
         {record && <>
           <section className="np-usage-drawer-receipt" aria-label="所选任务记录">
             <div className="np-usage-section-header"><h3>{moduleLabel}</h3><span className={`np-usage-state np-usage-state-${record.status}`}>{statusLabels[record.status] ?? record.status}</span></div>
             <div className="np-usage-drawer-id"><span>任务 ID</span><code>{record.task_id}</code><button type="button" onClick={() => void copyId()}><Copy aria-hidden="true" />复制任务 ID</button></div>
             {copy?.key === recordKey && <p role="status" className="np-usage-note">{copy.message}</p>}
             <dl className="np-usage-drawer-facts">
+              <div><dt>功能模块</dt><dd>{moduleLabel}</dd></div>
+              <div><dt>任务类型</dt><dd>{taskTypeLabel}</dd></div>
               <div><dt>任务尝试</dt><dd>{record.attempt_count.toLocaleString("zh-CN")} 次（重试合并展示）</dd></div>
               <div><dt>最近观测状态</dt><dd>{statusLabels[record.status] ?? record.status}</dd></div>
               <div><dt>提交时间（北京时间）</dt><dd>{beijingTimestamp(record.submitted_at)}</dd></div>
@@ -83,7 +86,7 @@ export function UsageActivityDrawer({ record, moduleLabel, onClose, restoreFocus
               {record.parent_task_id && <div><dt>父任务 ID</dt><dd>{record.parent_task_id}</dd></div>}
             </dl>
           </section>
-          <section className="np-usage-drawer-results" aria-label="任务观测指标"><h3>最近一次尝试的已观测指标</h3><p className="np-usage-note">未采集的指标显示“未记录”，不等于零。缓存输入和推理 Tokens 属于子集，不与供应商总 Tokens 叠加。累计产物体积不代表当前存储。</p>
+          <section className="np-usage-drawer-results" aria-label="任务观测指标"><h3>最近一次尝试的已观测指标</h3><p hidden className="np-usage-note">未采集的指标显示“未记录”，不等于零。缓存输入和推理 Tokens 属于子集，不与供应商总 Tokens 叠加。累计产物体积不代表当前存储。</p>
             {Object.keys(record.metrics).length ? <dl className="np-usage-drawer-facts">{Object.entries(record.metrics).map(([id, value]) => <div key={id}><dt>{metricLabels[id] ?? id}</dt><dd>{formatMetric(id, value)}</dd></div>)}</dl> : <p className="np-usage-note">未记录任务指标。</p>}
           </section>
         </>}

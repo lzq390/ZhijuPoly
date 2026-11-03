@@ -122,6 +122,7 @@
 .np-usage-table-scroll, .np-usage-trend-scroll { max-width: 100%; overflow-x: auto; margin-top: 12px; scrollbar-width: thin; scrollbar-color: var(--np-theme-border) transparent; }
 .np-usage-table-scroll { border: 1px solid var(--np-theme-border-soft); border-radius: 8px; background: var(--np-theme-surface); }
 .np-usage-page table { width: 100%; border-collapse: collapse; font-size: var(--np-usage-label-size); text-align: left; }
+.np-usage-task-type { display: block; margin-top: 4px; color: var(--np-theme-muted); font-size: var(--np-usage-caption-size); font-weight: 400; }
 .np-usage-page th, .np-usage-page td { padding: 12px 10px; border-bottom: 1px solid var(--np-theme-border-soft); vertical-align: top; }
 .np-usage-page thead th { color: var(--np-theme-muted); background: var(--np-theme-neutral-soft); font-weight: 600; white-space: nowrap; }
 .np-usage-page tbody th { font-weight: 600; }

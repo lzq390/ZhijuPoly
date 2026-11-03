@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from app.auth.context import current_owner_id
 from app.services.entitlement_service import service_from_request, public_entitlement_error
+from app.usage_groups import UsageFilterError, module_groups, resolve_group_modules
 from task_usage import entitlements as core
 from task_usage.entitlement_policy import public_policy
 
@@ -67,11 +68,16 @@ def entitlements(request: Request):
 
 @router.get("/operations")
 def operations(request: Request, module: str | None = Query(None,max_length=64),
+               module_group: str | None = Query(None,max_length=64),
                limit: int = Query(25,ge=1,le=100),offset: int = Query(0,ge=0,le=100000)):
     repository = _history_repository(request)
-    values = _history_call(repository, "read_saved_operations",module=module,limit=limit+1,offset=offset)
+    try:
+        resolve_group_modules(module, module_group)
+    except UsageFilterError as exc:
+        raise HTTPException(422, detail=str(exc)) from None
+    values = _history_call(repository, "read_saved_operations",module=module,module_group=module_group,limit=limit+1,offset=offset)
     return {"items":[_public(item) for item in values[:limit]],
-            "offset":offset,"limit":limit,"has_more":len(values)>limit}
+            "offset":offset,"limit":limit,"has_more":len(values)>limit,"module_groups":module_groups()}
 
 @router.get("/operations/{operation_id}")
 def operation(request: Request, operation_id: UUID):

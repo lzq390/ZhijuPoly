@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.auth.context import current_owner_id
 from app.services.usage_statistics import UsageQueryError, UsageStatistics, period
+from app.usage_groups import UsageFilterError, module_groups, resolve_group_modules
 from task_usage.ledger import METRICS, _MODULE, metering_enabled
 
 router = APIRouter(prefix="/api/v1/usage", tags=["usage"])
@@ -57,6 +58,7 @@ def catalog():
               "cached_input_tokens": ("供应商缓存输入 Tokens", "tokens"), "reasoning_tokens": ("供应商推理 Tokens", "tokens"),
               "artifact_bytes": ("累计已观测产物体积", "bytes")}
     return {"enabled": metering_enabled(), "mode": "statistics_only", "modules": catalog_modules(),
+            "module_groups": module_groups(),
             "metrics": [{"id": name, "label": labels[name][0], "unit": labels[name][1]} for name in METRICS],
             "retention_days": 365}
 
@@ -64,13 +66,15 @@ def catalog():
 @router.get("/summary")
 def summary(request: Request, start: datetime | None = None, end: datetime | None = None,
             module: str | None = Query(None, max_length=64),
+            module_group: str | None = Query(None, max_length=64),
             timezone: Literal["UTC", "Asia/Shanghai"] = "UTC"):
     service = _ready(request)
     start, end = _range(start, end)
     try:
-        result = service.summary(start=start, end=end, module=module, timezone=timezone,
+        resolve_group_modules(module, module_group)
+        result = service.summary(start=start, end=end, module=module, module_group=module_group, timezone=timezone,
                                  labels={item["id"]: item["label"] for item in catalog_modules()})
-    except UsageQueryError as exc:
+    except (UsageQueryError, UsageFilterError) as exc:
         raise HTTPException(422, detail=str(exc)) from None
     except Exception:
         logger.error("usage_summary_unavailable")
@@ -82,14 +86,16 @@ def summary(request: Request, start: datetime | None = None, end: datetime | Non
 @router.get("/records")
 def records(request: Request, start: datetime | None = None, end: datetime | None = None,
             module: str | None = Query(None, max_length=64), status: str | None = Query(None, max_length=32),
+            module_group: str | None = Query(None, max_length=64),
             page: int = Query(1, ge=1, le=10000), page_size: int = Query(25, ge=1, le=100),
             include_children: bool = False):
     service = _ready(request)
     start, end = _range(start, end)
     try:
-        return service.records(start=start, end=end, module=module, status=status,
+        resolve_group_modules(module, module_group)
+        return service.records(start=start, end=end, module=module, module_group=module_group, status=status,
                                page=page, page_size=page_size, include_children=include_children)
-    except UsageQueryError as exc:
+    except (UsageQueryError, UsageFilterError) as exc:
         raise HTTPException(422, detail=str(exc)) from None
     except Exception:
         logger.error("usage_records_unavailable")
@@ -98,15 +104,20 @@ def records(request: Request, start: datetime | None = None, end: datetime | Non
 
 @router.get("/activity")
 def activity(request: Request, module: str | None = Query(None, max_length=64, pattern=_MODULE.pattern),
+             module_group: str | None = Query(None, max_length=64),
              offset: int = Query(0, ge=0, le=100000), limit: int = Query(25, ge=1, le=100)):
     service = _ready(request)
     try:
-        result = service.activity(module=module, offset=offset, limit=limit)
+        resolve_group_modules(module, module_group)
+        result = service.activity(module=module, module_group=module_group, offset=offset, limit=limit)
+    except (UsageQueryError, UsageFilterError) as exc:
+        raise HTTPException(422, detail=str(exc)) from None
     except Exception:
         logger.error("usage_activity_unavailable")
         raise HTTPException(503, detail={"code": "usage_metering_unavailable", "message": "操作记录暂时不可用"}) from None
     result["modules"] = [{"id": item["id"], "label": item["label"]}
                          for item in catalog_modules() if item["coverage"] != "external"]
+    result["module_groups"] = module_groups(include_external=False)
     result["warnings"] = [
         "仅展示已观测并保留的操作，不作为计次，也不改变功能权限或额度。",
         "同一任务合并展示最新尝试；历史未采集任务不会补记，OpenScience 独立服务尚未接入。",

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.auth.context import current_owner_id
 from app.postgres_database import postgres_connection
+from app.usage_groups import resolve_group_modules
 from task_usage.ledger import METRICS, STATUSES, _MODULE
 
 
@@ -93,22 +94,26 @@ class UsageStatistics:
     def __init__(self, dsn):
         self.dsn = dsn
 
-    def _query(self, start, end, module):
+    def _query(self, start, end, module, module_group=None):
         start, end = period(start, end)
         owner = current_owner_id()
+        members = resolve_group_modules(module, module_group)
         if module is not None and not _MODULE.fullmatch(module):
             raise UsageQueryError("Invalid module")
         args = [owner, start, end]
-        if module is not None:
+        if members is not None:
+            args.append(list(members))
+        elif module is not None:
             args.append(module)
         args.append(owner)
-        return COHORTS.format(module_filter="AND module=%s" if module else ""), args
+        module_filter = "AND module=ANY(%s)" if members is not None else "AND module=%s" if module else ""
+        return COHORTS.format(module_filter=module_filter), args
 
-    def summary(self, *, start, end, module=None, labels=None, timezone="UTC"):
+    def summary(self, *, start, end, module=None, module_group=None, labels=None, timezone="UTC"):
         if timezone not in {"UTC", "Asia/Shanghai"}:
             raise UsageQueryError("Invalid timezone")
         start, end = period(start, end)
-        query, params = self._query(start, end, module)
+        query, params = self._query(start, end, module, module_group)
         groups, daily = {}, []
         metrics_sql = []
         for metric in METRICS:
@@ -159,15 +164,19 @@ class UsageStatistics:
         return {"period": {"start": start.isoformat(), "end": end.isoformat(), "timezone": timezone, "basis": "task_submitted_at"},
                 "totals": totals, "modules": list(groups.values()), "daily": daily}
 
-    def activity(self, *, module=None, offset=0, limit=25):
+    def activity(self, *, module=None, module_group=None, offset=0, limit=25):
         owner = current_owner_id()
+        members = resolve_group_modules(module, module_group)
         if module is not None and not _MODULE.fullmatch(module):
             raise UsageQueryError("Invalid module")
         if not 0 <= offset <= 100000 or not 1 <= limit <= 100:
             raise UsageQueryError("Invalid pagination")
-        query = ACTIVITY.format(module_filter="AND module=%s" if module is not None else "")
+        module_filter = "AND module=ANY(%s)" if members is not None else "AND module=%s" if module is not None else ""
+        query = ACTIVITY.format(module_filter=module_filter)
         params = [owner]
-        if module is not None:
+        if members is not None:
+            params.append(list(members))
+        elif module is not None:
             params.append(module)
         with postgres_connection(self.dsn, readonly_snapshot=True) as connection:
             rows = connection.execute(query + """SELECT * FROM latest
@@ -181,12 +190,12 @@ class UsageStatistics:
         return {"mode": "activity_only", "items": items, "offset": offset, "limit": limit,
                 "has_more": len(rows) > limit}
 
-    def records(self, *, start, end, module=None, status=None, page=1, page_size=25, include_children=False):
+    def records(self, *, start, end, module=None, module_group=None, status=None, page=1, page_size=25, include_children=False):
         if status is not None and status not in STATUSES:
             raise UsageQueryError("Invalid status")
         if not 1 <= page <= 10000 or not 1 <= page_size <= 100:
             raise UsageQueryError("Invalid pagination")
-        query, params = self._query(start, end, module)
+        query, params = self._query(start, end, module, module_group)
         filters = ["true"]
         if not include_children:
             filters.append("kind='task' AND parent_task_id IS NULL")

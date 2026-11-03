@@ -1,25 +1,41 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach,beforeEach,expect,it,vi } from "vitest";
-import fixture from "../../../scripts/fixtures/entitlements.json";
+import rawFixture from "../../../scripts/fixtures/entitlements.json";
 import { PersonalEntitlementsPanel } from "./PersonalEntitlementsPanel";
+const moduleGroups = rawFixture.operations.module_groups;
+const fixture = rawFixture;
 const mocks=vi.hoisted(()=>({auth:vi.fn(),balance:vi.fn(),list:vi.fn(),activity:vi.fn(),operation:vi.fn(),result:vi.fn()}));
-vi.mock('../../services/usage',async()=>({...await vi.importActual<typeof import('../../services/usage')>('../../services/usage'),fetchUsageActivity:mocks.activity}));
+vi.mock('../../services/usage',async()=>({...await vi.importActual<typeof import('../../services/usage')>('../../services/usage'),fetchUsageActivityByGroup:mocks.activity}));
 vi.mock('../../auth/AuthProvider',()=>({useAuth:mocks.auth}));
-vi.mock('../../services/entitlements',()=>({fetchEntitlements:mocks.balance,fetchUsageOperations:mocks.list,fetchUsageOperation:mocks.operation,fetchUsageOperationResult:mocks.result}));
-beforeEach(()=>{vi.stubGlobal('matchMedia',()=>({matches:true,addEventListener:vi.fn(),removeEventListener:vi.fn()}));mocks.auth.mockReturnValue({session:{account_type:"member"}});mocks.activity.mockReset().mockResolvedValue({mode:"activity_only",items:[],offset:0,limit:25,has_more:false,modules:[],warnings:[]});mocks.balance.mockReset().mockResolvedValue(fixture.entitlements);mocks.list.mockReset().mockResolvedValue(fixture.operations);mocks.operation.mockReset().mockResolvedValue(fixture.operations.items[0]);mocks.result.mockReset().mockResolvedValue(fixture.result);});
+vi.mock('../../services/entitlements',()=>({fetchEntitlements:mocks.balance,fetchUsageOperationsByGroup:mocks.list,fetchUsageOperation:mocks.operation,fetchUsageOperationResult:mocks.result}));
+beforeEach(()=>{vi.stubGlobal('matchMedia',()=>({matches:true,addEventListener:vi.fn(),removeEventListener:vi.fn()}));mocks.auth.mockReturnValue({session:{account_type:"member"}});mocks.activity.mockReset().mockResolvedValue({mode:"activity_only",items:[],offset:0,limit:25,has_more:false,modules:[],module_groups:moduleGroups,warnings:[]});mocks.balance.mockReset().mockResolvedValue(fixture.entitlements);mocks.list.mockReset().mockResolvedValue(fixture.operations);mocks.operation.mockReset().mockResolvedValue(fixture.operations.items[0]);mocks.result.mockReset().mockResolvedValue(fixture.result);});
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 function renderReceipts(element = <PersonalEntitlementsPanel activeTab="operations"/>) { const view=render(element); fireEvent.click(screen.getByRole('button',{name:'计次回执'})); return view; }
-it('shows all eight pools, sample policy and separate reservations/request diagnostics',async()=>{
+it('hides static allowance explanations while preserving all pools and period diagnostics',async()=>{
  render(<PersonalEntitlementsPanel/>);await screen.findByText('当前为示例策略，不代表正式套餐承诺。');
  expect(screen.getAllByRole('article')).toHaveLength(8);
  for(const name of Object.values(fixture.entitlements.policy.pool_labels))expect(screen.getByRole('article',{name})).toBeTruthy();
- expect(screen.getByText(/待确认次数包含在预留中/)).toBeTruthy();expect(screen.getByText(/另有 1 次旧周期预留/)).toBeTruthy();
- expect(screen.getByText('HTTP任务请求：21')).toBeTruthy();expect(screen.getByText('操作数：16')).toBeTruthy();expect(screen.getByText('执行尝试：17')).toBeTruthy();
+ for(const text of ['当前为示例策略，不代表正式套餐承诺。','次数余额不改变功能权限',/待确认次数包含在预留中/,/余额不保证可立即提交/,/规格由服务端验证/,/请求、操作和执行尝试是不同口径/])expect(screen.getByText(text).closest('[hidden]')).toBeTruthy();
+ expect(screen.getByText(/另有 1 次旧周期预留/).closest('[hidden]')).toBeNull();
+ const period=screen.getByText(/^当前月周期/);expect(period.closest('[hidden]')).toBeNull();expect(period.textContent).toContain('2026-10-01 08:00:00 至 2026-11-01 08:00:00');
+ for(const text of ['HTTP任务请求：21','操作数：16','执行尝试：17'])expect(screen.getByText(text).closest('[hidden]')).toBeNull();
+ expect(screen.getByText(/2026-09-01 08:00:00 至 2026-10-01 08:00:00/).closest('[hidden]')).toBeNull();
+});
+it('keeps runtime request-observation degradation visible without its static definition',async()=>{
+ mocks.balance.mockResolvedValue({...fixture.entitlements,request_observation_degraded:true});render(<PersonalEntitlementsPanel/>);
+ expect((await screen.findByText('部分请求观测缺失，诊断总数可能不完整。')).closest('[hidden]')).toBeNull();
+ expect(screen.getByText(/请求、操作和执行尝试是不同口径/).closest('[hidden]')).toBeTruthy();
+ expect(screen.getByText('HTTP任务请求：21').closest('[hidden]')).toBeNull();
+});
+it('keeps the allowance disabled state while hiding its explanatory continuation',async()=>{
+ mocks.balance.mockResolvedValue({enabled:false,mode:'not_enabled',policy:null,pools:[]});render(<PersonalEntitlementsPanel/>);
+ const state=await screen.findByText(/^分类次数尚未启用/);expect(state.closest('[hidden]')).toBeNull();expect(state.getAttribute('role')).toBe('status');
+ expect(screen.getByText(/已接入任务可在“操作记录”查看/).closest('[hidden]')).toBeTruthy();
 });
 it.each(['day','week','month'])('uses server %s period and does not infer balance permission',async period=>{
  mocks.balance.mockResolvedValue({...fixture.entitlements,admission_blocked_by_period:true,policy:{...fixture.entitlements.policy,period}});render(<PersonalEntitlementsPanel/>);
- await screen.findByText(/存在尚未结束的冲突周期/);expect(screen.getByText(/余额不保证可立即提交/)).toBeTruthy();
+ expect((await screen.findByText(/存在尚未结束的冲突周期/)).closest('[hidden]')).toBeNull();expect(screen.getByText(/余额不保证可立即提交/).closest('[hidden]')).toBeTruthy();
 });
 it('shows free permissions without treating remaining counts as member access',async()=>{
  mocks.auth.mockReturnValue({session:{account_type:'free'}});render(<PersonalEntitlementsPanel/>);await screen.findByText('免费账号');
@@ -27,8 +43,16 @@ it('shows free permissions without treating remaining counts as member access',a
 });
 it('reads durable operations while admission is off',async()=>{
  mocks.balance.mockResolvedValue({enabled:false,mode:'not_enabled',policy:null,pools:[]});renderReceipts();await screen.findByText(/分类次数尚未启用/);
- expect(screen.getByRole('status').textContent).toContain('新操作不会生成计次回执');
+ expect(screen.getByRole('status').textContent).toContain('计次操作记录当前未启用');
+ expect(screen.getByText(/新操作不会生成计次回执/).closest('[hidden]')).toBeTruthy();
  expect(mocks.list).toHaveBeenCalledOnce();await screen.findAllByText('读取已有结果');
+});
+it('hides receipt explanations without hiding its table or pagination',async()=>{
+ renderReceipts();await screen.findByRole('region',{name:'操作回执表，可横向滚动'});
+ const panel=within(document.getElementById('usage-source-receipts')!);
+ for(const text of [/这里展示已生成的计次操作回执/,/部分历史或公共记录没有独立模块归属/,/断线或结果待确认时/])expect(panel.getByText(text).closest('[hidden]')).toBeTruthy();
+ expect(screen.getByRole('navigation',{name:'操作回执分页'})).toBeTruthy();
+ expect(screen.getAllByRole('button',{name:'查看回执'})).toHaveLength(2);
 });
 it('refreshes a finished operation and newly created receipts without reading results',async()=>{
  const running={...fixture.operations.items[0],state:'running'};
@@ -47,12 +71,14 @@ it('refreshes a finished operation and newly created receipts without reading re
 });
 it('recovers a selected saved result via reads only',async()=>{
  renderReceipts();await screen.findAllByRole('button',{name:'读取已有结果'});fireEvent.click(screen.getAllByRole('button',{name:'读取已有结果'})[0]);
- await screen.findByText('已有结果已读取，未重新执行任务。');expect(mocks.operation.mock.calls[0][0]).toBe(fixture.operations.items[0].operation_id);expect(mocks.result).toHaveBeenCalledOnce();
- expect(within(screen.getByLabelText('已恢复操作结果')).getByText(/synthetic saved result/)).toBeTruthy();
+ expect((await screen.findByText('已有结果已读取，未重新执行任务。')).closest('[hidden]')).toBeNull();expect(mocks.operation.mock.calls[0][0]).toBe(fixture.operations.items[0].operation_id);expect(mocks.result).toHaveBeenCalledOnce();
+ expect(within(screen.getByLabelText('已恢复操作结果')).getByText(/synthetic saved result/).closest('[hidden]')).toBeNull();
+ expect(screen.getByText(/这里只读取已有回执和结果/).closest('[hidden]')).toBeTruthy();
+ expect(screen.getByText(/结果待确认时，预留仍保留/).closest('[hidden]')).toBeTruthy();
 });
 it('keeps unknown receipt visible after pending result and does not automatically retry',async()=>{
  mocks.operation.mockResolvedValue(fixture.operations.items[1]);mocks.result.mockRejectedValue(new Error('结果待确认，不要重复计算。'));renderReceipts();await screen.findAllByRole('button',{name:'读取已有结果'});fireEvent.click(screen.getAllByRole('button',{name:'读取已有结果'})[1]);
- await screen.findByRole('alert');expect(mocks.result).toHaveBeenCalledOnce();expect(screen.getByLabelText('所选操作回执').textContent).toContain('结果待确认');
+ expect((await screen.findByRole('alert')).closest('[hidden]')).toBeNull();expect(mocks.result).toHaveBeenCalledOnce();expect(screen.getByLabelText('所选操作回执').textContent).toContain('结果待确认');
 });
 it('does not expose a late old-owner result after the identity subtree unmounts',async()=>{
  let finish!:(value:unknown)=>void;mocks.result.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
@@ -72,13 +98,13 @@ it('keeps tabpanels mounted and preserves operation filters and page across tab 
  mocks.list.mockImplementation((offset,module)=>Promise.resolve({...fixture.operations,offset,has_more:offset===0,items:fixture.operations.items.map(item=>({...item,module:module||item.module}))}));
  const view=renderReceipts();
  await screen.findAllByRole('button',{name:'查看回执'});expect(document.getElementById('usage-panel-overview')?.hidden).toBe(true);
- fireEvent.click(screen.getByRole('combobox',{name:'操作功能'}));fireEvent.click(await screen.findByRole('option',{name:'性能预测'}));
- await waitFor(()=>expect(mocks.list.mock.calls.at(-1)?.[1]).toBe('predict'));
+ fireEvent.click(screen.getByRole('combobox',{name:'功能模块'}));fireEvent.click(await screen.findByRole('option',{name:'均聚物性质预测'}));
+ await waitFor(()=>expect(mocks.list.mock.calls.at(-1)?.[1]).toBe('homopolymerPrediction'));
  await waitFor(()=>expect(screen.getByRole('button',{name:'下一页操作'}).hasAttribute('disabled')).toBe(false));
  fireEvent.click(screen.getByRole('button',{name:'下一页操作'}));await screen.findByText('第 2 页');
  await waitFor(()=>expect(mocks.list.mock.calls.at(-1)?.[0]).toBe(25));
  view.rerender(<PersonalEntitlementsPanel activeTab="overview"/>);expect(document.getElementById('usage-panel-operations')?.hidden).toBe(true);
- view.rerender(<PersonalEntitlementsPanel activeTab="operations"/>);expect(screen.getByText('第 2 页')).toBeTruthy();expect(screen.getByRole('combobox',{name:'操作功能'}).textContent).toContain('性能预测');
+ view.rerender(<PersonalEntitlementsPanel activeTab="operations"/>);expect(screen.getByText('第 2 页')).toBeTruthy();expect(screen.getByRole('combobox',{name:'功能模块'}).textContent).toContain('均聚物性质预测');
  expect(mocks.list).toHaveBeenCalledTimes(3);
 });
 
@@ -99,8 +125,8 @@ it('opens a receipt without reading results and allows a manual result read',asy
 it('copies the full operation ID and reports a clipboard failure',async()=>{
  const writeText=vi.fn().mockResolvedValue(undefined);Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText}});
  renderReceipts();fireEvent.click((await screen.findAllByRole('button',{name:'查看回执'}))[0]);
- fireEvent.click(await screen.findByRole('button',{name:'复制操作 ID'}));await screen.findByText('操作 ID 已复制');expect(writeText).toHaveBeenCalledWith(fixture.operations.items[0].operation_id);
- writeText.mockRejectedValueOnce(new Error('clipboard denied'));fireEvent.click(screen.getByRole('button',{name:'复制操作 ID'}));await screen.findByText('复制失败，请选中完整操作 ID 手动复制。');
+ fireEvent.click(await screen.findByRole('button',{name:'复制操作 ID'}));expect((await screen.findByText('操作 ID 已复制')).closest('[hidden]')).toBeNull();expect(writeText).toHaveBeenCalledWith(fixture.operations.items[0].operation_id);
+ writeText.mockRejectedValueOnce(new Error('clipboard denied'));fireEvent.click(screen.getByRole('button',{name:'复制操作 ID'}));expect((await screen.findByText('复制失败，请选中完整操作 ID 手动复制。')).closest('[hidden]')).toBeNull();
 });
 
 it('traps Tab, closes on Escape and restores trigger focus',async()=>{
@@ -136,4 +162,21 @@ it('portals outside the scrolling container while retaining the page visibility 
  renderReceipts(<section className="np-usage-page"><div className="np-usage-body"><div className="np-usage-content"><PersonalEntitlementsPanel activeTab="operations"/></div></div></section>);
  fireEvent.click((await screen.findAllByRole('button',{name:'查看回执'}))[0]);const dialog=await screen.findByRole('dialog');
  expect(dialog.closest('.np-usage-content')).toBeNull();expect(dialog.closest('.np-usage-body')).toBeNull();expect(dialog.closest('.np-usage-page')).toBeTruthy();
+});
+
+it('uses the sidebar MD group while retaining distinct polymer and demo receipt types',async()=>{
+ const items=fixture.operations.items.map((item,index)=>({...item,module:index?'md_demo':'polymer_md'}));
+ mocks.list.mockResolvedValue({...fixture.operations,items});
+ mocks.operation.mockResolvedValue(items[0]);
+ renderReceipts();await screen.findAllByRole('button',{name:'查看回执'});
+ fireEvent.click(screen.getByRole('combobox',{name:'功能模块'}));
+ expect(screen.getAllByRole('option').map(option=>option.textContent)).toEqual(['全部模块',...moduleGroups.map(group=>group.label)]);
+ expect(screen.getByRole('option',{name:'单体 MD 模拟'})).toBeTruthy();expect(screen.queryByRole('option',{name:'分子动力学演示'})).toBeNull();
+ fireEvent.click(screen.getByRole('option',{name:'MD 模拟'}));
+ await waitFor(()=>expect(mocks.list.mock.calls.at(-1)?.slice(0,2)).toEqual([0,'mdSimulationDemo']));
+ const table=within(await screen.findByRole('region',{name:'操作回执表，可横向滚动'}));
+ expect(table.getByText('聚合物分子动力学')).toBeTruthy();expect(table.getByText('分子动力学演示')).toBeTruthy();
+ fireEvent.click(table.getAllByRole('button',{name:'查看回执'})[0]);
+ const detail=within(await screen.findByRole('dialog',{name:'操作详情'}));
+ await detail.findByText('聚合物分子动力学');expect(detail.getByRole('heading',{name:'MD 模拟'})).toBeTruthy();expect(mocks.result).not.toHaveBeenCalled();
 });

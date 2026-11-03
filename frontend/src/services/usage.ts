@@ -19,8 +19,10 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
 }
 function periodParams(period: UsagePeriod) {
   // Deliberate allowlist: caller-supplied owner/user fields never reach the API.
+  if (period.module && period.module_group) throw new Error("功能模块与具体任务类型不能同时筛选。");
   const query = new URLSearchParams({ start: period.start, end: period.end });
   if (period.module) query.set("module", period.module);
+  if (period.module_group) query.set("module_group", period.module_group);
   return query;
 }
 export const fetchUsageCatalog = (signal?: AbortSignal) => get<UsageCatalog>("/catalog", signal);
@@ -41,5 +43,11 @@ export function fetchUsageRecords(filter: UsageRecordsQuery, signal?: AbortSigna
 export function fetchUsageActivity(offset: number, module?: string, signal?: AbortSignal) {
   const query = new URLSearchParams({ offset: String(offset), limit: "25" });
   if (module) query.set("module", module);
+  return get<UsageActivity>(`/activity?${query}`, signal);
+}
+
+export function fetchUsageActivityByGroup(offset: number, moduleGroup?: string, signal?: AbortSignal) {
+  const query = new URLSearchParams({ offset: String(offset), limit: "25" });
+  if (moduleGroup) query.set("module_group", moduleGroup);
   return get<UsageActivity>(`/activity?${query}`, signal);
 }
