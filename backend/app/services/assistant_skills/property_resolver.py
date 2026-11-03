@@ -77,6 +77,7 @@ def normalize_prediction_property_arguments(
     base_url: str,
     model: str,
     proxy_url: str = "",
+    transport: str = "chat_completions",
 ) -> PredictPolymerPropertiesInput:
     if not arguments.properties or not context.model_enabled:
         return arguments
@@ -99,6 +100,7 @@ def normalize_prediction_property_arguments(
             base_url=base_url,
             model=model,
             proxy_url=proxy_url,
+            **({"transport": transport} if transport != "chat_completions" else {}),
         )
     except (assistant_chat.AssistantChatConfigError, assistant_chat.AssistantChatModelError) as exc:
         raise PropertyResolutionError(f"预测性质语义解析失败：{exc}") from exc

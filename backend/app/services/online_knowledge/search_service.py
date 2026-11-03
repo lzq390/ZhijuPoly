@@ -43,6 +43,8 @@ def run_online_knowledge_search(
     max_papers: int,
     extraction_delay_seconds: float,
     proxy_url: str = "",
+    model_proxy_url: str | None = None,
+    transport: str = "chat_completions",
     progress_callback: Callable[[str, str, int, int], None] | None = None,
     execution_facts: dict | None = None,
 ) -> dict[str, Any]:
@@ -93,7 +95,8 @@ def run_online_knowledge_search(
         api_key=api_key,
         base_url=base_url,
         model_name=model,
-        proxy_url=proxy_url,
+        proxy_url=proxy_url if model_proxy_url is None else model_proxy_url,
+        **({"transport": transport} if transport != "chat_completions" else {}),
     )
     extraction_total = len([paper for paper in papers if paper.get("abstract")])
     _report_progress(

@@ -192,7 +192,10 @@ Existing request options are preserved; absent provider counters remain null.
             return _ProviderStream(response, attempt, api=usage_api)
         attempt.observe(response, api=usage_api)
         attempt.observe_completion(response, api=usage_api, completed=_value(response, "status") == "completed", terminal=True)
-        attempt.terminal()
+        attempt.terminal(
+            "completed" if usage_api != "responses" or _value(response, "status") == "completed"
+            else "failed"
+        )
         attempt.finish()
         return response
     except BaseException as error:
@@ -202,8 +205,10 @@ Existing request options are preserved; absent provider counters remain null.
         raise
 
 
-def close_provider_stream(stream: Any) -> None:
+def close_provider_stream(stream: Any, *, error: BaseException | None = None) -> None:
     if isinstance(stream, _ProviderStream):
+        if error is not None:
+            stream._attempt.terminal(_failure_status(error))
         stream.close()
 
 

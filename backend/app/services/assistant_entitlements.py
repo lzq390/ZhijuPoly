@@ -90,9 +90,13 @@ def prepare_chat(request, request_body, module="assistant", images=(), *, image_
         "mime": mime, "bytes": len(data), "source": source} for (data, mime), source in zip(images, sources)]}
     if lookup_only:
         return lookup_request(request, module, payload)
+    settings = getattr(getattr(getattr(request, "app", None), "state", None), "settings", None)
+    reasoning_budget = module == "tg_assistant" or (
+        module == "assistant" and getattr(settings, "assistant_transport", "chat_completions") == "responses"
+    )
     spec = {"message_count": len(request_body.messages), "input_characters": len(_json(body)),
         "image_count": len(images), "image_bytes": sum(len(data) for data, _ in images),
-        "max_output_tokens": 2400 if module == "tg_assistant" else 1400, "provider_attempt_limit": 4}
+        "max_output_tokens": 2400 if reasoning_budget else 1400, "provider_attempt_limit": 4}
     return prepare_operation(request, module, payload, spec)
 
 

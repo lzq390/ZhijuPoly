@@ -8,6 +8,7 @@ from typing import Any
 from app.services.ai_client import INVALID_EXTRACTION_RESULT, clean_ai_provider_error, create_openai_client
 from app.services.online_knowledge.analytics import _has_value
 from app.services.usage_provider import provider_call
+from app.services.ai_responses import complete_responses_text
 from app.services.private_quotas import PrivateQuotaSettings
 
 
@@ -122,6 +123,7 @@ class PolymerExtractor:
         base_url: str,
         model_name: str,
         proxy_url: str = "",
+        transport: str = "chat_completions",
     ) -> None:
         self.client = create_openai_client(
             api_key=api_key,
@@ -129,6 +131,7 @@ class PolymerExtractor:
             proxy_url=proxy_url,
         )
         self.model_name = model_name
+        self.transport = transport
         self.results: list[ExtractionResult] = []
 
     def close(self) -> None:
@@ -240,19 +243,27 @@ Return only valid JSON. No markdown."""
 
     def extract_from_abstract(self, title: str, abstract: str, paper_id: str, mode: str) -> ExtractionResult:
         try:
-            response = provider_call(self.client.chat.completions.create,
-                model=self.model_name,
-                messages=[
-                    {"role": "system", "content": "You are a polymer chemistry expert. Respond only with valid JSON."},
-                    {"role": "user", "content": self.create_extraction_prompt(title, abstract, mode)},
-                ],
-                temperature=0,
-                max_tokens=4000,
-            )
-            try:
-                result_text = response.choices[0].message.content
-            except (AttributeError, IndexError, TypeError):
-                raise InvalidExtractionResult() from None
+            if self.transport == "responses":
+                result_text = complete_responses_text(
+                    self.client, model=self.model_name,
+                    instructions="You are a polymer chemistry expert. Respond only with valid JSON.",
+                    messages=[{"role": "user", "content": self.create_extraction_prompt(title, abstract, mode)}],
+                    max_output_tokens=4000, phase="extraction",
+                )
+            else:
+                response = provider_call(self.client.chat.completions.create,
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": "You are a polymer chemistry expert. Respond only with valid JSON."},
+                        {"role": "user", "content": self.create_extraction_prompt(title, abstract, mode)},
+                    ],
+                    temperature=0,
+                    max_tokens=4000,
+                )
+                try:
+                    result_text = response.choices[0].message.content
+                except (AttributeError, IndexError, TypeError):
+                    raise InvalidExtractionResult() from None
             if not isinstance(result_text, str):
                 raise InvalidExtractionResult()
             if len(result_text.encode("utf-8")) > PrivateQuotaSettings.from_environment().model_output_bytes:

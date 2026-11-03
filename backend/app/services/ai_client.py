@@ -21,6 +21,13 @@ _CLEAN_PROVIDER_ERRORS = frozenset(
 )
 
 
+def model_proxy_url(settings: Any) -> str:
+    """Model transport only; never use this override for literature sources."""
+    return getattr(settings, "ai_model_proxy_url", getattr(
+        settings, "ai_proxy_url", getattr(settings, "online_knowledge_proxy_url", "")
+    ))
+
+
 def create_openai_client(
     *,
     api_key: str,
