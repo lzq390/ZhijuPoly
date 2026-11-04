@@ -437,15 +437,41 @@ describe("智聚万物首页", () => {
     ]);
   });
 
-  it("打开普通项目后只保留通用对话入口，点击入口重新加载根通用页面", async () => {
+  it("打开项目保留历史对话，返回根通用页面后重新同步会话", async () => {
     render(<App />);
 
     const workspace = screen.getByTitle("智聚万物智能体工作台") as HTMLIFrameElement;
     const frameWindow = workspace.contentWindow;
     expect(frameWindow).not.toBeNull();
     const postMessage = vi.spyOn(frameWindow!, "postMessage").mockImplementation(() => {});
+    const sessions = [
+      { id: "ses_new", title: "新的研究对话", updatedAt: 200 },
+      { id: "ses_old", title: "旧的实验记录", updatedAt: 100 }
+    ];
+    function publishSessions(source: Window | null, activeSessionID: string) {
+      window.dispatchEvent(new MessageEvent("message", {
+        source,
+        origin: WORKSPACE_ORIGIN,
+        data: {
+          namespace: "openscience.zhijupoly",
+          version: 1,
+          type: "general.sessions.snapshot",
+          sessions,
+          activeSessionID
+        }
+      }));
+    }
+
+    expect((screen.getByRole("button", { name: "新建对话" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("searchbox", { name: "搜索会话" })).not.toBeNull();
+    expect(screen.getByText("正在同步会话…")).not.toBeNull();
 
     fireEvent.load(workspace);
+    publishSessions(frameWindow, "ses_new");
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "新建对话" }) as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.getByRole("button", { name: "新的研究对话" }).getAttribute("aria-current")).toBe("page");
+    });
     window.dispatchEvent(
       new MessageEvent("message", {
         source: frameWindow,
@@ -480,11 +506,30 @@ describe("智聚万物首页", () => {
     });
     fireEvent.click(projectButton);
 
-    expect(screen.queryByRole("button", { name: "新建对话" })).toBeNull();
-    expect(screen.getByRole("button", { name: "对话" })).not.toBeNull();
+    expect(postMessage).toHaveBeenCalledWith({
+      namespace: "openscience.zhijupoly",
+      version: 1,
+      type: "project.open",
+      directory: "/home/codexlab/DevTool/Alpha"
+    }, WORKSPACE_ORIGIN);
+    expect((screen.getByRole("button", { name: "新建对话" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole("button", { name: "新的研究对话" }).getAttribute("aria-current")).toBeNull();
+    expect(screen.getByRole("button", { name: "旧的实验记录" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "对话" }).getAttribute("aria-current")).toBeNull();
+    const search = screen.getByRole("searchbox", { name: "搜索会话" });
+    fireEvent.change(search, { target: { value: "实验" } });
+    expect(screen.queryByRole("button", { name: "新的研究对话" })).toBeNull();
+    expect(screen.getByRole("button", { name: "旧的实验记录" })).not.toBeNull();
+    fireEvent.change(search, { target: { value: "" } });
 
     fireEvent.click(screen.getByRole("button", { name: "对话" }));
-    expect(workspace.src).toBe(WORKSPACE_URL);
+    const rootWorkspace = screen.getByTitle("智聚万物智能体工作台") as HTMLIFrameElement;
+    expect(rootWorkspace).not.toBe(workspace);
+    expect(rootWorkspace.src).toBe(WORKSPACE_URL);
+    expect(screen.getByRole("button", { name: "对话" }).getAttribute("aria-current")).toBe("page");
+    expect((screen.getByRole("button", { name: "新建对话" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("searchbox", { name: "搜索会话" })).not.toBeNull();
+    expect(screen.getByText("正在同步会话…")).not.toBeNull();
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "展开项目" }).getAttribute("aria-expanded")).toBe("false");
     });
@@ -494,6 +539,22 @@ describe("智聚万物首页", () => {
         .queryAllByRole("button")
       .find((candidate) => candidate.getAttribute("data-project-directory") === "/home/codexlab/DevTool/Alpha")
     ).toBeUndefined();
+
+    const rootFrameWindow = rootWorkspace.contentWindow;
+    expect(rootFrameWindow).not.toBeNull();
+    const rootPostMessage = vi.spyOn(rootFrameWindow!, "postMessage").mockImplementation(() => {});
+    fireEvent.load(rootWorkspace);
+    expect(rootPostMessage).toHaveBeenCalledWith({
+      namespace: "openscience.zhijupoly",
+      version: 1,
+      type: "general.sessions.request"
+    }, WORKSPACE_ORIGIN);
+    publishSessions(rootFrameWindow, "ses_old");
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "新建对话" }) as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.getByRole("button", { name: "旧的实验记录" }).getAttribute("aria-current")).toBe("page");
+      expect(screen.getByRole("button", { name: "新的研究对话" }).getAttribute("aria-current")).toBeNull();
+    });
   });
 
   it("离开首页后清除工作台活动态并允许对话入口返回首页", () => {
