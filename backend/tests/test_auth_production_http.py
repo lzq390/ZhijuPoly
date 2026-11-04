@@ -7,6 +7,7 @@ integration tests. Cookie port sharing is recorded, not claimed to be fixed.
 from dataclasses import replace
 from types import SimpleNamespace
 
+import anyio
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 import httpx
@@ -19,6 +20,12 @@ from app.auth.service import AuthService
 from app.auth.settings import (
     AuthSettings, PRODUCTION_HTTP_COOKIE_NAME, PRODUCTION_HTTP_HOST,
     PRODUCTION_HTTP_ORIGIN,
+)
+
+
+FORWARDED_ORIGINS = (
+    'http://localhost:19000', 'http://127.0.0.1:19001', 'http://[::1]:19002',
+    'http://forward.example:28080', 'http://192.168.1.2:19000',
 )
 
 
@@ -137,7 +144,8 @@ class IdentityFixture:
 
 
 @pytest.fixture
-def production_client(monkeypatch):
+def production_client(monkeypatch, request):
+    origin = getattr(request, 'param', PRODUCTION_HTTP_ORIGIN)
     auth = IdentityFixture(production_settings(monkeypatch))
     app = FastAPI()
     app.state.auth = auth
@@ -158,19 +166,25 @@ def production_client(monkeypatch):
         return await request.json()
 
     app.add_middleware(AuthenticationMiddleware, auth_service=auth)
-    with TestClient(app, base_url=PRODUCTION_HTTP_ORIGIN) as client:
+    # This Starlette TestClient version cannot parse IPv6 server netlocs.
+    # Preserve the browser's actual Host/Origin while using its IPv4 transport.
+    transport_origin = 'http://localhost:19002' if origin == 'http://[::1]:19002' else origin
+    with TestClient(app, base_url=transport_origin) as client:
+        client.headers['Host'] = origin.removeprefix('http://')
         yield client, auth, app
 
 
 def login(client, username='fixture-a'):
-    result = client.post('/api/v1/auth/login', headers={'Origin': PRODUCTION_HTTP_ORIGIN},
+    origin = 'http://' + client.headers['Host']
+    result = client.post('/api/v1/auth/login', headers={'Origin': origin},
                          json={'username': username, 'password': 'transport-fixture'})
     assert result.status_code == 200
     session = result.json()
-    return result, {'Origin': PRODUCTION_HTTP_ORIGIN,
+    return result, {'Origin': origin,
                     'X-Session-Context': session['session_id'], 'X-CSRF-Token': session['csrf_token']}
 
 
+@pytest.mark.parametrize('production_client', [PRODUCTION_HTTP_ORIGIN, *FORWARDED_ORIGINS], indirect=True)
 def test_http_login_refresh_and_cookie_contract(production_client):
     client, auth, _ = production_client
     result, _ = login(client)
@@ -211,13 +225,67 @@ def test_duplicate_entry_headers_are_rejected(production_client, duplicate):
     assert result.status_code == 403 and auth.login_calls == 0
 
 
+@pytest.mark.parametrize('host', [
+    '', 'localhost:19000/path', 'localhost:19000?query', 'localhost:19000#fragment',
+    'user@localhost:19000', 'localhost:invalid', 'localhost:65536',
+    'localhost:19000,elsewhere.invalid', 'localhost:19000 elsewhere.invalid',
+    'http://localhost:19000', 'localhost:19000\\elsewhere.invalid',
+    '[::1', '::1:19000',
+])
+def test_malformed_hosts_cannot_read_or_login(production_client, host):
+    client, auth, _ = production_client
+    assert client.get('/api/v1/auth/session', headers={'Host': host}).status_code == 403
+    result = client.post('/api/v1/auth/login', headers={'Host': host, 'Origin': f'http://{host}'},
+                         content=b'not-json')
+    assert result.status_code == 403 and auth.login_calls == 0
+
+
+def test_session_requires_exactly_one_actual_host_header(production_client):
+    client, _, app = production_client
+    duplicate = client.get('/api/v1/auth/session', headers=[('Host', PRODUCTION_HTTP_HOST),
+                                                          ('Host', PRODUCTION_HTTP_HOST)])
+    assert duplicate.status_code == 403
+    # TestClient inserts Host automatically; invoke the same ASGI app without
+    # that header to exercise a genuinely missing entry identity.
+    messages = []
+
+    async def receive():
+        return {'type': 'http.request', 'body': b''}
+
+    async def send(message):
+        messages.append(message)
+
+    anyio.run(app, {'type': 'http', 'method': 'GET', 'path': '/api/v1/auth/session',
+                    'headers': [], 'query_string': b'', 'scheme': 'http'}, receive, send)
+    assert messages[0]['type'] == 'http.response.start' and messages[0]['status'] == 403
+
+
+@pytest.mark.parametrize('production_client', FORWARDED_ORIGINS, indirect=True)
+def test_forwarded_entry_uses_actual_host_and_ignores_proxy_header_claims(production_client):
+    client, auth, _ = production_client
+    origin = 'http://' + client.headers['Host']
+    headers = {'Origin': origin, 'Forwarded': 'host=elsewhere.invalid;proto=https',
+               'X-Forwarded-Host': 'elsewhere.invalid', 'X-Forwarded-Proto': 'https'}
+    assert client.post('/api/v1/auth/login', headers=headers,
+                       json={'username': 'fixture-a', 'password': 'transport-fixture'}).status_code == 200
+    assert client.get('/api/v1/auth/session', headers=headers).json()['authenticated']
+    assert auth.login_calls == 1
+    forged = {**headers, 'Origin': PRODUCTION_HTTP_ORIGIN,
+              'X-Forwarded-Host': PRODUCTION_HTTP_HOST,
+              'Forwarded': f'host={PRODUCTION_HTTP_HOST};proto=http'}
+    assert client.post('/api/v1/auth/login', headers=forged, content=b'bad').status_code == 403
+    assert auth.login_calls == 1
+
+
+@pytest.mark.parametrize('production_client', [PRODUCTION_HTTP_ORIGIN, *FORWARDED_ORIGINS], indirect=True)
 def test_private_requests_keep_csrf_context_owner_and_revocation(production_client):
     client, _, app = production_client
     assert client.get('/api/v1/private').status_code == 401
     first, headers = login(client)
+    origin = headers['Origin']
     assert client.get('/api/v1/private', headers=headers).json() == {
         'owner': first.json()['user']['id'], 'service': False}
-    assert client.post('/api/v1/upload', headers={'Origin': PRODUCTION_HTTP_ORIGIN}, content=b'bad').status_code == 409
+    assert client.post('/api/v1/upload', headers={'Origin': origin}, content=b'bad').status_code == 409
     assert client.post('/api/v1/upload', headers={**headers, 'X-CSRF-Token': 'wrong'}, content=b'bad').status_code == 403
     assert client.post('/api/v1/upload', headers={**headers, 'Origin': 'http://114.214.255.154:9001'}, content=b'bad').status_code == 403
     assert not app.state.parsed
@@ -227,6 +295,7 @@ def test_private_requests_keep_csrf_context_owner_and_revocation(production_clie
     assert client.get('/api/v1/auth/session').json()['authenticated'] is False
 
 
+@pytest.mark.parametrize('production_client', [PRODUCTION_HTTP_ORIGIN, FORWARDED_ORIGINS[0]], indirect=True)
 def test_old_tab_context_cannot_read_new_login_identity(production_client):
     client, _, _ = production_client
     _, old_headers = login(client)
@@ -235,11 +304,12 @@ def test_old_tab_context_cannot_read_new_login_identity(production_client):
     assert client.get('/api/v1/private', headers=new_headers).json()['owner'] == second.json()['user']['id']
 
 
-def test_wrong_host_cannot_read_session_but_loopback_health_remains_available(production_client):
+def test_session_accepts_a_forwarded_host_and_loopback_health_remains_available(production_client):
     client, _, _ = production_client
     login(client)
-    assert client.get('/api/v1/auth/session', headers={'Host': '127.0.0.1:9000',
-        'X-Forwarded-Host': PRODUCTION_HTTP_HOST}).status_code == 403
+    session = client.get('/api/v1/auth/session', headers={'Host': '127.0.0.1:9000',
+        'X-Forwarded-Host': PRODUCTION_HTTP_HOST})
+    assert session.status_code == 200 and session.json()['authenticated']
     assert client.get('/health', headers={'Host': '127.0.0.1:19000'}).status_code == 200
 
 
