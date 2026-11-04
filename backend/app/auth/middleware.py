@@ -4,6 +4,7 @@ import hmac
 import logging
 import ipaddress
 import re
+from urllib.parse import urlsplit
 
 import anyio
 from starlette.datastructures import Headers
@@ -14,9 +15,26 @@ from starlette.exceptions import HTTPException
 from .context import user_context, service_context
 from .policy import SIMULATION_CHECKOUT_PATHS, route_policy
 from .service import csrf_token
-from .settings import PRODUCTION_HTTP_HOST, PRODUCTION_HTTP_ORIGIN
 
 logger = logging.getLogger(__name__)
+
+
+def _http_entry_origin(raw_headers):
+    """Use the actual Host, including a tunnel's port, never forwarded headers."""
+    hosts = [value for name, value in raw_headers if name.lower() == b'host']
+    if len(hosts) != 1:
+        return None
+    try:
+        host = hosts[0].decode('ascii')
+        if not re.fullmatch(r'(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?', host):
+            return None
+        origin = 'http://' + host
+        parsed = urlsplit(origin)
+        if not parsed.hostname or parsed.port == 0:
+            return None
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return origin.encode('ascii')
 
 
 class AuthenticationMiddleware:
@@ -64,20 +82,21 @@ class AuthenticationMiddleware:
             await JSONResponse({'detail': message, 'code': code}, status_code=status,
                                headers={'Cache-Control': 'private, no-store'})(scope, receive, send)
 
+        trusted_origin = headers.get('origin') in self.auth.settings.allowed_origins
         if getattr(self.auth.settings, 'production_http_enabled', False) and path != '/health':
-            # The approved public HTTP entry is deliberately separate from
-            # development exceptions. Forwarded headers cannot establish its
-            # Host identity, and duplicate entry headers are ambiguous.
+            # Network access remains governed by the ingress firewall. HTTP
+            # forwarding can change the browser-facing host/port; bind writes
+            # to that actual entry instead of one fixed public address.
             raw_headers = scope.get('headers', ())
-            hosts = [value for name, value in raw_headers if name.lower() == b'host']
-            if hosts != [PRODUCTION_HTTP_HOST.encode('ascii')]:
-                return await reject(403, '请求入口未获授权。', 'untrusted_host')
-            if method not in {'GET', 'HEAD', 'OPTIONS'}:
-                origins = [value for name, value in raw_headers if name.lower() == b'origin']
-                if origins != [PRODUCTION_HTTP_ORIGIN.encode('ascii')]:
-                    return await reject(403, '请求来源未获授权。', 'untrusted_origin')
+            entry_origin = _http_entry_origin(raw_headers)
+            if entry_origin is None:
+                return await reject(403, '请求入口格式无效。', 'invalid_host')
+            origins = [value for name, value in raw_headers if name.lower() == b'origin']
+            trusted_origin = origins == [entry_origin]
+            if method not in {'GET', 'HEAD', 'OPTIONS'} and not trusted_origin:
+                return await reject(403, '请求来源未获授权。', 'untrusted_origin')
 
-        if policy == 'public' and method not in {'GET','HEAD','OPTIONS'} and headers.get('origin') not in self.auth.settings.allowed_origins:
+        if policy == 'public' and method not in {'GET','HEAD','OPTIONS'} and not trusted_origin:
             return await reject(403, '请求来源未获授权。', 'untrusted_origin')
         # Mobile checkout authenticates only its short-lived order capability.
         # Ignore ambient cookies, so preview cannot touch a login session.
@@ -90,7 +109,7 @@ class AuthenticationMiddleware:
         if policy != 'public':
             if session is None:
                 return await reject(401, '请先登录。', 'authentication_required')
-            if method not in {'GET','HEAD','OPTIONS'} and headers.get('origin') not in self.auth.settings.allowed_origins:
+            if method not in {'GET','HEAD','OPTIONS'} and not trusted_origin:
                 return await reject(403, '请求来源未获授权。', 'untrusted_origin')
             if policy == 'operations':
                 return await reject(403, '此操作仅供运维使用。', 'operation_forbidden')

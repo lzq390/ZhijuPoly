@@ -21,7 +21,7 @@ owner UID/GID, and the new external PG volume. Candidate ingress is loopback
 `19000`; worker authorization callbacks use loopback `18002`; PG uses loopback
 `55433`. Rendered configuration contains secrets and must remain private.
 
-The overlay enables exact-origin production HTTP authentication, account
+The overlay enables same-origin production HTTP authentication, account
 isolation, structure library, literature, batch jobs, polymer MD and metering.
 Quota enforcement and automatic historical artifact expiry remain disabled.
 The batch worker uses its own service login and environment file, without auth
@@ -73,6 +73,31 @@ Polymer MD uses the production runtime contract and a separate jobs root, 16 CPU
 mounts, a private spool/socket, 1 CPU, 2 GiB and no network or GPU. Verify kernel
 read-only mounts: user systemd `ReadOnlyPaths` alone is insufficient on some hosts.
 
+## Login through SSH forwarding
+
+Production HTTP authentication accepts the actual valid request `Host` rather
+than a fixed public-entry allowlist. Public access and same-origin forwarding
+through `localhost`, another IP or a domain work without adding entries to
+`ALLOWED_ORIGINS`. That setting remains the CORS configuration for separate
+browser origins. Cookie, CSRF and session checks still apply; a state-changing
+browser request must have one `Origin` equal to `http://` plus its actual `Host`.
+Forwarded host headers do not substitute for the actual `Host`.
+The existing public-ingress port and IP firewall allowlist remains unchanged.
+
+Nginx already forwards `Host $http_host`, including the browser's port. Preserve
+that setting and the browser's `Origin` header through any additional proxy.
+Deploy the reviewed backend image using the existing account-enabled Compose
+project and environment file, updating its backend image pin. For production
+currently served by Nginx on remote port 9000, run on the client:
+
+```bash
+ssh -N -L 127.0.0.1:19000:127.0.0.1:9000 <user>@114.214.255.154
+```
+
+Then open `http://127.0.0.1:19000` or `http://localhost:19000`. Forward to the
+Nginx web port, not the backend callback port `18002`. Use remote port `19000`
+only when intentionally accessing the candidate Nginx listener bound there.
+
 ## Rehearse against copied production data
 
 1. Back up the production database and roles; inventory and copy associated files
@@ -119,9 +144,9 @@ directory structure and configure the candidate's fixed `job_root`. Stop old GPU
 workers before starting candidate GPU workers. Wait for unrelated GPU tasks to
 finish naturally before scientific acceptance.
 
-Use controlled local routing to test the candidate with the formal HTTP origin;
-do not broaden origin checks to admit loopback. Verify login, password change,
-logout/revocation, multiple tabs, SSE/downloads, origin rejection, account isolation
+Use controlled local routing to test the candidate with the formal HTTP origin,
+and verify same-origin SSH forwarding as described above. Verify login, password
+change, logout/revocation, multiple tabs, SSE/downloads, origin rejection, account isolation
 and the existing 9011 integration. Verify historical tasks as `legacy-owner`,
 including artifacts older than the former expiry limits. Run real submit/cancel/
 result tests for monomer MD/DFT, batch jobs, polymer MD and trajectory/distance
