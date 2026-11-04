@@ -22,6 +22,11 @@ export const fetchUsageOperations = (offset = 0, module?: string, signal?: Abort
   if (module) query.set("module", module);
   return read<UsageOperationPage>(`/operations?${query}`, signal);
 };
+export const fetchUsageOperationsByGroup = (offset = 0, moduleGroup?: string, signal?: AbortSignal) => {
+  const query = new URLSearchParams({ offset: String(offset), limit: "25" });
+  if (moduleGroup) query.set("module_group", moduleGroup);
+  return read<UsageOperationPage>(`/operations?${query}`, signal);
+};
 function confirm(operation: UsageOperation) {
   if (["succeeded", "released"].includes(operation.state)) confirmUsageOperation(operation.operation_id);
 }

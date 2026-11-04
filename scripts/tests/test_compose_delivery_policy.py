@@ -53,6 +53,28 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
                     frontend["environment"]["DEV_PROXY_TARGET"],
                     f"http://{expected_project}-backend-1:8000",
                 )
+                self.assertEqual(frontend["environment"]["DEV_MCP_PROXY_TARGET"], "")
+                self.assertNotIn("VITE_MCP_PROXY_TARGET", frontend["environment"])
+
+    @unittest.skipUnless(shutil.which("docker"), "Docker Compose is not available")
+    def test_mcp_gateway_is_an_explicit_server_side_development_setting(self) -> None:
+        environment = {
+            "PATH": os.environ.get("PATH", os.defpath),
+            "NEXPOLY_ASSET_ROOT": "/tmp/nexpoly-test-assets",
+            "NEXPOLY_DEV_MCP_PROXY_TARGET": "http://mcp-fixture:18110",
+            "NEXPOLY_DEV_MCP_PROXY_ALLOWED_HOSTS": "127.0.0.1:9001,dev.example:9001",
+        }
+        command = ["docker", "compose", "--env-file", os.devnull, "-p", "nexpoly_dev"]
+        for filename in ("docker-compose.yml", "docker-compose.dev.yml"):
+            command += ["-f", str(REPOSITORY_ROOT / filename)]
+        result = subprocess.run(command + ["config", "--format", "json", "--no-env-resolution"],
+                                env=environment, text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        services = json.loads(result.stdout)["services"]
+        frontend = services["frontend-dev"]["environment"]
+        self.assertEqual(frontend["DEV_MCP_PROXY_TARGET"], environment["NEXPOLY_DEV_MCP_PROXY_TARGET"])
+        self.assertEqual(frontend["DEV_MCP_PROXY_ALLOWED_HOSTS"], environment["NEXPOLY_DEV_MCP_PROXY_ALLOWED_HOSTS"])
+        self.assertNotIn("DEV_MCP_PROXY_TARGET", services["backend"]["environment"])
 
     @unittest.skipUnless(shutil.which("docker"), "Docker Compose is not available")
     def test_isolated_cpu_and_gpu_healthchecks_use_service_role_and_schema_0018(self) -> None:

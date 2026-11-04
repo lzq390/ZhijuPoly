@@ -1,23 +1,29 @@
 // @vitest-environment jsdom
+import { useEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GUEST_SESSION } from "../auth/session";
 import type { UsageCatalog, UsageRecords, UsageSummary } from "../types/usage";
 import { UsageRequestError } from "../services/usage";
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), catalog: vi.fn(), summary: vi.fn(), records: vi.fn() }));
-vi.mock("./usage/PersonalEntitlementsPanel", () => ({ PersonalEntitlementsPanel: () => null }));
+vi.mock("./usage/PersonalEntitlementsPanel", () => ({ PersonalEntitlementsPanel: ({ activeTab, onBusyChange }: { activeTab: string; onBusyChange: (busy: boolean) => void }) => {
+  useEffect(() => onBusyChange(false), [onBusyChange]);
+  return <><div role="tabpanel" id="usage-panel-overview" aria-labelledby="usage-tab-overview" hidden={activeTab !== "overview"}>分类次数测试</div><div role="tabpanel" id="usage-panel-operations" aria-labelledby="usage-tab-operations" hidden={activeTab !== "operations"}>操作记录测试</div></>;
+} }));
 vi.mock("../auth/AuthProvider", () => ({ useAuth: mocks.auth }));
 vi.mock("../services/usage", async () => ({ ...await vi.importActual<typeof import("../services/usage")>("../services/usage"), fetchUsageCatalog: mocks.catalog, fetchUsageSummary: mocks.summary, fetchUsageRecords: mocks.records }));
 import { PersonalUsagePage } from "./PersonalUsagePage";
 import catalogFixture from "../../scripts/fixtures/usage-catalog.json";
 
 const catalog = catalogFixture as UsageCatalog;
+const staticWarning = "末次观测状态不保证进程已终止；无法确认的任务等待核实。";
+const degradedWarning = "计量写入出现异常，部分终态尚待补记；当前数据可能不完整。";
 const allMetrics = Object.fromEntries(catalog.metrics.map(metric => [metric.id, { value: null, known_count: 0, unknown_count: 3 }]));
 const metrics = { ...allMetrics, execution_ms: { value: 0, known_count: 2, unknown_count: 1 }, observed_wall_ms: { value: 1200, known_count: 1, unknown_count: 3 } };
-const summary: UsageSummary = { period: { start: "2026-09-01T00:00:00Z", end: "2026-10-01T00:00:00Z", timezone: "UTC", basis: "task_submitted_at" },
+const summary: UsageSummary = { period: { start: "2026-09-01T00:00:00Z", end: "2026-10-01T00:00:00Z", timezone: "Asia/Shanghai", basis: "task_submitted_at" },
   totals: { tasks: 3, attempts: 4, child_calls: 1, states: { completed: 2, failed: 1 }, metrics },
   modules: [{ module: "monomer_md", label: "分子动力学", tasks: 3, attempts: 4, child_calls: 1, states: { completed: 2, failed: 1 }, metrics }],
-  daily: [{ date: "2026-09-30", tasks: 3, states: { completed: 2, failed: 1 } }], coverage: { uncovered: ["openscience"], warnings: ["部分历史任务没有计量记录"] } };
+  daily: [{ date: "2026-09-30", tasks: 3, states: { completed: 2, failed: 1 } }], coverage: { uncovered: ["openscience"], warnings: [staticWarning] } };
 const records: UsageRecords = { items: [], page: 1, page_size: 25, total: 0 };
 function auth(id = "a") { return { status: "authenticated", session: { authenticated: true, user: { id, username: id, must_change_password: false }, session_id: `session-${id}`, csrf_token: "fixture", capabilities: {} }, login: vi.fn() }; }
 beforeEach(() => {
@@ -26,67 +32,187 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
+function renderResources() {
+  const view = render(<PersonalUsagePage />);
+  fireEvent.click(screen.getByRole("tab", { name: "资源观测" }));
+  return view;
+}
+function selectOption(label: string, option: string) {
+  fireEvent.click(screen.getByRole("combobox", { name: label }));
+  fireEvent.click(screen.getByRole("option", { name: option }));
+}
+
 describe("personal usage page", () => {
+  it("defaults to the overview and supports keyboard tab navigation", async () => {
+    render(<PersonalUsagePage />);
+    expect(screen.getByRole("tab", { name: "次数总览" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tabpanel", { name: "次数总览" })).toBeTruthy();
+    const tabs = screen.getByRole("tablist", { name: "用量视图" });
+    fireEvent.keyDown(tabs, { key: "End" });
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "资源观测" }));
+    await screen.findByRole("heading", { name: "已观测指标" });
+    fireEvent.keyDown(tabs, { key: "ArrowLeft" });
+    expect(screen.getByRole("tabpanel", { name: "操作记录" })).toBeTruthy();
+    fireEvent.keyDown(tabs, { key: "Home" });
+    expect(screen.getByRole("tabpanel", { name: "次数总览" })).toBeTruthy();
+  });
+  it("preserves draft filters and pagination across tabs without a new request", async () => {
+    mocks.records.mockImplementation(filter => Promise.resolve({ ...records, page: filter.page, total: 52 }));
+    renderResources();
+    fireEvent.click(await screen.findByRole("button", { name: "下一页" }));
+    await screen.findByText("共 52 条 · 第 2 / 3 页");
+    fireEvent.change(screen.getByLabelText("开始日期（北京时间）"), { target: { value: "2024-02-01" } });
+    expect(screen.getByText("筛选尚未应用")).toBeTruthy();
+    const calls = mocks.records.mock.calls.length;
+    fireEvent.click(screen.getByRole("tab", { name: "次数总览" }));
+    fireEvent.click(screen.getByRole("tab", { name: "资源观测" }));
+    expect((screen.getByLabelText("开始日期（北京时间）") as HTMLInputElement).value).toBe("2024-02-01");
+    expect(screen.getByText("共 52 条 · 第 2 / 3 页")).toBeTruthy();
+    expect(mocks.records).toHaveBeenCalledTimes(calls);
+  });
+  it("refreshes all resource reads without flashing existing data and retries a failed section", async () => {
+    renderResources();
+    await screen.findByRole("heading", { name: "已观测指标" });
+    await waitFor(() => expect((screen.getByRole("button", { name: "刷新全部" }) as HTMLButtonElement).disabled).toBe(false));
+    let fail!: (error: Error) => void;
+    mocks.summary.mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
+    fireEvent.click(screen.getByRole("button", { name: "刷新全部" }));
+    expect(screen.getByRole("region", { name: "用量概览" })).toBeTruthy();
+    await waitFor(() => expect(mocks.summary).toHaveBeenCalledTimes(2));
+    expect(mocks.catalog).toHaveBeenCalledTimes(2);
+    expect(mocks.records).toHaveBeenCalledTimes(2);
+    await act(async () => fail(new Error("汇总暂时不可用")));
+    expect(screen.getByRole("alert").textContent).toContain("上次成功读取的数据");
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(mocks.summary).toHaveBeenCalledTimes(3));
+    expect(mocks.catalog).toHaveBeenCalledTimes(2);
+    expect(mocks.records).toHaveBeenCalledTimes(2);
+  });
   it("offers login without requesting private statistics for guests", () => {
     const login = vi.fn(); mocks.auth.mockReturnValue({ status: "guest", session: GUEST_SESSION, login });
     render(<PersonalUsagePage />); fireEvent.click(screen.getByRole("button", { name: "登录账号" }));
     expect(login).toHaveBeenCalledOnce(); expect(mocks.catalog).not.toHaveBeenCalled();
   });
-  it("renders unknown separately from measured zero and explains coverage", async () => {
-    render(<PersonalUsagePage />); await screen.findByRole("heading", { name: "已观测指标" });
-    expect(screen.getAllByText("0 秒")[0]).toBeTruthy(); expect(screen.getAllByText("未记录").length).toBeGreaterThan(0);
+  it("keeps measured data while hiding static resource explanations and coverage", async () => {
+    renderResources(); await screen.findByRole("heading", { name: "已观测指标" });
+    expect(screen.getAllByText("0 秒")[0].closest("[hidden]")).toBeNull(); expect(screen.getAllByText("未记录").length).toBeGreaterThan(0);
     expect(screen.getAllByText("0 条已记录 · 3 条未记录")[0]).toBeTruthy();
-    expect(screen.getByText("累计已观测产物体积")).toBeTruthy(); expect(screen.getByText("尚未覆盖：OpenScience 独立服务")).toBeTruthy();
-    expect(screen.getByText(/不等于 GPU 小时/)).toBeTruthy();
-    expect(screen.getByText("最多 366 天；结束日期包含当天。仅记录启用后的任务；删除任务不会清除统计。")).toBeTruthy();
+    expect(screen.getByText("累计已观测产物体积").closest("[hidden]")).toBeNull();
+    for (const text of ["尚未覆盖：OpenScience 独立服务", staticWarning, "最多 366 天；结束日期包含当天。仅记录启用后的任务；删除任务不会清除统计。", "部分历史或公共记录没有独立模块归属，可在“全部模块”查看。", /资源观测用于诊断/, /不等于 GPU 小时/]) {
+      expect(screen.getByText(text).closest("[hidden]")).toBeTruthy();
+    }
+    expect(screen.getByText(/^已应用：/).closest("[hidden]")).toBeNull();
+    expect(screen.getByText("所选条件下暂无用量明细。").closest("[hidden]")).toBeNull();
     expect(screen.queryByText(/历史记录保留/)).toBeNull();
   });
-  it("sends inclusive UTC dates as exclusive next day and resets pagination on filters", async () => {
+  it("keeps runtime and unknown coverage warnings visible beside hidden static notes", async () => {
+    const unknownWarning = "自定义采集器报告数据延迟";
+    mocks.summary.mockResolvedValue({ ...summary, coverage: { ...summary.coverage, warnings: [staticWarning, degradedWarning, unknownWarning] } });
+    renderResources(); await screen.findByRole("heading", { name: "已观测指标" });
+    expect(screen.getByText(staticWarning).closest("[hidden]")).toBeTruthy();
+    for (const warning of [degradedWarning, unknownWarning]) expect(screen.getByText(warning).closest("[hidden]")).toBeNull();
+    expect(screen.getByLabelText("统计覆盖提示").closest("[hidden]")).toBeNull();
+  });
+  it("sends inclusive Beijing dates as exclusive next day and resets pagination on filters", async () => {
     mocks.records.mockImplementation(filter => Promise.resolve({ ...records, page: filter.page, total: 52 }));
-    render(<PersonalUsagePage />); await screen.findByRole("button", { name: "下一页" });
+    renderResources(); await screen.findByRole("button", { name: "下一页" });
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
     await waitFor(() => expect(mocks.records.mock.calls.at(-1)?.[0].page).toBe(2));
-    fireEvent.change(screen.getByLabelText("开始日期（UTC）"), { target: { value: "2024-02-01" } });
+    fireEvent.change(screen.getByLabelText("开始日期（北京时间）"), { target: { value: "2024-02-01" } });
     fireEvent.change(screen.getByLabelText("结束日期（含当天）"), { target: { value: "2024-02-29" } });
-    fireEvent.change(screen.getByLabelText("功能"), { target: { value: "monomer_md" } });
+    selectOption("功能模块", "MD 模拟");
     fireEvent.click(screen.getByRole("button", { name: "应用筛选" }));
-    await waitFor(() => expect(mocks.summary.mock.calls.at(-1)?.[0]).toEqual({ start: "2024-02-01T00:00:00.000Z", end: "2024-03-01T00:00:00.000Z", module: "monomer_md" }));
+    await waitFor(() => expect(mocks.summary.mock.calls.at(-1)?.[0]).toEqual({ start: "2024-01-31T16:00:00.000Z", end: "2024-02-29T16:00:00.000Z", timezone: "Asia/Shanghai", module_group: "mdSimulationDemo" }));
     expect(mocks.records.mock.calls.at(-1)?.[0].page).toBe(1);
   });
+  it("uses the sidebar modules and keeps database analysis task types distinct", async () => {
+    mocks.summary.mockResolvedValue({ ...summary, modules: [
+      { ...summary.modules[0], module: "database_analysis", label: "数据库分析" },
+      { ...summary.modules[0], module: "dft_history", label: "DFT 历史查询" },
+    ] });
+    renderResources(); await screen.findByRole("heading", { name: "已观测指标" });
+    fireEvent.click(screen.getByRole("combobox", { name: "功能模块" }));
+    const options = within(screen.getByRole("listbox", { name: "功能模块" }));
+    expect(options.getAllByRole("option").map(option => option.textContent)).toEqual([
+      "全部模块", "结构工作台", "知识检索", "聚合物生成", "单体逆合成反推", "聚合物相似性探索",
+      "数据库查询", "数据库筛选", "数据库分析", "均聚物性质预测", "单体正向聚合", "MD 模拟",
+      "单体 MD 模拟", "单体 DFT", "条件聚合物生成", "Tg 逆向设计", "高通量优化演示",
+    ]);
+    expect(options.queryByRole("option", { name: "DFT 历史查询" })).toBeNull();
+    expect(options.queryByRole("option", { name: "DFT 计算" })).toBeNull();
+    fireEvent.click(options.getByRole("option", { name: "数据库分析" }));
+    expect(screen.getByText("筛选尚未应用")).toBeTruthy();
+    expect(mocks.summary).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "应用筛选" }));
+    await waitFor(() => expect(mocks.summary.mock.calls.at(-1)?.[0]).toMatchObject({ module_group: "database" }));
+    expect(mocks.records.mock.calls.at(-1)?.[0]).toMatchObject({ module_group: "database", page: 1 });
+    expect(mocks.summary.mock.calls.at(-1)?.[0].module).toBeUndefined();
+    const table = within(screen.getByRole("region", { name: "按任务类型用量表，可横向滚动" }));
+    expect(table.getAllByRole("row")).toHaveLength(3);
+    expect(table.getByText("DFT 历史查询")).toBeTruthy();
+    for (const [label, id] of [["MD 模拟", "mdSimulationDemo"], ["单体 MD 模拟", "monomerMdSimulation"], ["单体 DFT", "monomerDft"], ["聚合物生成", "polytaoGeneration"], ["条件聚合物生成", "conditionalGeneration"], ["高通量优化演示", "highThroughputWorkflowDemo"]]) {
+      selectOption("功能模块", label);
+      fireEvent.click(screen.getByRole("button", { name: "应用筛选" }));
+      await waitFor(() => expect(mocks.summary.mock.calls.at(-1)?.[0].module_group).toBe(id));
+      expect(mocks.records.mock.calls.at(-1)?.[0]).toMatchObject({ module_group: id, page: 1 });
+    }
+    selectOption("功能模块", "全部模块");
+    fireEvent.click(screen.getByRole("button", { name: "应用筛选" }));
+    await waitFor(() => expect(mocks.summary.mock.calls.at(-1)?.[0].module_group).toBeUndefined());
+  });
+  it("keeps unattributed historical usage visible in all modules", async () => {
+    mocks.summary.mockResolvedValue({ ...summary, modules: [{ ...summary.modules[0], module: "database_browser", label: "历史数据库操作（未细分）" }] });
+    renderResources(); await screen.findByRole("heading", { name: "已观测指标" });
+    const table = within(screen.getByRole("region", { name: "按任务类型用量表，可横向滚动" }));
+    expect(table.getByText("未归属侧栏模块")).toBeTruthy();
+    expect(table.getByText("历史数据库操作（未细分）")).toBeTruthy();
+    expect(screen.getByText("部分历史或公共记录没有独立模块归属，可在“全部模块”查看。").closest("[hidden]")).toBeTruthy();
+    expect(mocks.summary.mock.calls.at(-1)?.[0].module_group).toBeUndefined();
+  });
+  it("retains a previous-page action when fetching the next details page fails", async () => {
+    mocks.records.mockImplementation(filter => filter.page === 1 ? Promise.resolve({ ...records, total: 52 }) : Promise.reject(new Error("details unavailable")));
+    renderResources(); fireEvent.click(await screen.findByRole("button", { name: "下一页" }));
+    await screen.findByRole("alert"); expect((screen.getByRole("button", { name: "下一页" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "上一页" }));
+    await screen.findByText("共 52 条 · 第 1 / 3 页"); expect(mocks.records.mock.calls.at(-1)?.[0].page).toBe(1);
+  });
   it("rejects date spans exceeding366 days without another request", async () => {
-    render(<PersonalUsagePage />); await screen.findByRole("heading", { name: "已观测指标" });
-    fireEvent.change(screen.getByLabelText("开始日期（UTC）"), { target: { value: "2024-01-01" } });
+    renderResources(); await screen.findByRole("heading", { name: "已观测指标" });
+    fireEvent.change(screen.getByLabelText("开始日期（北京时间）"), { target: { value: "2024-01-01" } });
     fireEvent.change(screen.getByLabelText("结束日期（含当天）"), { target: { value: "2025-01-01" } });
     fireEvent.click(screen.getByRole("button", { name: "应用筛选" }));
     expect(screen.getByRole("alert").textContent).toContain("366"); expect(mocks.summary).toHaveBeenCalledOnce();
   });
   it("only filters details by state and child calls", async () => {
-    render(<PersonalUsagePage />); await screen.findByRole("heading", { name: "已观测指标" });
-    fireEvent.change(screen.getByLabelText("明细状态"), { target: { value: "failed" } });
+    renderResources(); await screen.findByRole("heading", { name: "已观测指标" });
+    selectOption("明细状态", "失败");
     fireEvent.click(screen.getByLabelText("显示子调用明细"));
     await waitFor(() => expect(mocks.records.mock.calls.at(-1)?.[0]).toMatchObject({ status: "failed", include_children: true, page: 1 }));
     expect(mocks.summary).toHaveBeenCalledOnce();
   });
   it("handles disabled catalog without summary or records requests", async () => {
-    mocks.catalog.mockResolvedValue({ ...catalog, enabled: false }); render(<PersonalUsagePage />);
+    mocks.catalog.mockResolvedValue({ ...catalog, enabled: false }); renderResources();
     await screen.findByRole("heading", { name: "用量统计尚未启用" });
+    expect(screen.getByText("启用后可在此查看已记录的个人用量。").closest("[hidden]")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新检查" })).toBeTruthy();
     expect(mocks.summary).not.toHaveBeenCalled(); expect(mocks.records).not.toHaveBeenCalled();
   });
   it("recognizes the summary503 feature flag while retaining the account", async () => {
-    mocks.summary.mockRejectedValue(new UsageRequestError(503, "usage_metering_disabled", "disabled")); render(<PersonalUsagePage />);
+    mocks.summary.mockRejectedValue(new UsageRequestError(503, "usage_metering_disabled", "disabled")); renderResources();
     await screen.findByRole("heading", { name: "用量统计尚未启用" }); expect(screen.queryByRole("button", { name: "登录账号" })).toBeNull();
   });
   it("provides retry after a catalog failure", async () => {
-    mocks.catalog.mockRejectedValueOnce(new Error("暂时不可用")); render(<PersonalUsagePage />);
+    mocks.catalog.mockRejectedValueOnce(new Error("暂时不可用")); renderResources();
     await screen.findByRole("alert"); fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await screen.findByRole("heading", { name: "已观测指标" }); expect(mocks.catalog).toHaveBeenCalledTimes(2);
   });
   it("does not show a retired account's late summary after switching users", async () => {
     let finish!: (value: UsageSummary) => void;
     mocks.summary.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    const view = render(<PersonalUsagePage />); await waitFor(() => expect(mocks.summary).toHaveBeenCalledOnce());
+    const view = renderResources(); await waitFor(() => expect(mocks.summary).toHaveBeenCalledOnce());
     mocks.auth.mockReturnValue(auth("b")); mocks.summary.mockResolvedValue({ ...summary, totals: { ...summary.totals, tasks: 17 } });
     view.rerender(<PersonalUsagePage />);
+    fireEvent.click(screen.getByRole("tab", { name: "资源观测" }));
     await waitFor(() => expect(within(screen.getByRole("region", { name: "用量概览" })).getByText("17")).toBeTruthy());
     await act(async () => { finish({ ...summary, totals: { ...summary.totals, tasks: 9999 } }); });
     expect(screen.queryByText("9,999")).toBeNull(); expect(screen.getByText("17")).toBeTruthy();
@@ -94,37 +220,44 @@ describe("personal usage page", () => {
   it("shows empty data explicitly and displays attempt/source detail without task actions", async () => {
     mocks.summary.mockResolvedValue({ ...summary, totals: { ...summary.totals, tasks: 0 }, modules: [], daily: [] });
     mocks.records.mockResolvedValue({ ...records, total: 1, items: [{ module: "monomer_md", task_id: "own-task", attempt_id: "own-attempt", kind: "task", status: "completed", submitted_at: "2026-09-30T01:00:00Z", started_at: null, finished_at: null, parent_task_id: null, root_task_id: "own-task", source: "monomer_md", metrics: { execution_ms: 0 } }] });
-    render(<PersonalUsagePage />); await screen.findByText("所选范围内暂无已记录的任务。");
+    renderResources(); await screen.findByText("所选范围内暂无已记录的任务。");
     expect(screen.getByText("own-attempt")).toBeTruthy(); expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
   });
   it("renders full catalog, nine metrics and partial module execution and root wall totals", async () => {
-    render(<PersonalUsagePage />); await screen.findByRole("heading", { name: "已观测指标" });
-    const coverage = within(screen.getByRole("region", { name: "统计范围" }));
-    expect(coverage.getAllByRole("listitem")).toHaveLength(22);
-    expect(coverage.getAllByText("部分计量", { exact: true })).toHaveLength(21);
+    renderResources(); await screen.findByRole("heading", { name: "已观测指标" });
+    expect(screen.queryByRole("region", { name: "统计范围" })).toBeNull();
+    const coverageSection = screen.getByText("统计范围", { selector: "summary" }).closest("section")!;
+    expect(coverageSection.hidden).toBe(true);
+    fireEvent.click(screen.getByText("全部指标", { selector: "summary" }));
+    const coverage = within(coverageSection);
+    expect(coverageSection.querySelectorAll("li")).toHaveLength(26);
+    expect(coverage.getAllByText("部分计量", { exact: true })).toHaveLength(25);
     expect(coverage.getByText("外部服务", { exact: true })).toBeTruthy();
     for (const item of catalog.modules) expect(coverage.getByText(item.label, { exact: true })).toBeTruthy();
     const metricCards = within(screen.getByRole("region", { name: "已观测指标" }));
-    for (const metric of catalog.metrics) expect(metricCards.getByText(metric.label, { exact: true })).toBeTruthy();
-    const table = within(screen.getByRole("region", { name: "按功能用量表，可横向滚动" }));
+    expect(catalog.metrics).toHaveLength(9);
+    for (const metric of catalog.metrics) expect(metricCards.getByText(metric.label, { exact: true }).closest("[hidden]")).toBeNull();
+    const table = within(screen.getByRole("region", { name: "按任务类型用量表，可横向滚动" }));
     expect(table.getByRole("columnheader", { name: "根任务历时（已知合计）" })).toBeTruthy();
     expect(table.getByText("0 秒")).toBeTruthy(); expect(table.getByText("1.2 秒")).toBeTruthy();
     expect(table.getByText("2 条已记录 · 1 条未记录")).toBeTruthy();
     expect(table.getByText("1 条已记录 · 3 条未记录")).toBeTruthy();
   });
-  it("explains logical task state, historical attempts and nonadditive or inapplicable tokens", async () => {
-    render(<PersonalUsagePage />); await screen.findByRole("heading", { name: "已观测指标" });
+  it("hides statistical definitions while keeping task and metric data", async () => {
+    renderResources(); await screen.findByRole("heading", { name: "已观测指标" });
     expect(within(screen.getByRole("region", { name: "用量概览" })).getByText("任务尝试")).toBeTruthy();
     expect(screen.queryByText("执行尝试")).toBeNull();
-    expect(screen.getByText(/状态取其最新一次任务尝试的最近观测状态/)).toBeTruthy();
-    expect(screen.getByText(/根任务行仅显示自身记录的指标，不聚合子调用/)).toBeTruthy();
-    expect(screen.getByText(/可能未采集或不适用于该任务，不代表 0/)).toBeTruthy();
-    expect(screen.getByText(/缓存输入和推理 Tokens 属于子集，不可与供应商总 Tokens 叠加/)).toBeTruthy();
+    for (const label of ["任务统计口径", "明细统计口径", "指标统计口径"]) {
+      expect(screen.getByText(label, { selector: "summary" }).closest("[hidden]")).toBeTruthy();
+    }
+    for (const text of [/状态取其最新一次任务尝试的最近观测状态/, /根任务行仅显示自身记录的指标，不聚合子调用/, /可能未采集或不适用于该任务，不代表 0/, /缓存输入和推理 Tokens 属于子集，不可与供应商总 Tokens 叠加/, "状态与子调用筛选仅影响明细。", /同一模块内按具体任务类型展示/]) {
+      expect(screen.getByText(text).closest("[hidden]")).toBeTruthy();
+    }
   });
   it("labels sparse history as recorded dates rather than consecutive calendar days", async () => {
     const daily = Array.from({ length: 31 }, (_, index) => ({ date: new Date(Date.UTC(2026, 6, 1 + index * 2)).toISOString().slice(0, 10), tasks: 1, states: { completed: 1 } }));
     mocks.summary.mockResolvedValue({ ...summary, daily: [...daily].reverse() });
-    render(<PersonalUsagePage />); await screen.findByRole("heading", { name: "每日任务数（范围内最近 30 个有记录日期）" });
+    renderResources(); await screen.findByRole("heading", { name: "每日任务数（范围内最近 30 个有记录日期）" });
     const trend = within(screen.getByRole("region", { name: "每日任务趋势，可横向滚动" }));
     expect(trend.getAllByRole("listitem")).toHaveLength(30);
     expect(trend.queryByLabelText(`${daily[0].date}，1 个任务`)).toBeNull();

@@ -93,6 +93,7 @@ class SiteHelperContractTests(unittest.TestCase):
             | set(CONTRACTS.POST_0016_BUSINESS_MUTABLE_TABLES)
             | set(CONTRACTS.POST_0020_BUSINESS_MUTABLE_TABLES)
             | set(CONTRACTS.POST_0023_BUSINESS_MUTABLE_TABLES)
+            | set(CONTRACTS.POST_0025_BUSINESS_MUTABLE_TABLES)
             | set(usage_seal_tables)
             | set(entitlement_seal_tables)
             | set(CONTRACTS.USER_IDENTITY_AUDIT_TABLES)
@@ -112,6 +113,7 @@ class SiteHelperContractTests(unittest.TestCase):
                 CONTRACTS.POST_0016_BUSINESS_MUTABLE_TABLES,
                 CONTRACTS.POST_0020_BUSINESS_MUTABLE_TABLES,
                 CONTRACTS.POST_0023_BUSINESS_MUTABLE_TABLES,
+                CONTRACTS.POST_0025_BUSINESS_MUTABLE_TABLES,
                 usage_seal_tables,
                 entitlement_seal_tables,
                 CONTRACTS.USER_IDENTITY_AUDIT_TABLES,

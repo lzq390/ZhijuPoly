@@ -444,7 +444,7 @@ def test_offline_tier_unavailable_never_authorizes_or_releases(monkeypatch):
 
 
 @pytest.mark.parametrize("tamper", [None, "missing", "checksum", "unknown", "duplicate", "legacy_md"])
-def test_offline_worker_tier_accepts_only_exact22_or_approved23(monkeypatch, tamper):
+def test_offline_worker_tier_accepts_only_registered_release_boundaries(monkeypatch, tamper):
     from task_usage.entitlement_access import accepted_release_ledgers, resolve_access_tier, OPTIONAL_MIGRATION
     from app.auth.isolation_ledger import POLYMER_CHECKSUM
     from task_usage.entitlements import EntitlementPolicyError
@@ -464,6 +464,7 @@ def test_offline_worker_tier_accepts_only_exact22_or_approved23(monkeypatch, tam
             def __iter__(self): return iter(observed)
             def fetchone(self):
                 if "to_regclass" in self.query: return {"tiers": "present", "ledger": "present"}
+                if "count(*) AS n" in self.query: return {"n": 2, "protected": True}
                 if "relkind" in self.query: return {"relkind": "r", "relrowsecurity": True, "relforcerowsecurity": True}
                 return {"tier": "free"}
         class Connection:

@@ -36,6 +36,45 @@ beforeEach(() => {
   vi.stubGlobal("navigator", { locks: { request: (_name: string, _options: unknown, callback: () => Promise<unknown>) => callback() } });
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it("refreshes membership in the same session without clearing drafts or remounting the workspace", async () => {
+  const free = { ...account("subscriber"), account_type: "free" as const };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response(free)).mockResolvedValueOnce(response({ ...free, account_type: "member" })));
+  function Draft() {
+    const auth = useAuth(); const [value, setValue] = useState("");
+    return <><input aria-label="工作草稿" value={value} onChange={event => setValue(event.target.value)} /><span>{auth?.session.account_type}</span><button onClick={() => void auth?.refreshSession()}>刷新会员</button></>;
+  }
+  render(<AuthProvider><Draft /></AuthProvider>);
+  const draft = await screen.findByLabelText("工作草稿"); fireEvent.change(draft, { target: { value: "CCO" } });
+  sessionStorage.setItem("nexpoly.private.draft", "retained");
+  fireEvent.click(screen.getByRole("button", { name: "刷新会员" }));
+  await screen.findByText("member");
+  expect(screen.getByLabelText("工作草稿")).toBe(draft);
+  expect((draft as HTMLInputElement).value).toBe("CCO");
+  expect(sessionStorage.getItem("nexpoly.private.draft")).toBe("retained");
+});
+
+it("offers self-registration only when the server enables it and installs the returned ordinary session", async () => {
+  const fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(response(url.endsWith("/plans") ? { registration_enabled: true } : url.endsWith("/register") ? { ...account("new-user"), account_type: "free" } : GUEST_SESSION)));
+  vi.stubGlobal("fetch", fetch); page(); await screen.findByText("共享游客页面"); openGuestLogin();
+  fireEvent.click(screen.getByRole("button", { name: "注册账号" }));
+  await screen.findByRole("button", { name: "创建账号" });
+  fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "new-user" } });
+  fireEvent.change(screen.getByLabelText("密码"), { target: { value: "long-password-123" } });
+  fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "long-password-123" } });
+  fireEvent.click(screen.getByRole("button", { name: "创建账号" }));
+  await screen.findByText("私人页面");
+  expect(fetch.mock.calls.find(([url]) => url.endsWith("/register"))?.[1].body).toBe(JSON.stringify({ username: "new-user", password: "long-password-123" }));
+  expect(screen.getByText("普通账号")).toBeTruthy();
+});
+
+it("keeps the registration form unavailable when registration is disabled", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => Promise.resolve(response(url.endsWith("/plans") ? { registration_enabled: false } : GUEST_SESSION))));
+  page(); await screen.findByText("共享游客页面"); openGuestLogin();
+  fireEvent.click(screen.getByRole("button", { name: "注册账号" }));
+  await screen.findByText(/自助注册暂未开放/);
+  expect(screen.queryByRole("button", { name: "创建账号" })).toBeNull();
+});
 describe("identity boundary", () => {
   it("shows a guest sidebar account entry and only opens login on request", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(GUEST_SESSION)));

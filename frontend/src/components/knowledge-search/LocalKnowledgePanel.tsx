@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../../auth/access";
 import { useAuth } from "../../auth/AuthProvider";
 import { requestServiceAccess } from "../../auth/guestAccess";
 import {
@@ -247,7 +248,7 @@ function ResultSkeletons() {
 }
 
 export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], modeNavigation, toolbarActions }: LocalKnowledgePanelProps) {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const legacySearch = useKnowledgeSearch();
   const literatureSearch = useKnowledgeSearch();
   const [settings, setSettings] = useState<KnowledgeConditionSettings>(initialConditions);

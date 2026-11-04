@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../../auth/access";
 import { createPrivateObjectURL, revokePrivateObjectURL } from "../../auth/objectUrls";
 import { useAuth } from "../../auth/AuthProvider";
 import { requestServiceAccess } from "../../auth/guestAccess";
@@ -110,7 +111,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
   target: MonomerPolymerizationTargetClass;
   children: (sections: BatchPolymerizationSections) => ReactNode;
 }) {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const capability = status?.batch;
   const [files, setFiles] = useState<Partial<Record<"a" | "b", File>>>({});
   const [imported, setImported] = useState<BatchImport | null>(null);

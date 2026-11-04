@@ -906,7 +906,126 @@
     ],
     "offset": 0,
     "limit": 25,
-    "has_more": false
+    "has_more": false,
+    "module_groups": [
+      {
+        "id": "structureWorkbench",
+        "label": "结构工作台",
+        "modules": [
+          "structure",
+          "ocsr"
+        ]
+      },
+      {
+        "id": "knowledge",
+        "label": "知识检索",
+        "modules": [
+          "knowledge",
+          "online_knowledge"
+        ]
+      },
+      {
+        "id": "polytaoGeneration",
+        "label": "聚合物生成",
+        "modules": [
+          "polytao"
+        ]
+      },
+      {
+        "id": "monomerRetrosynthesis",
+        "label": "单体逆合成反推",
+        "modules": [
+          "retrosynthesis"
+        ]
+      },
+      {
+        "id": "explorer",
+        "label": "聚合物相似性探索",
+        "modules": [
+          "query"
+        ]
+      },
+      {
+        "id": "databaseQuery",
+        "label": "数据库查询",
+        "modules": [
+          "database_query"
+        ]
+      },
+      {
+        "id": "databaseFilter",
+        "label": "数据库筛选",
+        "modules": [
+          "database_filter"
+        ]
+      },
+      {
+        "id": "database",
+        "label": "数据库分析",
+        "modules": [
+          "database_analysis",
+          "dft_history"
+        ]
+      },
+      {
+        "id": "homopolymerPrediction",
+        "label": "均聚物性质预测",
+        "modules": [
+          "predict"
+        ]
+      },
+      {
+        "id": "monomerPolymerization",
+        "label": "单体正向聚合",
+        "modules": [
+          "polymerization",
+          "polymerization_batch",
+          "batch_preflight"
+        ]
+      },
+      {
+        "id": "mdSimulationDemo",
+        "label": "MD 模拟",
+        "modules": [
+          "polymer_md",
+          "md_demo"
+        ]
+      },
+      {
+        "id": "monomerMdSimulation",
+        "label": "单体 MD 模拟",
+        "modules": [
+          "monomer_md"
+        ]
+      },
+      {
+        "id": "monomerDft",
+        "label": "单体 DFT",
+        "modules": [
+          "monomer_dft"
+        ]
+      },
+      {
+        "id": "conditionalGeneration",
+        "label": "条件聚合物生成",
+        "modules": [
+          "conditional_generation"
+        ]
+      },
+      {
+        "id": "reverseDesign",
+        "label": "Tg 逆向设计",
+        "modules": [
+          "reverse_design",
+          "tg_assistant"
+        ]
+      },
+      {
+        "id": "highThroughputWorkflowDemo",
+        "label": "高通量优化演示",
+        "modules": []
+      }
+    ]
   },
   "result": {
     "operation": {

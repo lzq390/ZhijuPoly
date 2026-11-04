@@ -244,6 +244,10 @@ services:
       VITE_AGENT_WORKSPACE_URL: "${VITE_AGENT_WORKSPACE_URL:-}"
       # Shared development networks can contain another project's backend alias.
       DEV_PROXY_TARGET: http://${COMPOSE_PROJECT_NAME:-nexpoly_dev}-backend-1:8000
+      # Explicit opt-in: only the selected development entry exposes the MCP.
+      # These server-side settings and caller credentials never enter VITE_*.
+      DEV_MCP_PROXY_TARGET: "${NEXPOLY_DEV_MCP_PROXY_TARGET:-}"
+      DEV_MCP_PROXY_ALLOWED_HOSTS: "${NEXPOLY_DEV_MCP_PROXY_ALLOWED_HOSTS:-localhost:9001,127.0.0.1:9001}"
       HOST: 0.0.0.0
     volumes:
       - ./frontend:/app/frontend

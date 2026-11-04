@@ -5,6 +5,8 @@ import re
 
 MODULES = ('database','prediction','generation','polytao','reverse','knowledge','online_knowledge',
            'browsing','assistant','md','dft','polymerization','batch','retrosynthesis','openscience')
+SIMULATION_CHECKOUT_PATHS = frozenset({
+    '/api/v1/billing/simulation/checkout', '/api/v1/billing/simulation/confirm'})
 
 
 def capabilities(member: bool, *, acceptance=None, owner_id: str | None = None) -> dict[str, bool]:
@@ -20,10 +22,18 @@ def capabilities(member: bool, *, acceptance=None, owner_id: str | None = None) 
 
 
 def route_policy(path: str, method: str) -> str:
+    if method == 'POST' and path in SIMULATION_CHECKOUT_PATHS:
+        return 'public'
+    if method == 'POST' and path in {'/api/v1/billing/webhooks/wechat', '/api/v1/billing/webhooks/alipay'}:
+        return 'payment_webhook'
     if path.startswith('/internal/'):
         return 'internal'
-    if path in {'/health','/api/v1/auth/session','/api/v1/auth/login'}:
+    if path in {'/health','/api/v1/auth/session','/api/v1/auth/login','/api/v1/auth/register','/api/v1/billing/plans'}:
         return 'public'
+    if method == 'POST' and re.fullmatch(r'/api/v1/billing/orders/[0-9a-fA-F-]+/simulate-payment', path):
+        return 'account'
+    if path == '/api/v1/billing/subscription' or path == '/api/v1/billing/orders' or re.fullmatch(r'/api/v1/billing/orders/[0-9a-fA-F-]+', path):
+        return 'account'
     if method in {'GET','HEAD'} and re.fullmatch(r'/api/v1/monomer-polymerization/batch/templates/[ab]\.(csv|xlsx)', path):
         return 'public'
     if method in {'GET', 'HEAD'} and path in {

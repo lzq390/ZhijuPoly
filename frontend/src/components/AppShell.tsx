@@ -33,6 +33,7 @@ type AppShellProps = {
   moduleGroups: AppShellModuleGroup[];
   onOpenHome: () => void;
   onOpenUsage?: () => void;
+  onOpenSubscription?: () => void;
   projects: OpenScienceProjectSummary[];
   activeProjectDirectory: string | null;
   isProjectBridgeReady: boolean;
@@ -101,6 +102,7 @@ export function AppShell({
   moduleGroups,
   onOpenHome,
   onOpenUsage,
+  onOpenSubscription,
   projects,
   activeProjectDirectory,
   isProjectBridgeReady,
@@ -182,6 +184,7 @@ export function AppShell({
   const isDatabaseAnalysisWorkbench = activeModule === "database";
   const isKnowledgeWorkbench = activeModule === "knowledge";
   const isPolytaoWorkbench = activeModule === "polytaoGeneration";
+  const isUsagePage = activeModule === "personalUsage";
   const isResearchWorkbench =
     isSimilarityExplorerWorkbench ||
     isDatabaseQueryWorkbench ||
@@ -199,6 +202,9 @@ export function AppShell({
     isStructureWorkbench ||
     isReverseDesignWorkbench ||
     isConditionalGenerationWorkbench;
+  // Usage owns a fixed header and an inner scroll region, so its containing
+  // block must have a bounded height just like the workbenches.
+  const hasViewportLayout = isResearchWorkbench || isUsagePage;
 
   const activeGroupId =
     moduleGroups.find((group) => group.items.some((item) => item.isActive))?.id ?? null;
@@ -371,6 +377,7 @@ export function AppShell({
     moduleGroups,
     onOpenHome: () => handleNavigate(onOpenHome, { id: "home", label: "首页" }),
     onNavigate: handleNavigate,
+    onOpenSubscription: onOpenSubscription ? () => handleNavigate(onOpenSubscription, { id: "subscription", label: "会员订阅" }) : undefined,
     onOpenUsage: onOpenUsage ? () => handleNavigate(onOpenUsage, { id: "personalUsage", label: "我的用量" }) : undefined,
     pendingTarget: navigation.pendingTarget,
     showPending: navigation.showPending,
@@ -435,8 +442,9 @@ export function AppShell({
           className={
             isHome
               ? "min-h-0 flex-1 overflow-hidden"
-              : isResearchWorkbench
+              : hasViewportLayout
                 ? `min-h-0 flex-1 overflow-hidden ${
+                    isUsagePage ||
                     isReverseDesignWorkbench ||
                     isConditionalGenerationWorkbench ||
                     isStructureWorkbench ||
@@ -468,7 +476,7 @@ export function AppShell({
                 ? "flex h-full min-h-0 flex-col"
                 : [
                     "relative mx-auto flex flex-col",
-                    isResearchWorkbench ? "h-full gap-0" : "gap-8",
+                    isUsagePage ? "h-full min-h-0 gap-0" : isResearchWorkbench ? "h-full gap-0" : "gap-8",
                     fullBleed ? "max-w-none" : "max-w-[1480px]"
                   ].join(" ")
             }

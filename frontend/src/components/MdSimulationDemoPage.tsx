@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../auth/access";
 import { useAuth } from "../auth/AuthProvider";
 import { requestServiceAccess } from "../auth/guestAccess";
 import { getSessionEpoch } from "../auth/session";
@@ -199,7 +200,7 @@ export function MdSimulationDemoPage({
   const parameterButtonRef = useRef<HTMLButtonElement | null>(null);
   const restoreFocusFrameRef = useRef<number | null>(null);
   requestRef.current = request;
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const simulation = useMdSimulationDemo({ resultRevealDelayMs, enabled: active && !guest });
 
   const closeParameters = useCallback((restoreFocus = true) => {

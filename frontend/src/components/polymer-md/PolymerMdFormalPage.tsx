@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../../auth/access";
 import { Activity, Atom, ClipboardList, FlaskConical, LoaderCircle, LockKeyhole, Play, RefreshCw, ServerCog, TriangleAlert } from "lucide-react";
 import { polymerMdServiceState } from "./serviceState";
 import { PolymerMdSelect } from "./PolymerMdSelect";
@@ -77,7 +78,7 @@ export function PolymerMdFormalPage({
   structure: StructureWorkspaceContext;
   onEditStructure: () => void;
 }) {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const [request, setRequest] = useState(readPolymerMdDraft);
   const [restored] = useState(readPolymerMdWorkspace);
   const [selectedId, setSelectedId] = useState(() => jobIdFromLocation() ?? restored?.selectedId ?? null);

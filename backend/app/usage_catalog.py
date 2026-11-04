@@ -20,6 +20,14 @@ def _entries(module, mode, method, paths):
     return tuple(UsageRoute(method, path, module, mode) for path in paths)
 
 ROUTES = (
+    # Account purchases and payment reconciliation do not execute scientific work.
+    *_entries(None, "observe", "GET", (
+        "/api/v1/billing/plans", "/api/v1/billing/subscription",
+        "/api/v1/billing/orders", "/api/v1/billing/orders/{order_id}")),
+    *_entries(None, "observe", "POST", (
+        "/api/v1/billing/orders", "/api/v1/billing/webhooks/{provider}",
+        "/api/v1/billing/orders/{order_id}/simulate-payment",
+        "/api/v1/billing/simulation/checkout", "/api/v1/billing/simulation/confirm")),
     *_entries("assistant", "sync", "POST", (
         "/api/v1/assistant/chat/stream", "/api/v1/assistant/chat/image-stream")),
     *_entries("tg_assistant", "sync", "POST", (
@@ -116,7 +124,21 @@ ROUTES = (
         "/api/v1/monomer-dft/jobs/{job_id}/artifacts", "/api/v1/monomer-dft/jobs/{job_id}",
         "/api/v1/monomer-md/jobs/{job_id}/artifacts", "/api/v1/monomer-md/jobs/{job_id}")),
 )
-MODULES = tuple(sorted({route.module for route in ROUTES if route.module is not None}))
+
+def observation_module(route: UsageRoute) -> str | None:
+    """Refine new observations without renaming entitlement/admission modules."""
+    if route.module != "database_browser":
+        return route.module
+    if route.path == "/api/v1/database-browser/smiles-lookup":
+        return "database_query"
+    if route.path.startswith("/api/v1/database-browser/property-filter/"):
+        return "database_filter"
+    return "database_analysis"
+
+
+# Retain historical coarse modules alongside new, server-classified observations.
+MODULES = tuple(sorted({route.module for route in ROUTES if route.module is not None}
+                       | {observation_module(route) for route in ROUTES if route.module is not None}))
 
 
 def _pattern(path):
@@ -151,7 +173,9 @@ def catalog_modules() -> list[dict[str, str]]:
         "predict": ("性能预测", "models"), "ocsr": ("分子图像识别", "models"),
         "retrosynthesis": ("单体逆合成", "models"), "reverse_design": ("逆向设计", "search"),
         "query": ("结构相似性与查询", "search"), "structure": ("分子结构处理", "chemistry"),
-        "database_browser": ("材料数据库浏览", "search"), "dft_history": ("DFT 历史查询", "search"),
+        "database_browser": ("历史数据库操作（未细分）", "search"), "dft_history": ("DFT 历史查询", "search"),
+        "database_query": ("数据库查询", "search"), "database_filter": ("数据库筛选", "search"),
+        "database_analysis": ("数据库分析", "search"),
         "monomer_md": ("分子动力学", "science"), "polymer_md": ("聚合物分子动力学", "science"), "monomer_dft": ("DFT 计算", "science"),
         "polymerization": ("单体聚合", "chemistry"),
         "polymerization_batch": ("批量聚合", "chemistry"),
@@ -168,6 +192,9 @@ def catalog_modules() -> list[dict[str, str]]:
     }
     result = [{"id": module, "label": labels[module][0], "category": labels[module][1],
                "coverage": "partial", "note": notes[labels[module][1]]} for module in MODULES]
+    for item in result:
+        if item["id"] == "database_browser":
+            item["note"] = "历史记录未保存页面来源，无法区分数据库查询、筛选或分析，仅在全部记录中展示。"
     result.append({"id": "openscience", "label": "OpenScience 独立服务", "category": "external",
                    "coverage": "external", "note": "9011 iframe 独立服务尚未接入可验证的 owner 与 usage，不能归属或计量其内部执行。"})
     return result

@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../auth/access";
 import { StructureImportButton, useModuleDraftState } from "../structure-library/StructureLibraryProvider";
 import { createPrivateObjectURL, revokePrivateObjectURL } from "../auth/objectUrls";
 import { useAuth } from "../auth/AuthProvider";
@@ -662,7 +663,7 @@ export function MonomerDftPage({
   onJobIdChange,
   onEditStructure
 }: MonomerDftPageProps) {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const dft = useMonomerDftJob({ initialJobId, onJobIdChange, enabled: !guest });
   const [activeTab, setActiveTab] = useState<PrimaryTab>(initialJobId ? "results" : "config");
   const tabContentRef = useRef<HTMLDivElement | null>(null);

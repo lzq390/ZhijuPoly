@@ -433,6 +433,40 @@ def test_off_saved_results_readable_and_owner_isolated(entitlement_db,owner,monk
         assert repo.read_saved_operation(connection=c,owner_user_id=owner,operation_id=op["operation_id"]) is None
         assert repo.read_saved_operations(connection=c,owner_user_id=owner)==[]
 
+def test_saved_receipt_groups_filter_before_pagination_without_enabling_quotas(entitlement_db,owner,monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from psycopg.conninfo import make_conninfo
+    from app.auth.context import Identity, user_context
+    from app.routers.entitlements import router
+    p=policy(entitlement_db,owner)
+    at=datetime(2026,3,15,12,tzinfo=timezone.utc)
+    with connection(entitlement_db,owner) as c:
+        first=reserve(c,owner,p,module="structure",spec={"operation":"3d","atom_count":2},now=at)["operation"]
+        second=reserve(c,owner,p,module="ocsr",spec={"image_bytes":100,"image_pixels":100},now=at+timedelta(seconds=1))["operation"]
+        third=reserve(c,owner,p,module="structure",spec={"operation":"3d","atom_count":3},now=at+timedelta(seconds=2))["operation"]
+        reserve(c,owner,p,module="predict",now=at+timedelta(seconds=3))
+    other=str(uuid4())
+    with psycopg.connect(entitlement_db) as c:
+        c.execute("INSERT INTO auth.users(user_id,username,password_hash,must_change_password) VALUES(%s,%s,'!',false)",(other,"ent-group-"+uuid4().hex))
+    with connection(entitlement_db,other) as c:
+        reserve(c,other,p,module="structure",spec={"operation":"3d","atom_count":2},now=at+timedelta(seconds=4))
+    monkeypatch.delenv("USAGE_ENTITLEMENTS_ENABLED")
+    repo=EntitlementRepository(make_conninfo(entitlement_db,options="-c role=nexpoly_api"))
+    app=FastAPI();app.state.entitlement_repository=repo;app.include_router(router)
+    with user_context(Identity(owner)),TestClient(app) as client:
+        pages=[client.get("/api/v1/usage/operations",params={"module_group":"structureWorkbench","offset":i,"limit":1,"owner_user_id":other}).json() for i in range(4)]
+        assert [row["operation_id"] for page in pages for row in page["items"]]==[third["operation_id"],second["operation_id"],first["operation_id"]]
+        assert [page["has_more"] for page in pages]==[True,True,False,False]
+        assert all("owner_user_id" not in row and "result_json" not in row for page in pages for row in page["items"])
+        assert len(client.get("/api/v1/usage/operations",params={"module":"structure"}).json()["items"])==2
+    with connection(entitlement_db,owner) as c:
+        assert repo.read_saved_operations(connection=c,owner_user_id=owner,module_group="structureWorkbench")[1]==second
+        assert repo.read_saved_operations(connection=c,owner_user_id=owner,module_group="highThroughputWorkflowDemo")==[]
+    # Explicit owner filters cannot bypass RLS, even for a trusted repository caller.
+    with connection(entitlement_db,other) as c:
+        assert repo.read_saved_operations(connection=c,owner_user_id=owner,module_group="structureWorkbench")==[]
+
 def test_auth_initialization_without_entitlement_ledger_compatible(entitlement_db,owner,monkeypatch):
     name="ent_preinit_"+uuid4().hex;dsn=make_conninfo(entitlement_db,dbname=name)
     with psycopg.connect(entitlement_db,autocommit=True) as c: c.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
@@ -443,6 +477,7 @@ def test_auth_initialization_without_entitlement_ledger_compatible(entitlement_d
             assert repo.resolve_access_tier(connection=c,owner_user_id=owner)=="member"
             assert repo.read_saved_operation(connection=c,owner_user_id=owner,operation_id=str(uuid4())) is None
             assert repo.read_saved_operations(connection=c,owner_user_id=owner)==[]
+            assert repo.read_saved_operations(connection=c,owner_user_id=owner,module_group="mdSimulationDemo")==[]
     finally:
         with psycopg.connect(entitlement_db,autocommit=True) as c: c.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
 
@@ -457,7 +492,7 @@ def test_worker_release_contract_exactly_matches_full_manifest():
     assert contract["ledger"] == base
     assert contract["entitlement_sql_sha256"] == base[-1]["checksum"]
     assert accepted_release_ledgers() == [base, prefix("0023_polymer_md_jobs"),
-                                         prefix("0024_literature_projection")]
+                                         prefix("0024_literature_projection"), prefix("0025_membership_subscriptions")]
     for pin, epoch in ((OPTIONAL_MIGRATION, 8), (LITERATURE_MIGRATION, 9)):
         entry = next(row for row in entries if row.version == pin["version"])
         assert entry.kind == "expand" and entry.epoch == epoch

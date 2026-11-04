@@ -2,6 +2,7 @@
 from copy import deepcopy
 import pytest
 from app.auth.isolation_ledger import expected_isolation_ledger, validate_application_migration_ledger
+from task_usage.billing_contract import BILLING_VERSION, BILLING_CHECKSUM
 from app.literature_contract import compatible_identity_ledger, registered_literature_ledger, LITERATURE_MIGRATION, LITERATURE_MIGRATION_SHA256
 from scripts.site_helper_contracts import validate_user_isolation_v2_ledger, validate_literature_ledger, SiteHelperContractError
 
@@ -25,7 +26,7 @@ def test_bridge_accepts_only_exact_known_suffix():
 def test_bridge_preflight_with_empty_checksum_cache(monkeypatch):
     from app import postgres_preflight as preflight
     monkeypatch.setattr(preflight, "_MIGRATION_CHECKSUMS", {})
-    assert preflight.known_checksums_for_target(preflight.SCHEMA_TARGET_ISOLATION) == {LITERATURE_MIGRATION: LITERATURE_MIGRATION_SHA256}
+    assert preflight.known_checksums_for_target(preflight.SCHEMA_TARGET_ISOLATION) == {LITERATURE_MIGRATION: LITERATURE_MIGRATION_SHA256, BILLING_VERSION: BILLING_CHECKSUM}
     assert preflight.known_checksums_for_target(preflight.SCHEMA_TARGET_STARTUP) == {}
 
 @pytest.mark.parametrize("missing", ["0020_structure_library", "0021_usage_metering", "0022_usage_entitlements", "0023_polymer_md_jobs"])
@@ -59,7 +60,7 @@ def test_checksum_facts_do_not_enable_future_runtime_or_automatic_migrations():
     assert LITERATURE_MIGRATION not in preflight._EXPAND_MIGRATIONS
     for target in preflight.SCHEMA_TARGETS:
         required = preflight._required_migrations(target)
-        assert (LITERATURE_MIGRATION in required) == (target == preflight.SCHEMA_TARGET_LITERATURE)
+        assert (LITERATURE_MIGRATION in required) == (target in {preflight.SCHEMA_TARGET_LITERATURE, preflight.SCHEMA_TARGET_BILLING})
 
 def test_wrong_cached_checksum_and_unknown_target_fail_closed(monkeypatch):
     from app import postgres_preflight as preflight

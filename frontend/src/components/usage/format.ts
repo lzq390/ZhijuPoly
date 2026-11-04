@@ -1,14 +1,16 @@
 import type { UsagePeriod, UsageStatus } from "../../types/usage";
 const DAY = 86_400_000;
+const BEIJING_OFFSET = 8 * 60 * 60 * 1000;
 export const statusLabels: Record<UsageStatus, string> = {
   queued: "排队中", running: "执行中", completed: "已完成", failed: "失败",
   cancelled: "已取消", timed_out: "超时", interrupted: "已中断", rejected: "已拒绝"
 };
-export function recentUtcDates(days = 30, now = new Date()) {
-  const end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+export function recentBeijingDates(days = 30, now = new Date()) {
+  const local = new Date(now.getTime() + BEIJING_OFFSET);
+  const end = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
   return { startDate: new Date(end - (days - 1) * DAY).toISOString().slice(0, 10), endDate: new Date(end).toISOString().slice(0, 10) };
 }
-export function utcPeriod(startDate: string, endDate: string, module?: string): UsagePeriod {
+export function beijingPeriod(startDate: string, endDate: string, module?: string): UsagePeriod {
   function parse(value: string) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error("请选择完整的起止日期。");
     const timestamp = Date.parse(value + "T00:00:00.000Z");
@@ -18,7 +20,7 @@ export function utcPeriod(startDate: string, endDate: string, module?: string): 
   const start = parse(startDate), last = parse(endDate);
   if (last < start) throw new Error("结束日期不能早于开始日期。");
   if ((last - start) / DAY + 1 > 366) throw new Error("一次最多查询 366 天。");
-  return { start: new Date(start).toISOString(), end: new Date(last + DAY).toISOString(), ...(module ? { module } : {}) };
+  return { start: new Date(start - BEIJING_OFFSET).toISOString(), end: new Date(last + DAY - BEIJING_OFFSET).toISOString(), timezone: "Asia/Shanghai", ...(module ? { module } : {}) };
 }
 export function formatMetric(id: string, value: number | null | undefined, unit?: string) {
   if (value == null || !Number.isFinite(value)) return "未记录";
@@ -36,10 +38,10 @@ export function formatMetric(id: string, value: number | null | undefined, unit?
   }
   return number(value);
 }
-export function utcTimestamp(value: string | null | undefined) {
+export function beijingTimestamp(value: string | null | undefined) {
   if (!value) return "未记录";
   const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toISOString().replace("T", " ").slice(0, 19) : "未记录";
+  return Number.isFinite(date.getTime()) ? new Date(date.getTime() + BEIJING_OFFSET).toISOString().replace("T", " ").slice(0, 19) : "未记录";
 }
 export const metricLabel = (metric: { id: string; label: string }) =>
   metric.id === "artifact_bytes" ? "累计已观测产物体积" : metric.label;

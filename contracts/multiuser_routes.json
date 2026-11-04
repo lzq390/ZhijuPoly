@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Reviewed inventory, not evidence that every mapped scenario passed. templates permit only fixed a/b CSV/XLSX GET or HEAD. The seven usage GET routes require an authenticated owner; free accounts retain their own usage/history access through the separate tier gate. Capability-prefixed routes remain operations-denied by default; only the exact finite development acceptance policy can admit them.",
+  "note": "Reviewed inventory, not evidence that every mapped scenario passed. templates permit only fixed a/b CSV/XLSX GET or HEAD. The eight usage GET routes require an authenticated owner; free accounts retain their own usage/history access through the separate tier gate. Capability-prefixed routes remain operations-denied by default; only the exact finite development acceptance policy can admit them.",
   "routes": [
     {
       "method": "POST",
@@ -122,6 +122,21 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "feature": "membership",
+      "resource": "membership-checkout",
+      "permission": "public",
+      "frontend": "registration-or-payment-gateway",
+      "cases": [
+        "membership",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/v1/auth/session",
       "feature": "I02",
@@ -132,6 +147,141 @@
         "I02",
         "I01",
         "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/billing/orders",
+      "feature": "membership",
+      "resource": "owner-subscription",
+      "permission": "account",
+      "frontend": "account-subscription",
+      "cases": [
+        "membership",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/billing/orders",
+      "feature": "membership",
+      "resource": "owner-subscription",
+      "permission": "account",
+      "frontend": "account-subscription",
+      "cases": [
+        "membership",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/billing/orders/{order_id}",
+      "feature": "membership",
+      "resource": "owner-subscription",
+      "permission": "account",
+      "frontend": "account-subscription",
+      "cases": [
+        "membership",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/billing/orders/{order_id}/simulate-payment",
+      "feature": "membership",
+      "resource": "owner-subscription",
+      "permission": "account",
+      "frontend": "account-subscription",
+      "cases": [
+        "membership",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/billing/plans",
+      "feature": "membership",
+      "resource": "membership-checkout",
+      "permission": "public",
+      "frontend": "registration-or-payment-gateway",
+      "cases": [
+        "membership",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/billing/simulation/checkout",
+      "feature": "membership",
+      "resource": "membership-checkout",
+      "permission": "public",
+      "frontend": "standalone-simulation-checkout",
+      "cases": [
+        "membership",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/billing/simulation/confirm",
+      "feature": "membership",
+      "resource": "membership-checkout",
+      "permission": "public",
+      "frontend": "standalone-simulation-checkout",
+      "cases": [
+        "membership",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/billing/subscription",
+      "feature": "membership",
+      "resource": "owner-subscription",
+      "permission": "account",
+      "frontend": "account-subscription",
+      "cases": [
+        "membership",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/{provider}",
+      "feature": "membership",
+      "resource": "membership-checkout",
+      "permission": "mixed-payment-webhook",
+      "frontend": "registration-or-payment-gateway",
+      "cases": [
+        "membership",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
       ]
     },
     {
@@ -1800,6 +1950,21 @@
         "I01",
         "I04",
         "I08"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/activity",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
       ]
     },
     {

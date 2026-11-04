@@ -7,9 +7,11 @@ import { developmentCompression } from "./build/development-compression.ts";
 import { retryableImports } from "./build/retryable-imports.ts";
 import { developmentEntryPreload } from "./build/development-entry-preload.ts";
 import { ketcherRuntimePlugin } from "./build/ketcher-runtime-plugin.ts";
+import { developmentMcpProxy } from "./build/development-mcp-proxy.ts";
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command, isPreview }) => {
   const env = loadEnv(mode, process.cwd(), "DEV_PROXY_");
+  const mcpEnv = loadEnv(mode, process.cwd(), "DEV_MCP_PROXY_");
   const editorEnv = loadEnv(mode, process.cwd(), "VITE_STRUCTURE_EDITOR_ENGINE");
   const editor = structureEngine(process.env.VITE_STRUCTURE_EDITOR_ENGINE ?? editorEnv.VITE_STRUCTURE_EDITOR_ENGINE);
   const proxyTarget =
@@ -29,9 +31,15 @@ export default defineConfig(({ mode }) => {
       changeOrigin: false
     }
   };
+  const mcpProxy = command === "serve" && !isPreview && mode === "development"
+    ? developmentMcpProxy(
+      process.env.DEV_MCP_PROXY_TARGET ?? mcpEnv.DEV_MCP_PROXY_TARGET,
+      process.env.DEV_MCP_PROXY_ALLOWED_HOSTS ?? mcpEnv.DEV_MCP_PROXY_ALLOWED_HOSTS
+    )
+    : undefined;
 
   return mergeConfig(ketcherCompatibility(), {
-    plugins: [react(), ketcherRuntimePlugin(editor.engine), editor.metadata, developmentCompression(), developmentEntryPreload(editor.engine), retryableImports()],
+    plugins: [mcpProxy, react(), ketcherRuntimePlugin(editor.engine), editor.metadata, developmentCompression(), developmentEntryPreload(editor.engine), retryableImports()],
     resolve: { alias: {
       "@structure-editor-engine": editor.implementation,
       "@structure-editor-preload": editor.preload

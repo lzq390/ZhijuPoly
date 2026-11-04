@@ -8,12 +8,14 @@ import pytest
 
 from test_api import api_database, auth_database, test_app
 
+from app.models import PropertyFilterSearchRequest
 from app.postgres_database import postgres_connection
 from app.services import property_filter_catalog as property_filter_catalog_service
 from app.services.analytics_snapshot_store import load_analytics_snapshot, save_analytics_snapshot
 from app.services.postgres_database_browser import (
     database_analytics_sources_changed_postgres,
     get_database_analytics_postgres, get_property_filter_options_postgres,
+    search_property_filter_records_postgres,
 )
 from app.services.property_filter_catalog import (
     PropertyFilterCatalog,
@@ -21,6 +23,14 @@ from app.services.property_filter_catalog import (
     rebuild_property_filter_catalog,
     reset_property_filter_histogram_cache_for_tests,
     resolve_property_filter_histogram,
+)
+from app.services.property_filter import (
+    PropertyFilterCatalogUnavailable,
+    PropertyFilterOptionNotFound,
+    get_property_filter_histogram_data,
+    load_property_filter_context,
+    resolve_property_filter_option,
+    search_property_filter_data,
 )
 
 
@@ -782,6 +792,134 @@ def test_property_filter_search_supports_raw_property_range(test_app) -> None:
     assert payload["results"][0]["smiles"] == "CCN"
     assert payload["results"][0]["records"][0]["property_name"] == "Cv"
     assert payload["results"][0]["records"][0]["property_key"] is None
+
+
+def test_property_filter_sample_limits_each_condition_after_and_and_material_pagination(test_app) -> None:
+    request = PropertyFilterSearchRequest.model_validate({
+        "filters": [
+            {"filter_type": "standardized", "property_key": "tg", "canonical_unit": "C", "min_value": 0},
+            {"filter_type": "standardized", "property_key": "bandgap", "canonical_unit": "eV", "max_value": 10},
+        ],
+        "page": 2,
+        "page_size": 1,
+    })
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
+        connection.execute(
+            """
+            INSERT INTO core.polymer_property_filter_records (
+              filter_record_id, source_file, source_row_number, polymer_name,
+              smiles, canonical_smiles, property_category, property_name,
+              property_value, property_value_num, property_key, canonical_value,
+              canonical_unit, value_origin, reliable_score
+            )
+            SELECT evidence.id, 'bounded-evidence.csv', evidence.id + 1, 'polymer_a',
+                   'CCO', 'CCO', 'Thermal', 'Tg', '123.4', 123.4,
+                   'tg', 123.4, 'C', evidence.origin, evidence.score
+            FROM (
+              VALUES (101, 'observed', 0.90), (102, 'median', 1.0),
+                     (103, 'observed', 0.995), (104, 'impute', 1.0)
+              UNION ALL
+              SELECT generate_series(1000, 1999), 'impute', 0.1
+            ) AS evidence(id, origin, score)
+            """
+        )
+        rebuild_property_filter_catalog(connection)
+        sampled = search_property_filter_data(connection, request, measurement_limit_per_filter=1)
+        full = search_property_filter_data(connection, request)
+        first_page = search_property_filter_data(
+            connection, request.model_copy(update={"page": 1}), measurement_limit_per_filter=1
+        )
+        missing_page = search_property_filter_data(
+            connection, request.model_copy(update={"page": 999}), measurement_limit_per_filter=1
+        )
+
+    assert sampled.response.total_records == full.response.total_records == 1010
+    assert sampled.response.matched_records == full.response.matched_records == 2
+    assert sampled.response.results[0].canonical_smiles == "CCO"
+    assert sampled.response.results[0].matched_filters == 2
+    # Observed evidence precedes higher-scored median/imputed rows. The best
+    # observed record survives; the second condition still has its own sample.
+    assert [record.filter_record_id for record in sampled.response.results[0].records] == [103, 2]
+    assert sampled.groups[0].group_key == "CCO"
+    assert sampled.groups[0].measurement_counts == {0: 1005, 1: 1}
+    assert sampled.groups[0].total_measurement_count == 1006
+    assert full.groups == sampled.groups
+    assert len(full.response.results[0].records) == 1006
+    assert first_page.response.results[0].canonical_smiles == "CCN"
+    assert first_page.groups[0].measurement_counts == {0: 1, 1: 1}
+    assert missing_page.response.matched_records == 2
+    assert missing_page.response.total_records == 1010
+    assert missing_page.response.results == []
+    assert missing_page.groups == []
+
+    # The browser contract still returns the complete evidence and recording ID.
+    response = test_app.state.test_client.post(
+        "/api/v1/database-browser/property-filter/search", json=request.model_dump()
+    )
+    assert response.status_code == 200
+    assert response.json()["search_id"]
+    assert len(response.json()["results"][0]["records"]) == 1006
+
+
+def test_property_filter_sample_counts_overlapping_conditions_separately(test_app) -> None:
+    condition = {"filter_type": "standardized", "property_key": "tg", "canonical_unit": "C",
+                 "min_value": 100, "max_value": 200}
+    request = PropertyFilterSearchRequest.model_validate({"filters": [condition, condition]})
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
+        data = search_property_filter_data(connection, request, measurement_limit_per_filter=1)
+    assert data.response.matched_records == 1
+    assert data.groups[0].measurement_counts == {0: 1, 1: 1}
+    assert data.groups[0].total_measurement_count == 2
+    assert [record.filter_record_id for record in data.response.results[0].records] == [1, 1]
+    assert [record.filter_index for record in data.response.results[0].records] == [0, 1]
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5])
+def test_property_filter_sample_rejects_invalid_limits_before_querying(limit) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        search_property_filter_records_postgres(
+            object(), conditions=[], query="", page=1, page_size=1,
+            measurement_limit_per_filter=limit,
+        )
+
+
+@pytest.mark.parametrize("snapshot_state", ["missing", "invalid", "stale"])
+def test_property_filter_strict_catalog_rejects_unversioned_fallback(test_app, snapshot_state) -> None:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
+        if snapshot_state == "missing":
+            connection.execute("DELETE FROM governance.property_filter_options_snapshots")
+        elif snapshot_state == "invalid":
+            connection.execute("UPDATE governance.property_filter_options_snapshots SET options = '[{}]'::jsonb")
+        else:
+            connection.execute(
+                """
+                INSERT INTO governance.import_batches (dataset_key, source_file_id, finished_at, status, row_count)
+                SELECT 'property_filter', source_file_id, now(), 'completed', 6
+                FROM governance.source_files WHERE logical_name = 'property_filter_csv'
+                """
+            )
+        with pytest.raises(PropertyFilterCatalogUnavailable, match="current property-filter catalog"):
+            load_property_filter_context(connection, allow_live_fallback=False)
+        fallback = load_property_filter_context(connection)
+        assert fallback.catalog is None
+        assert fallback.mode == "live-fallback"
+        assert fallback.total_records == 6
+        assert len(fallback.options) == 3
+
+
+def test_property_filter_shared_catalog_resolves_exact_keys_and_histograms(test_app) -> None:
+    with postgres_connection(test_app.state.test_admin_dsn, readonly_snapshot=True) as connection:
+        assert connection.execute("SHOW transaction_read_only").fetchone()["transaction_read_only"] == "on"
+        context = load_property_filter_context(connection, allow_live_fallback=False)
+        option = resolve_property_filter_option(context, "std:tg:C")
+        histogram, mode = get_property_filter_histogram_data(connection, context, option.option_key)
+        assert context.catalog is not None
+        assert context.mode == "snapshot"
+        assert option.canonical_unit == "C"
+        assert mode == "snapshot"
+        assert histogram.total_count == 2
+        with pytest.raises(PropertyFilterOptionNotFound):
+            resolve_property_filter_option(context, " std:tg:C ")
 
 
 def test_smiles_lookup_properties_returns_all_matching_rows(test_app) -> None:

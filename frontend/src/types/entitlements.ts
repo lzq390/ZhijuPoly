@@ -1,3 +1,5 @@
+import type { UsageModuleGroup } from "./usage";
+
 export type OperationState = "reserved" | "dispatching" | "running" | "unknown" | "succeeded" | "released";
 export type HeldPeriod = { pool_id: string; period_start: string; period_end: string; states: Partial<Record<OperationState,number>>; reserved: number; unknown: number };
 export type SpecificationField = { type: "integer" | "number" | "enum" | "enum_list"; min?: number; max?: number; values?: string[]; min_items?: number; max_items?: number; exclusive_min?: boolean };
@@ -25,5 +27,5 @@ export type UsageOperation = {
   period_start: string; period_end: string; generation: number; state: OperationState;
   outcome: string | null; qualified: boolean | null; created_at: string; updated_at: string; settled_at: string | null;
 };
-export type UsageOperationPage = { items: UsageOperation[]; offset: number; limit: number; has_more: boolean };
+export type UsageOperationPage = { items: UsageOperation[]; offset: number; limit: number; has_more: boolean; module_groups: UsageModuleGroup[] };
 export type UsageOperationResult = { operation: UsageOperation; result: unknown; result_ref: unknown };

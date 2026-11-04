@@ -1,3 +1,4 @@
+import { isLocalOnly } from "../auth/access";
 import { useAuth } from "../auth/AuthProvider";
 import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
@@ -512,7 +513,7 @@ const ConditionRow = memo(function ConditionRow({
 });
 
 export function DatabaseFilterPage() {
-  const guest = useAuth()?.status === "guest";
+  const guest = isLocalOnly(useAuth());
   const filter = usePropertyFilter();
   const drawerSizing = useDatabaseFilterDrawerSizing();
   const [openPickerId, setOpenPickerId] = useState<number | null>(null);
