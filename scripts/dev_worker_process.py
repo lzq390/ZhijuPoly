@@ -324,7 +324,13 @@ def collect_dead_record(
     try:
         if socket_metadata is not None:
             current_metadata = socket.lstat()
-            if current_metadata != socket_metadata:
+            # The refused liveness connect can update the socket's atime.
+            # Preserve its identity and all other metadata, including changes
+            # within one clock tick, without treating that access as a swap.
+            stable_fields = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid",
+                             "st_size", "st_mtime_ns", "st_ctime_ns")
+            if any(getattr(current_metadata, field) != getattr(socket_metadata, field)
+                   for field in stable_fields):
                 raise WorkerProcessRecordError("dead Worker socket changed while collecting it")
             socket.unlink()
         path.unlink()
