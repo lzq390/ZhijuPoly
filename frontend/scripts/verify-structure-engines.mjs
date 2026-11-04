@@ -34,6 +34,7 @@ async function serve(port, engine, dist, document = '/') {
   throw new Error(`Browser gate server ${port} did not start`);
 }
 try {
+  await run(['run', 'test:ketcher-native-menu']);
   const native = resolve(output, 'build-react'), iframe = resolve(output, 'build-iframe'), sdk = resolve(output, 'build-sdk');
   await run(['run', 'build', '--', '--outDir', native], { VITE_STRUCTURE_EDITOR_ENGINE: 'react' });
   await run(['run', 'test:structure-resources', '--', native]);
