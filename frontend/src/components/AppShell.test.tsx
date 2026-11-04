@@ -830,7 +830,7 @@ describe("AppShell 侧边栏", () => {
     expect(confirm).toHaveBeenLastCalledWith("确定删除会话“旧的实验记录”吗？此操作不可恢复。");
   });
 
-  it("普通项目模式只保留对话入口", () => {
+  it("普通项目模式保留历史对话但不标记为当前页面", () => {
     const onOpenGeneralWorkspace = vi.fn();
     renderShell("home", {
       activeDirectory: "/home/codexlab/DevTool/Alpha",
@@ -838,14 +838,45 @@ describe("AppShell 侧边栏", () => {
       onOpenGeneralWorkspace
     });
 
-    expect(screen.queryByRole("button", { name: "新建对话" })).toBeNull();
-    expect(screen.queryByRole("searchbox", { name: "搜索会话" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "新的研究对话" })).toBeNull();
+    expect((screen.getByRole("button", { name: "新建对话" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole("searchbox", { name: "搜索会话" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "新的研究对话" }).getAttribute("aria-current")).toBeNull();
 
     const conversationEntry = screen.getByRole("button", { name: "对话" });
     expect(conversationEntry.getAttribute("aria-current")).toBeNull();
     fireEvent.click(conversationEntry);
     expect(onOpenGeneralWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it("MD 模块保留会话计数、搜索、新建和打开入口，历史会话不显示活动态", () => {
+    const onNewGeneralSession = vi.fn();
+    const onOpenGeneralSession = vi.fn();
+    renderShell("monomerMdSimulation", {
+      isGeneralWorkspaceActive: false,
+      onNewGeneralSession,
+      onOpenGeneralSession
+    });
+
+    const conversationEntry = screen.getByRole("button", { name: "对话" });
+    expect(conversationEntry.getAttribute("aria-current")).toBeNull();
+    expect(conversationEntry.getAttribute("data-active")).toBe("false");
+    const section = conversationEntry.closest("section")!;
+    expect(section.querySelector(".np-sidebar-section__count")?.textContent).toBe("2");
+
+    const recentSession = screen.getByRole("button", { name: "新的研究对话" });
+    expect(recentSession.getAttribute("aria-current")).toBeNull();
+    expect(recentSession.closest(".np-sidebar-session")?.getAttribute("data-active")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "旧的实验记录" }));
+    expect(onOpenGeneralSession).toHaveBeenCalledWith("ses_old");
+    fireEvent.click(screen.getByRole("button", { name: "新建对话" }));
+    expect(onNewGeneralSession).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), {
+      target: { value: "实验" }
+    });
+    expect(screen.queryByRole("button", { name: "新的研究对话" })).toBeNull();
+    expect(screen.getByRole("button", { name: "旧的实验记录" })).not.toBeNull();
+    expect(section.querySelector(".np-sidebar-section__count")?.textContent).toBe("2");
   });
 
   it("移动抽屉可由菜单、关闭按钮和背景控制，并恢复菜单按钮焦点", async () => {

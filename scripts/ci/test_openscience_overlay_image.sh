@@ -7,6 +7,14 @@ if (( $# != 2 )); then
   exit 2
 fi
 
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPOSITORY_ROOT="$(cd -P "$SCRIPT_DIR/../.." && pwd -P)"
+node --test "$REPOSITORY_ROOT/ops/openscience-static-release/test_patch_nginx_cache.mjs"
+(
+  cd "$REPOSITORY_ROOT"
+  python3 -m unittest scripts.tests.test_prepare_openscience_static_release
+)
+
 CANDIDATE_IMAGE="$1"
 EXPECTED_REVISION="$2"
 BASE_IMAGE="ghcr.io/lzq390/nexpoly-web@sha256:e7d25a1b6d515daec641c8de9c98265f275991eee2396dc578ce9c2fcfdeb197"
@@ -84,14 +92,14 @@ while IFS= read -r relative_path; do
   cmp "$STAGING/base/$relative_path" "$STAGING/candidate/$relative_path"
 done <"$STAGING/base-files"
 
-# Compare the complete effective root filesystems, excluding only the two
-# replaced files and the new cache-busted bundle. Image labels live in the
-# config rather than the root filesystem and are validated above.
+# Compare the complete effective root filesystems, excluding the reviewed static
+# replacements and nginx cache policy, which is verified separately below.
 docker export "$BASE_CONTAINER" | tar --no-same-owner -xf - -C "$STAGING/base-rootfs"
 docker export "$CANDIDATE_CONTAINER" | tar --no-same-owner -xf - -C "$STAGING/candidate-rootfs"
 (
   cd "$STAGING/base-rootfs"
   find . \
+    ! -path "./etc/nginx/nginx.conf" \
     ! -path "./usr/share/nginx/html/$BASE_INDEX" \
     ! -path "./usr/share/nginx/html/$BASE_BUNDLE" \
     -printf '%P|%y|%m|%s|%l\n' | LC_ALL=C sort
@@ -99,6 +107,7 @@ docker export "$CANDIDATE_CONTAINER" | tar --no-same-owner -xf - -C "$STAGING/ca
 (
   cd "$STAGING/candidate-rootfs"
   find . \
+    ! -path "./etc/nginx/nginx.conf" \
     ! -path "./usr/share/nginx/html/$BASE_INDEX" \
     ! -path "./usr/share/nginx/html/$PATCHED_BUNDLE" \
     -printf '%P|%y|%m|%s|%l\n' | LC_ALL=C sort
@@ -107,6 +116,7 @@ diff -u "$STAGING/base-rootfs-metadata" "$STAGING/candidate-rootfs-metadata"
 (
   cd "$STAGING/base-rootfs"
   find . -type f \
+    ! -path "./etc/nginx/nginx.conf" \
     ! -path "./usr/share/nginx/html/$BASE_INDEX" \
     ! -path "./usr/share/nginx/html/$BASE_BUNDLE" \
     -exec sha256sum {} + | LC_ALL=C sort
@@ -114,11 +124,15 @@ diff -u "$STAGING/base-rootfs-metadata" "$STAGING/candidate-rootfs-metadata"
 (
   cd "$STAGING/candidate-rootfs"
   find . -type f \
+    ! -path "./etc/nginx/nginx.conf" \
     ! -path "./usr/share/nginx/html/$BASE_INDEX" \
     ! -path "./usr/share/nginx/html/$PATCHED_BUNDLE" \
     -exec sha256sum {} + | LC_ALL=C sort
 ) >"$STAGING/candidate-rootfs-sha256"
 diff -u "$STAGING/base-rootfs-sha256" "$STAGING/candidate-rootfs-sha256"
+node "$REPOSITORY_ROOT/ops/openscience-static-release/patch-nginx-cache.mjs" \
+  "$STAGING/base-rootfs/etc/nginx/nginx.conf" "$STAGING/expected-nginx.conf"
+cmp "$STAGING/expected-nginx.conf" "$STAGING/candidate-rootfs/etc/nginx/nginx.conf"
 
 test "$(grep -Fao "$OLD_RESOLVER" "$STAGING/candidate/$PATCHED_BUNDLE" | wc -l)" -eq 0
 test "$(grep -Fao "$NEW_RESOLVER" "$STAGING/candidate/$PATCHED_BUNDLE" | wc -l)" -eq 1
