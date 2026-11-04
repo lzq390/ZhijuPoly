@@ -289,13 +289,29 @@ try {
   assert.equal((await read()).smiles, "CCO");
   result.invalidDraftRetained = true;
 
-  // A real unsaved edit requires export; a clean document now reuses its saved
-  // snapshot. Block KET first so autosave cannot accept the new edit earlier.
+  // A real unsaved edit requires export; a clean document reuses its saved
+  // snapshot. Legacy setMolecule resolves before its Worker commits the edit
+  // and emits change. Observe that event and the application's blocked export
+  // before navigating, so this fixture cannot accidentally leave a clean page.
   await page.evaluate(async () => {
     const editor = window.__probeEditor();
-    editor.getKet = () => new Promise(() => {});
+    const probe = window.__navigationFallbackProbe = { changes: 0, blockedExports: 0 };
+    editor.changeEvent.add(() => { probe.changes += 1; });
+    editor.getKet = () => {
+      // Count only this editor's exports after the new edit was observed.
+      if (probe.changes && window.__probeEditor() === editor) probe.blockedExports += 1;
+      return new Promise(() => {});
+    };
     await editor.setMolecule('CCN');
   });
+  await page.waitForFunction(() => {
+    const probe = window.__navigationFallbackProbe;
+    // Read the native graph synchronously: an extra Worker export here would
+    // compete with the very application export this scenario is blocking.
+    const labels = [...window.__probeEditor().editor.struct().atoms.values()].map(atom => atom.label).sort();
+    return probe.changes > 0 && probe.blockedExports > 0 && labels.join(',') === 'C,C,N';
+  });
+  result.navigationFallbackSetup = await page.evaluate(() => ({ ...window.__navigationFallbackProbe }));
   await navigate("/explorer");
   await page.getByRole("status").filter({ hasText: "上一次保存" }).waitFor();
   assert.equal((await read()).smiles, "CCO");
