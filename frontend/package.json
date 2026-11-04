@@ -13,6 +13,7 @@
     "test:pages:states": "node scripts/verify-high-throughput-states.mjs",
     "test:recording-browser": "node scripts/verify-browsing-recording.mjs",
     "test:structure-browser": "node scripts/verify-structure-workspace.mjs",
+    "test:sidebar-history": "node scripts/verify-sidebar-history.mjs",
     "test:structure-resources": "node scripts/verify-structure-resources.mjs",
     "postinstall": "patch-package --error-on-fail && node scripts/verify-ketcher-patches.mjs",
     "verify:ketcher-patches": "node scripts/verify-ketcher-patches.mjs",

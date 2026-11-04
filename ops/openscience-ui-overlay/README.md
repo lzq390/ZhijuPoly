@@ -38,3 +38,9 @@ docker build \
 
 Do not rebase this binary overlay onto another OpenScience image. A different
 base requires a source-governed integration and a new reviewed patch contract.
+
+The shared [static cache policy](../openscience-static-release/patch-nginx-cache.mjs)
+also patches Nginx while preserving the static-tree and bridge contracts above.
+CI compares that configuration against the shared patcher's exact output. For a
+currently deployed newer UI, follow [static releases](../../docs/openscience-static-release.md)
+to retain its base and old resource graphs instead of deploying this legacy UI.

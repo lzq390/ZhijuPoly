@@ -6,8 +6,11 @@ FROM node:22-bookworm-slim@sha256:d9f850096136edbc402debdd8729579a288aac64574ada
 
 WORKDIR /work
 COPY --from=openscience-base /usr/share/nginx/html /work/base-html
+COPY --from=openscience-base /etc/nginx/nginx.conf /work/base-nginx.conf
 COPY ops/openscience-ui-overlay/patch.mjs /work/patch.mjs
+COPY ops/openscience-static-release/patch-nginx-cache.mjs /work/patch-nginx-cache.mjs
 RUN node /work/patch.mjs /work/base-html /work/patched
+RUN node /work/patch-nginx-cache.mjs /work/base-nginx.conf /work/nginx.conf
 
 FROM ${OPENSCIENCE_BASE_IMAGE}
 
@@ -29,6 +32,7 @@ LABEL org.opencontainers.image.source="$SOURCE_URL" \
 USER root
 COPY --from=patcher /work/patched/index.html /usr/share/nginx/html/index.html
 COPY --from=patcher /work/patched/assets/ /usr/share/nginx/html/assets/
+COPY --from=patcher /work/nginx.conf /etc/nginx/nginx.conf
 RUN rm -f /usr/share/nginx/html/assets/index-B2eNxQLj.js \
     && test "$(find /usr/share/nginx/html/assets -maxdepth 1 -type f -name 'index-nexpoly-*.js' | wc -l)" -eq 1
 USER nginx

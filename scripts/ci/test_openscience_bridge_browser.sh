@@ -55,4 +55,7 @@ docker run --rm \
   --volume "$REPOSITORY_ROOT:/work:ro" \
   --workdir /work/ops/openscience-ui-overlay \
   "$PLAYWRIGHT_IMAGE" \
-  node ./browser_probe.mjs
+  sh -eu -c '
+    node /work/ops/openscience-static-release/verify-cache.mjs http://127.0.0.1:4454/
+    node ./browser_probe.mjs
+  '

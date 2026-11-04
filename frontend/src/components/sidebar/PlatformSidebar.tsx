@@ -516,78 +516,74 @@ function SidebarSessionSection({
           <MessageSquare aria-hidden="true" />
           <h2 id={headingId}>对话</h2>
         </button>
-        {isGeneralWorkspaceActive ? (
-          <div className="np-sidebar-section__actions">
-            {isGeneralSessionBridgeReady ? (
-              <span className="np-sidebar-section__count">{generalSessions.length}</span>
-            ) : null}
-            <button
-              type="button"
-              aria-label="新建对话"
-              title="新建对话"
-              disabled={!isGeneralSessionBridgeReady}
-              className="np-sidebar__icon-button np-sidebar__icon-button--small"
-              onClick={onNewGeneralSession}
-            >
-              <Plus aria-hidden="true" />
-            </button>
-          </div>
-        ) : null}
+        <div className="np-sidebar-section__actions">
+          {isGeneralSessionBridgeReady ? (
+            <span className="np-sidebar-section__count">{generalSessions.length}</span>
+          ) : null}
+          <button
+            type="button"
+            aria-label="新建对话"
+            title="新建对话"
+            disabled={!isGeneralSessionBridgeReady}
+            className="np-sidebar__icon-button np-sidebar__icon-button--small"
+            onClick={onNewGeneralSession}
+          >
+            <Plus aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
-      {isGeneralWorkspaceActive ? (
-        <div className="np-sidebar-section__content">
-          <div className="np-sidebar-search">
-            <Search aria-hidden="true" />
-            <input
-              type="search"
-              aria-label="搜索会话"
-              placeholder="搜索会话"
-              value={generalSessionQuery}
-              onChange={(event) => onGeneralSessionQueryChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  onGeneralSessionQueryChange("");
-                  event.currentTarget.blur();
-                }
-              }}
-            />
-            {generalSessionQuery ? (
-              <button
-                type="button"
-                aria-label="清除会话搜索"
-                onClick={() => onGeneralSessionQueryChange("")}
-              >
-                <X aria-hidden="true" />
-              </button>
-            ) : null}
-          </div>
-
-          {!isGeneralSessionBridgeReady ? (
-            <p className="np-sidebar-empty">正在同步会话…</p>
-          ) : generalSessions.length === 0 ? (
-            <p className="np-sidebar-empty np-sidebar-empty--multiline">
-              暂无对话，点击右上角新建。
-            </p>
-          ) : filteredGeneralSessions.length === 0 ? (
-            <p className="np-sidebar-empty">没有匹配的会话</p>
-          ) : (
-            <div className="np-sidebar-list">
-              {filteredGeneralSessions.map((session) => (
-                <GeneralSessionListItem
-                  key={session.id}
-                  session={session}
-                  active={session.id === activeGeneralSessionID}
-                  onOpen={() => onOpenGeneralSession(session.id)}
-                  onRename={(title) => onRenameGeneralSession(session.id, title)}
-                  onDelete={() => onDeleteGeneralSession(session.id)}
-                />
-              ))}
-            </div>
-          )}
+      <div className="np-sidebar-section__content">
+        <div className="np-sidebar-search">
+          <Search aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="搜索会话"
+            placeholder="搜索会话"
+            value={generalSessionQuery}
+            onChange={(event) => onGeneralSessionQueryChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                onGeneralSessionQueryChange("");
+                event.currentTarget.blur();
+              }
+            }}
+          />
+          {generalSessionQuery ? (
+            <button
+              type="button"
+              aria-label="清除会话搜索"
+              onClick={() => onGeneralSessionQueryChange("")}
+            >
+              <X aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
-      ) : null}
+
+        {!isGeneralSessionBridgeReady ? (
+          <p className="np-sidebar-empty">正在同步会话…</p>
+        ) : generalSessions.length === 0 ? (
+          <p className="np-sidebar-empty np-sidebar-empty--multiline">
+            暂无对话，点击右上角新建。
+          </p>
+        ) : filteredGeneralSessions.length === 0 ? (
+          <p className="np-sidebar-empty">没有匹配的会话</p>
+        ) : (
+          <div className="np-sidebar-list">
+            {filteredGeneralSessions.map((session) => (
+              <GeneralSessionListItem
+                key={session.id}
+                session={session}
+                active={isGeneralWorkspaceActive && session.id === activeGeneralSessionID}
+                onOpen={() => onOpenGeneralSession(session.id)}
+                onRename={(title) => onRenameGeneralSession(session.id, title)}
+                onDelete={() => onDeleteGeneralSession(session.id)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
