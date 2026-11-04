@@ -35,7 +35,70 @@ beforeEach(() => {
   localStorage.clear(); sessionStorage.clear(); mounted.mockClear(); unmounted.mockClear(); window.history.replaceState(null, "", "/?job_id=old-private");
   vi.stubGlobal("navigator", { locks: { request: (_name: string, _options: unknown, callback: () => Promise<unknown>) => callback() } });
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+it("keeps existing-account login available while registration is hidden, including direct register requests", async () => {
+  vi.stubEnv("VITE_REGISTRATION_ENABLED", "false");
+  vi.stubEnv("VITE_SUBSCRIPTION_ENABLED", "false");
+  const fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(response(url.endsWith("/login") ? account("existing") : url.endsWith("/plans") ? { registration_enabled: true } : GUEST_SESSION)));
+  vi.stubGlobal("fetch", fetch);
+  function Entry() { const auth = useAuth(); return <><PrivateTree /><button onClick={() => auth?.register()}>直接请求注册</button></>; }
+  render(<AuthProvider><Entry /></AuthProvider>);
+  await screen.findByText("共享游客页面");
+  fireEvent.click(screen.getByRole("button", { name: "直接请求注册" }));
+  expect(screen.getByRole("dialog", { name: "登录工作空间" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "注册账号" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "创建账号" })).toBeNull();
+  fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "existing" } });
+  fireEvent.change(screen.getByLabelText("密码"), { target: { value: "existing-password" } });
+  fireEvent.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByText("私人页面");
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual(["/api/v1/auth/session", "/api/v1/auth/login"]);
+});
+
+it("keeps usage and password changes available with both acquisition entries hidden", async () => {
+  vi.stubEnv("VITE_REGISTRATION_ENABLED", "false"); vi.stubEnv("VITE_SUBSCRIPTION_ENABLED", "false");
+  const fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(url.endsWith("/password") || url.endsWith("/logout") ? new Response(null, { status: 204 }) : response(account("existing"))));
+  vi.stubGlobal("fetch", fetch); const usage = vi.fn(); const subscription = vi.fn();
+  render(<AuthProvider><AccountMenu onOpenUsage={usage} onOpenSubscription={subscription} /></AuthProvider>);
+  const trigger = await screen.findByRole("button", { name: "账号菜单：existing" });
+  fireEvent.click(trigger);
+  expect(screen.queryByRole("menuitem", { name: "会员订阅" })).toBeNull();
+  expect(screen.getByRole("menuitem", { name: "退出登录" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("menuitem", { name: "我的用量" })); expect(usage).toHaveBeenCalledOnce();
+  fireEvent.click(trigger); fireEvent.click(screen.getByRole("menuitem", { name: "修改密码" }));
+  fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "old-password" } });
+  fireEvent.change(screen.getByLabelText("新密码"), { target: { value: "new-password-long" } });
+  fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "new-password-long" } });
+  fireEvent.click(screen.getByRole("button", { name: "修改密码并重新登录" }));
+  await screen.findByRole("dialog", { name: "登录工作空间" });
+  expect(fetch.mock.calls.some(([url]) => url.endsWith("/password"))).toBe(true);
+  expect(subscription).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "注册账号" })).toBeNull();
+});
+
+it("still logs out when both acquisition entries are hidden", async () => {
+  vi.stubEnv("VITE_REGISTRATION_ENABLED", "false"); vi.stubEnv("VITE_SUBSCRIPTION_ENABLED", "false");
+  const fetch = vi.fn().mockResolvedValueOnce(response(account("existing"))).mockResolvedValueOnce(new Response(null, { status: 204 }));
+  vi.stubGlobal("fetch", fetch); page();
+  fireEvent.click(await screen.findByRole("button", { name: "账号菜单：existing" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "退出登录" }));
+  await screen.findByRole("button", { name: "游客账号菜单" });
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual(["/api/v1/auth/session", "/api/v1/auth/logout"]);
+});
+
+it("explains denied service access without offering a hidden subscription", async () => {
+  vi.stubEnv("VITE_SUBSCRIPTION_ENABLED", "false");
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ ...account("ordinary"), account_type: "free" })));
+  render(<AuthProvider><AccountMenu onOpenSubscription={vi.fn()} /></AuthProvider>);
+  await screen.findByRole("button", { name: "账号菜单：ordinary" });
+  act(() => { window.dispatchEvent(new Event("nexpoly:membership-required")); });
+  expect(screen.getByRole("dialog", { name: "功能权限说明" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "当前账号暂无此功能权限" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "查看会员订阅" })).toBeNull();
+  fireEvent.click(screen.getByText("关闭说明"));
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
 
 it("refreshes membership in the same session without clearing drafts or remounting the workspace", async () => {
   const free = { ...account("subscriber"), account_type: "free" as const };

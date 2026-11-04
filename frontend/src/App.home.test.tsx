@@ -626,6 +626,41 @@ describe("智聚万物首页", () => {
 
 
 describe("游客共享工作空间", () => {
+  it("隐藏订阅时阻断直接地址、历史导航与订阅事件，并保留登录入口", async () => {
+    vi.stubEnv("VITE_SUBSCRIPTION_ENABLED", "false"); vi.stubEnv("VITE_REGISTRATION_ENABLED", "false");
+    window.history.replaceState({}, "", "/account/subscription/?old=order#private");
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(new Response(JSON.stringify(GUEST_SESSION), { headers: { "Content-Type": "application/json" } })));
+    render(<AuthProvider><App /></AuthProvider>);
+    await screen.findByRole("button", { name: "游客账号菜单" });
+    expect(window.location.pathname + window.location.search + window.location.hash).toBe("/");
+    fireEvent(window, new Event("nexpoly:open-subscription"));
+    expect(window.location.pathname).toBe("/");
+    expect(screen.getByRole("heading", { name: "对话", level: 1 })).toBeTruthy();
+    window.history.pushState({}, "", "/account/subscription?old=order");
+    fireEvent(window, new PopStateEvent("popstate"));
+    await waitFor(() => expect(window.location.pathname + window.location.search).toBe("/"));
+    expect(screen.getByRole("heading", { name: "对话", level: 1 })).toBeTruthy();
+    expect(screen.queryByText("会员订阅")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "游客账号菜单" }));
+    expect(screen.getByRole("menuitem", { name: "登录" })).toBeTruthy();
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual(["/api/v1/auth/session"]);
+  });
+
+  it("隐藏订阅后普通账号只显示权限说明并保留个人用量", async () => {
+    vi.stubEnv("VITE_SUBSCRIPTION_ENABLED", "false");
+    const ordinary = { ...GUEST_SESSION, authenticated: true, account_type: "free", user: { id: "ordinary", username: "ordinary", must_change_password: false }, session_id: "ordinary-session", csrf_token: "ordinary-csrf" };
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(new Response(JSON.stringify(ordinary), { headers: { "Content-Type": "application/json" } })));
+    render(<AuthProvider><App /></AuthProvider>);
+    await screen.findByRole("button", { name: "账号菜单：ordinary" });
+    expect(screen.queryByText(/开通会员/)).toBeNull();
+    expect(screen.getByText("当前账号暂无发送消息权限")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "账号菜单：ordinary" }));
+    expect(screen.queryByRole("menuitem", { name: "会员订阅" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "我的用量" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "修改密码" })).toBeTruthy();
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual(["/api/v1/auth/session"]);
+  });
+
   it("普通账号使用游客业务界面并保留会员订阅入口", async () => {
     const ordinary = { ...GUEST_SESSION, authenticated: true, account_type: "free", user: { id: "ordinary", username: "ordinary", must_change_password: false }, session_id: "ordinary-session", csrf_token: "ordinary-csrf" };
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(ordinary), { headers: { "Content-Type": "application/json" } }));

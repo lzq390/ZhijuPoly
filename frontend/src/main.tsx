@@ -1,5 +1,6 @@
 import { canvasModules, routeFromPath } from "./routing";
 import { isSimulationPaymentPath } from "../shared/billing-routes";
+import { isSubscriptionEnabled } from "./accountFeatures";
 
 function showLoadError() {
   const root = document.getElementById("root")!;
@@ -7,7 +8,12 @@ function showLoadError() {
   root.textContent = "应用加载失败，请刷新页面重试。";
 }
 
-if (isSimulationPaymentPath(window.location.pathname)) {
+const simulationPath = isSimulationPaymentPath(window.location.pathname);
+if (simulationPath && !isSubscriptionEnabled()) {
+  window.history.replaceState(null, "", "/");
+}
+
+if (simulationPath && isSubscriptionEnabled()) {
   const referrer = document.createElement("meta");
   referrer.name = "referrer"; referrer.content = "no-referrer";
   document.head.append(referrer);

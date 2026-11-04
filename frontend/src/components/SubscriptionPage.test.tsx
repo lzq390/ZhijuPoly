@@ -16,7 +16,25 @@ beforeEach(() => {
   mocks.subscription.mockResolvedValue(subscription); mocks.orders.mockResolvedValue([]); mocks.create.mockResolvedValue(pending); mocks.order.mockResolvedValue(pending);
   mocks.refresh.mockResolvedValue(undefined); mocks.qr.mockResolvedValue("data:image/png;base64,test");
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllEnvs(); });
+
+it("makes a directly mounted disabled subscription page inert", () => {
+  vi.stubEnv("VITE_SUBSCRIPTION_ENABLED", "false");
+  const onReturn = vi.fn(); render(<SubscriptionPage onReturn={onReturn} />);
+  expect(screen.getByRole("status").textContent).toBe("此页面暂未开放。");
+  for (const request of [mocks.plans, mocks.subscription, mocks.orders, mocks.create, mocks.order, mocks.simulate]) expect(request).not.toHaveBeenCalled();
+  expect(screen.queryByText("会员订阅")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "返回工作空间" }));
+  expect(onReturn).toHaveBeenCalledOnce();
+});
+
+it("hides registration on an enabled subscription page even when the server offers it", async () => {
+  vi.stubEnv("VITE_REGISTRATION_ENABLED", "false");
+  mocks.auth.mockReturnValue({ status: "guest", session: {}, login: vi.fn(), register: vi.fn() });
+  render(<SubscriptionPage />);
+  expect(await screen.findByRole("button", { name: "登录后开通" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "注册账号" })).toBeNull();
+});
 
 it("does not read private orders for a guest and offers enabled registration", async () => {
   const login = vi.fn(), register = vi.fn(); mocks.auth.mockReturnValue({ status: "guest", session: {}, login, register });

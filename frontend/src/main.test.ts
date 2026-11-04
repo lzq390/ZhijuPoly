@@ -15,7 +15,7 @@ beforeEach(() => {
   mocks.page.mockReset().mockResolvedValue(undefined);
   document.body.innerHTML = '<div id="root"></div>';
 });
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe("refresh bootstrap", () => {
   it.each(["/structure-workbench", "/database-query", "/explorer", "/homopolymer-property-prediction", "/conditional-generation", "/reverse-design/"])("prefetches %s without waiting for SDK transport to mount the app", async path => {
@@ -51,6 +51,17 @@ it.each(["/billing/simulate-pay", "/billing/simulate-pay/"])("mounts public %s w
   expect(mocks.simulation).toHaveBeenCalledOnce(); expect(mocks.mount).not.toHaveBeenCalled();
   expect(mocks.preload).not.toHaveBeenCalled(); expect(mocks.page).not.toHaveBeenCalled();
   expect(document.head.querySelector('meta[name="referrer"]')?.getAttribute("content")).toBe("no-referrer");
+});
+
+it.each(["/billing/simulate-pay", "/billing/simulate-pay/"])("clears disabled %s before mounting the normal account app", async path => {
+  vi.stubEnv("VITE_SUBSCRIPTION_ENABLED", "false");
+  window.history.replaceState({}, "", `${path}?old=order#token=fragment-only`);
+  await import("./main"); await vi.dynamicImportSettled();
+  expect(window.location.pathname + window.location.search + window.location.hash).toBe("/");
+  expect(mocks.simulation).not.toHaveBeenCalled();
+  expect(mocks.mount).toHaveBeenCalledOnce();
+  expect(mocks.preload).not.toHaveBeenCalled();
+  expect(mocks.page).toHaveBeenCalledWith("home");
 });
 
 it("keeps the normal account app available when global stylesheet transport fails", async () => {

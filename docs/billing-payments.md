@@ -1,5 +1,9 @@
 # 月费会员支付部署
 
+9000 的发布 Web 镜像在构建时固定 `VITE_SUBSCRIPTION_ENABLED=false` 和 `VITE_REGISTRATION_ENABLED=false`，隐藏订阅、开通会员及注册入口，并将订阅和模拟支付深链返回首页。已有账号仍可登录、改密、查看自己的用量和历史数据；账号权限不变。这两个前端开关默认开启，因此普通开发构建保留原有入口；修改开关需重新构建 Web 镜像。
+
+生产账号 overlay 同时固定关闭 `NEXPOLY_BILLING_ENABLED`、`NEXPOLY_BILLING_SIMULATION_ENABLED`、`NEXPOLY_BILLING_REGISTRATION_ENABLED`，并清空 `NEXPOLY_BILLING_PROVIDERS`。在全部关闭时，后端兼容既有 `literature-0024` 数据库；本次生产更新不启用 0025、不创建支付订单或注册账号。前端显示开关不替代后端授权与注册控制。
+
 开发原生 launcher 使用独立的会员 schema opt-in：设置 `NEXPOLY_DEV_MEMBERSHIP_ENABLED=true` 保持 `membership-0025`，再按需设置 `NEXPOLY_DEV_BILLING_SIMULATION_ENABLED=true` 开启模拟支付。模拟支付需要明确设置 `NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN`（例如 `9900`，表示测试展示价 ¥99）。两个开关默认关闭；兼容原有仅设置模拟支付为 `true` 的配置，此时未指定的会员开关自动为 `true`。显式关闭会员开关却启用模拟支付会拒绝启动。它们要求已开启开发用户隔离和显式 `nexpoly_dev_` 前缀会话 cookie；不支持 frozen cohort。不要将这些选择项写入只允许研究服务字段的私有 research dotenv。
 
 会员 opt-in 将 `docker-compose.billing-simulation-dev.yml` 同时加入 CPU/GPU 配置及构建配置哈希，固定真实支付关闭、真实渠道为空、注册开启，健康检查严格要求 `membership-0025`；模拟支付由自己的开关控制。必须先按停机、备份、迁移及校验流程应用 0025，再启动相应镜像。launcher 不会自动迁移或探测数据库版本。GPU operator 和 controller 恢复时冻结会员、模拟支付及价格选择，后续 dotenv 更改不会覆盖恢复配置；变更选择需按既有维护流程重新启动 operator/session。

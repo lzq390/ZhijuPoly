@@ -177,6 +177,19 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
             workflow,
         )
 
+    def test_production_account_ui_flags_preserve_development_defaults(self) -> None:
+        dockerfile = (REPOSITORY_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
+        workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        smoke = (REPOSITORY_ROOT / "scripts" / "ci" / "test_frontend_image_permissions.sh").read_text(encoding="utf-8")
+        for feature in ("SUBSCRIPTION", "REGISTRATION"):
+            self.assertIn(f'ARG VITE_{feature}_ENABLED="true"', dockerfile)
+            environment = f'ENV VITE_{feature}_ENABLED="${{VITE_{feature}_ENABLED}}"'
+            self.assertLess(dockerfile.index(environment), dockerfile.index("RUN npm run build"))
+            self.assertIn(f"VITE_{feature}_ENABLED=false", workflow)
+            self.assertIn(f'FRONTEND_{feature}_ENABLED: "false"', workflow)
+            self.assertIn(f'--build-arg "VITE_{feature}_ENABLED=${feature}_ENABLED"', smoke)
+        self.assertIn('node "$SCRIPT_DIR/verify_frontend_account_ui.mjs" "http://$WEB_PORT"', smoke)
+
     def test_blank_ci_database_and_production_takeover_use_distinct_migration_modes(self) -> None:
         workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"

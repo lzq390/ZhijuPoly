@@ -1,4 +1,5 @@
 import { isLocalOnly, openSubscription } from "./auth/access";
+import { isSubscriptionEnabled } from "./accountFeatures";
 import { StructureLibraryProvider } from "./structure-library/StructureLibraryProvider";
 import { useAuth } from "./auth/AuthProvider";
 import { requestServiceAccess } from "./auth/guestAccess";
@@ -275,6 +276,7 @@ function AppContent() {
   }
 
   function navigate(route: AppRoute, extra: Partial<Omit<AppNavigationRequest, "route" | "target">> = {}) {
+    if (route.module === "subscription" && !isSubscriptionEnabled()) route = { module: "home", datasetKey: null };
     window.dispatchEvent(new Event("nexpoly:structure-navigation"));
     // Fetch the target while the existing navigation transaction saves/exits.
     // A failed prefetch is presented by that page's own retry boundary.
@@ -288,6 +290,7 @@ function AppContent() {
 
   const subscriptionReturnRoute = useRef<AppRoute | null>(null);
   function openMemberSubscription() {
+    if (!isSubscriptionEnabled()) return;
     if (activeModule !== "subscription") subscriptionReturnRoute.current = { module: activeModule, datasetKey: selectedDatasetKey, labDataView };
     navigate({ module: "subscription", datasetKey: null });
   }
@@ -310,10 +313,12 @@ function AppContent() {
       const route = routeFromPath(window.location.pathname);
       const pathname = window.location.pathname;
       const search = window.location.search;
-      const canonical = normalizePath(pathname) === LEGACY_POLYTAO_ROUTE ? POLYTAO_ROUTE
+      const hiddenSubscription = !isSubscriptionEnabled() && normalizePath(pathname) === "/account/subscription";
+      if (hiddenSubscription) window.history.replaceState(route, "", "/");
+      const canonical = hiddenSubscription ? "/" : normalizePath(pathname) === LEGACY_POLYTAO_ROUTE ? POLYTAO_ROUTE
         : normalizePath(pathname) === LEGACY_DATABASE_FILTER_ROUTE ? DATABASE_FILTER_ROUTE : pathname;
       navigate(route, {
-        href: `${canonical}${search}`, history: "none", source: "history",
+        href: `${canonical}${hiddenSubscription ? "" : search}`, history: "none", source: "history",
         knowledge: route.module === "knowledge" ? { query: getKnowledgeQueryFromSearch(search), terms: getKnowledgeTermsFromSearch(search) } : undefined,
         jobId: route.module === "monomerDft" ? getMonomerDftJobIdFromSearch(search) : getMonomerMdJobIdFromSearch(search)
       });
@@ -779,7 +784,7 @@ function AppContent() {
       standaloneModules={standaloneModules}
       moduleGroups={moduleGroups}
       onOpenHome={openGeneralWorkspace}
-      onOpenSubscription={openMemberSubscription}
+      onOpenSubscription={isSubscriptionEnabled() ? openMemberSubscription : undefined}
       onOpenUsage={() => navigate({ module: "personalUsage", datasetKey: null })}
       projects={projectSnapshot?.projects ?? []}
       activeProjectDirectory={
@@ -805,7 +810,7 @@ function AppContent() {
       moduleTransition={moduleTransition}
     >
       {isGuest && <div className="np-guest-service-notice" role="note"><span>游客可浏览各模块和使用本地画板；执行服务任务前，请登录账号。</span><button type="button" onClick={() => requestServiceAccess()}>登录账号</button></div>}
-      {auth?.session.account_type === "free" && <div className="np-guest-service-notice" role="note"><span>普通账号可使用本地画板和公开示例；开通会员后使用科研服务与工作空间。</span><button type="button" onClick={openSubscription}>开通会员</button></div>}
+      {auth?.session.account_type === "free" && <div className="np-guest-service-notice" role="note"><span>{isSubscriptionEnabled() ? "普通账号可使用本地画板和公开示例；开通会员后使用科研服务与工作空间。" : "普通账号可使用本地画板和公开示例。如需科研服务与工作空间权限，请联系管理员。"}</span>{isSubscriptionEnabled() && <button type="button" onClick={openSubscription}>开通会员</button>}</div>}
       <StructureWorkspaceNotice workspace={structureWorkspace.workspace} />
       <div className={activeModule === "home" ? "min-h-0 flex-1" : "hidden"} aria-hidden={activeModule !== "home"}>
         {canUseSharedWorkspace || localOnly ? <AgentWorkspaceHomePage
@@ -820,10 +825,10 @@ function AppContent() {
               generalSessionBridge.requestSessions();
             }
           }}
-        /> : <div className="np-auth-center"><h2>共享工作空间需要会员权限</h2><p>本地画板和公开示例仍可使用。次数余额不会自动开通此功能。</p></div>}
+        /> : <div className="np-auth-center"><h2>{isSubscriptionEnabled() ? "共享工作空间需要会员权限" : "当前账号暂无共享工作空间权限"}</h2><p>本地画板和公开示例仍可使用。次数余额不会自动开通此功能。</p></div>}
       </div>
 
-      {activeModule === "subscription" ? <SubscriptionPage onReturn={() => navigate(subscriptionReturnRoute.current ?? { module: "home", datasetKey: null })} /> : null}
+      {isSubscriptionEnabled() && activeModule === "subscription" ? <SubscriptionPage onReturn={() => navigate(subscriptionReturnRoute.current ?? { module: "home", datasetKey: null })} /> : null}
       {activeModule === "personalUsage" ? <PersonalUsagePage /> : null}
 
       {activeModule === "databaseQuery" ? (

@@ -4,6 +4,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { requestServiceAccess } from "../auth/guestAccess";
 import { MessageSquare, BrainCircuit, ArrowUp, ArrowUpRight, BookOpen, ChartNoAxesCombined, Atom, LockKeyhole, LogIn } from "lucide-react";
 import { resolveAgentWorkspaceUrl } from "../lib/openScienceProjectBridge";
+import { isSubscriptionEnabled } from "../accountFeatures";
 import "./agent-workspace-home.css";
 
 const researchPrompts = [
@@ -48,7 +49,7 @@ function GuestConversation({ draft, setDraft }: { draft: string; setDraft: (valu
           <div className="np-guest-conversation__intro">
             <span className="np-guest-conversation__mark" aria-hidden="true">{tab === "chat" ? <MessageSquare /> : <BrainCircuit />}</span>
             <h2>{tab === "chat" ? "从一个研究问题开始" : "让研究工具连接你的工作"}</h2>
-            <p>{tab === "chat" ? "围绕文献、性质与分子结构，展开你的材料研究。" : ordinaryAccount ? "开通会员后使用智能体技能，协助完成材料检索、分析与设计。" : "登录后使用智能体技能，协助完成材料检索、分析与设计。"}</p>
+            <p>{tab === "chat" ? "围绕文献、性质与分子结构，展开你的材料研究。" : ordinaryAccount ? isSubscriptionEnabled() ? "开通会员后使用智能体技能，协助完成材料检索、分析与设计。" : "当前账号暂无智能体技能权限，可继续浏览科研模块。" : "登录后使用智能体技能，协助完成材料检索、分析与设计。"}</p>
           </div>
 
           {tab === "chat" ? (
@@ -63,7 +64,7 @@ function GuestConversation({ draft, setDraft }: { draft: string; setDraft: (valu
           ) : (
             <div className="np-guest-conversation__skills">
               <div className="np-guest-conversation__skill-list">{researchPrompts.map(({ title, icon: Icon }) => <span key={title}><Icon aria-hidden="true" />{title}</span>)}</div>
-              <button type="button" className="np-guest-conversation__login" onClick={() => requestServiceAccess()}><LogIn aria-hidden="true" />{ordinaryAccount ? "开通会员后使用技能" : "登录后使用技能"}</button>
+              <button type="button" className="np-guest-conversation__login" onClick={() => requestServiceAccess()}><LogIn aria-hidden="true" />{ordinaryAccount ? isSubscriptionEnabled() ? "开通会员后使用技能" : "查看功能权限" : "登录后使用技能"}</button>
             </div>
           )}
         </div>
@@ -73,7 +74,7 @@ function GuestConversation({ draft, setDraft }: { draft: string; setDraft: (valu
             <form className="np-guest-conversation__composer" onSubmit={event => { event.preventDefault(); requestServiceAccess(); }}>
               <textarea ref={inputRef} aria-label="发送消息" placeholder="描述你的研究问题，或选择上方示例…" value={draft} onChange={event => setDraft(event.target.value)} rows={3} />
               <div className="np-guest-conversation__composer-toolbar">
-                <span><LockKeyhole aria-hidden="true" />{ordinaryAccount ? "开通会员后即可发送消息" : "登录后即可发送消息"}</span>
+                <span><LockKeyhole aria-hidden="true" />{ordinaryAccount ? isSubscriptionEnabled() ? "开通会员后即可发送消息" : "当前账号暂无发送消息权限" : "登录后即可发送消息"}</span>
                 <button type="submit" aria-label="发送消息"><ArrowUp aria-hidden="true" /></button>
               </div>
             </form>

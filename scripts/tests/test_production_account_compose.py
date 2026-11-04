@@ -19,7 +19,11 @@ class ProductionAccountComposeTests(unittest.TestCase):
             # Values in env_file must not accidentally override this release's
             # explicit policy, including when copied from the old deployment.
             app_env.write("ALLOWED_ORIGINS=http://localhost:9000\n"
-                          "USAGE_ENTITLEMENTS_ENABLED=true\n")
+                          "USAGE_ENTITLEMENTS_ENABLED=true\n"
+                          "NEXPOLY_BILLING_ENABLED=true\n"
+                          "NEXPOLY_BILLING_SIMULATION_ENABLED=true\n"
+                          "NEXPOLY_BILLING_REGISTRATION_ENABLED=true\n"
+                          "NEXPOLY_BILLING_PROVIDERS=wechat,alipay\n")
             app_env.flush()
             env = {"PATH": os.environ["PATH"],
                    "NEXPOLY_BACKEND_IMAGE": "ghcr.io/lzq390/nexpoly-backend@sha256:" + "1" * 64,
@@ -80,6 +84,11 @@ class ProductionAccountComposeTests(unittest.TestCase):
         self.assertEqual(batch["environment"]["POLYMER_MD_PROD_ENABLED"], "false")
         self.assertEqual(batch["environment"]["POLYMER_MD_SUBMIT_ENABLED"], "false")
         self.assertEqual(batch["environment"]["MONOMER_DFT_SUBMIT_ENABLED"], "false")
+        for service in (backend, batch):
+            for key in ("NEXPOLY_BILLING_ENABLED", "NEXPOLY_BILLING_SIMULATION_ENABLED",
+                        "NEXPOLY_BILLING_REGISTRATION_ENABLED"):
+                self.assertEqual(service["environment"][key], "false")
+            self.assertEqual(service["environment"]["NEXPOLY_BILLING_PROVIDERS"], "")
 
     def test_explicit_cutover_only_changes_web_binding(self):
         services = self.render(NEXPOLY_WEB_BIND="0.0.0.0", NEXPOLY_WEB_PORT="9000")["services"]
