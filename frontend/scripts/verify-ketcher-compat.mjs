@@ -132,10 +132,30 @@ try {
   await page.waitForTimeout(1500);
   report.unmounted = await measure();
   report.initialization = await page.evaluate(() => ({ count: window.__compatInitCount, errors: window.__compatErrors.length }));
-  await page.evaluate(() => { window.__compatUnmountOnCreate = true; window.__compatToggle(); });
-  await page.waitForTimeout(600);
-  assert.equal(await page.evaluate(() => window.__compatInitCount), report.initialization.count);
-  assert.equal(page.workers().length, 0);
+  // Subscribe before mounting: this fixture retires the service in the same
+  // initialization turn. React cleanup and the browser's Worker close event
+  // need not finish within a fixed delay on a busy runner.
+  const interruptedWorkersClosed = [];
+  const trackInterruptedWorker = worker => {
+    const closed = worker.waitForEvent('close', { timeout: 30000 });
+    closed.catch(() => {}); // A fixture-state failure below must not leave an unhandled waiter.
+    interruptedWorkersClosed.push(closed);
+  };
+  page.on('worker', trackInterruptedWorker);
+  try {
+    await Promise.all([page.waitForEvent('worker', { timeout: 30000 }),
+      page.evaluate(() => { window.__compatUnmountOnCreate = true; window.__compatToggle(); })]);
+    await page.waitForFunction(() => window.__compatUnmountOnCreate === false &&
+      window.__compatEditor === null && window.__compatService?.disposed === true);
+    // Include every Worker observed during StrictMode initialization, even if
+    // another is created while an earlier close notification is in flight.
+    for (const closed of interruptedWorkersClosed) await closed;
+    report.initialization.interruptedWorkers = interruptedWorkersClosed.length;
+    assert.equal(await page.evaluate(() => window.__compatService.failure?.name), 'AbortError',
+      'Interrupted initialization must dispose the service, not wait for its request timeout');
+    assert.equal(await page.evaluate(() => window.__compatInitCount), report.initialization.count);
+    assert.equal(page.workers().length, 0);
+  } finally { page.off('worker', trackInterruptedWorker); }
   await page.evaluate(() => { window.__compatFailNext = true; window.__compatToggle(); });
   await page.waitForFunction(() => window.__compatErrors.some(error => error.includes('Expected initialization failure')));
   assert.equal(page.workers().length, 0);
