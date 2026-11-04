@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({ access: vi.fn(() => false), auth: { status: "g
 vi.mock("../auth/AuthProvider", () => ({ useAuth: () => mocks.auth }));
 vi.mock("../auth/guestAccess", () => ({ requestServiceAccess: mocks.access }));
 beforeEach(() => { mocks.access.mockClear(); mocks.auth = { status: "guest", session: undefined }; });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 it("keeps guest suggestions local and never creates the configured iframe", () => {
  const view=render(<AgentWorkspaceHomePage src="http://127.0.0.1:9/synthetic" />);
  fireEvent.click(screen.getByRole("button", {name: /文献与知识/}));
@@ -37,6 +37,18 @@ function authenticate(accountType: "free" | "member", userId = "owner", sessionI
   session_id: sessionId, csrf_token: "test-csrf", capabilities: {}, account_type: accountType
  } };
 }
+
+it("keeps free-account access checks without subscription promotion when it is hidden", () => {
+ vi.stubEnv("VITE_SUBSCRIPTION_ENABLED", "false"); authenticate("free");
+ render(<AgentWorkspaceHomePage />);
+ expect(screen.getByText("当前账号暂无发送消息权限")).toBeTruthy();
+ expect(screen.queryByText(/开通会员/)).toBeNull();
+ fireEvent.click(screen.getByRole("tab", { name: "技能" }));
+ expect(screen.getByText("当前账号暂无智能体技能权限，可继续浏览科研模块。")).toBeTruthy();
+ fireEvent.click(screen.getByRole("button", { name: "查看功能权限" }));
+ expect(mocks.access).toHaveBeenCalledOnce();
+ expect(document.querySelector("iframe")).toBeNull();
+});
 
 it("preserves an unsent question through same-account membership changes without sending it", async () => {
  const writeText = vi.fn().mockResolvedValue(undefined);

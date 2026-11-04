@@ -1552,6 +1552,14 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
             failures,
         )
 
+    def test_release_rejects_enabling_production_subscription_or_registration(self) -> None:
+        for feature in ("SUBSCRIPTION", "REGISTRATION"):
+            with self.subTest(feature=feature):
+                changed = CI_TEXT.replace(f"VITE_{feature}_ENABLED=false", f"VITE_{feature}_ENABLED=true", 1)
+                failures: list[str] = []
+                policy.validate_backend_image_identity_policy(changed, failures)
+                self.assertTrue(failures)
+
     def test_backend_dockerfile_identity_is_structurally_governed(self) -> None:
         failures: list[str] = []
         policy.validate_backend_dockerfile_identity_policy(

@@ -580,6 +580,8 @@ RELEASE_WEB_BUILD_STEP_LINES = (
     "            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}",
     "            VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}",
     "            VITE_AGENT_WORKSPACE_URL=http://114.214.255.154:9011/",
+    "            VITE_SUBSCRIPTION_ENABLED=false",
+    "            VITE_REGISTRATION_ENABLED=false",
     (
         "          cache-from: type=gha,scope=release-web-"
         "${{ hashFiles('frontend/package-lock.json') }}"

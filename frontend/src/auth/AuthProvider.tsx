@@ -7,6 +7,7 @@ import { GUEST_SESSION, getSessionEpoch, installSession, onSessionInvalidated, r
 import { AUTH_OWNER_KEY, AUTH_SHARED_OWNER_KEY, AUTH_SYNC_KEY, clearPrivateBrowserData, clearPrivateSessionStorage } from "./storage";
 import { randomId } from "./randomId";
 import { acceptGuestDraft } from "./guestDraft";
+import { isRegistrationEnabled, isSubscriptionEnabled } from "../accountFeatures";
 import "./auth.css";
 
 type AuthState = { status: "loading" | "guest" | "authenticated" | "error"; session: AuthSession; error: string | null };
@@ -17,18 +18,20 @@ const initial: AuthState = { status: "loading", session: GUEST_SESSION, error: n
 function ownerKey(session: AuthSession) { return session.authenticated ? `${session.user!.id}:${session.session_id}` : ""; }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const registrationEnabled = isRegistrationEnabled();
+  const subscriptionEnabled = isSubscriptionEnabled();
   const [state, setState] = useState<AuthState>(initial);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [registerMode, setRegisterMode] = useState(false);
   const [registration, setRegistration] = useState<"loading" | "enabled" | "disabled" | "error">("loading");
   useEffect(() => {
-    if (!loginOpen || !registerMode) return;
+    if (!registrationEnabled || !loginOpen || !registerMode) return;
     const controller = new AbortController(); setRegistration("loading");
     fetchBillingPlans(controller.signal).then(plans => { if (!controller.signal.aborted) setRegistration(plans.registration_enabled ? "enabled" : "disabled"); })
       .catch(() => { if (!controller.signal.aborted) setRegistration("error"); });
     return () => controller.abort();
-  }, [loginOpen, registerMode]);
+  }, [loginOpen, registerMode, registrationEnabled]);
   const [membershipOpen, setMembershipOpen] = useState(false);
   useEffect(() => {
     const show = () => setMembershipOpen(true);
@@ -152,6 +155,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [broadcast, refresh]);
   const login = async (username: string, password: string) => {
+    if (registerMode && !registrationEnabled) return;
     if (mutating.current) return;
     mutating.current = true;
     const expected = getSessionEpoch();
@@ -200,10 +204,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     : state.status === "authenticated" && (state.session.user!.must_change_password || passwordOpen) ? <main className="np-auth-center"><CredentialsForm mode="password" submit={password} /><button type="button" onClick={() => void logout()}>退出登录</button>{!state.session.user!.must_change_password && <button type="button" onClick={() => setPasswordOpen(false)}>返回工作空间</button>}</main>
     : state.status === "authenticated" && importPending ? <main className="np-auth-center"><h1>导入本次游客画板</h1><p>是否将本次游客体验的结构带入工作空间？导入不会自动查询或计算。</p><button type="button" onClick={() => { acceptGuestDraft(guestDraft); setGuestDraft(""); setImportPending(false); }}>导入结构</button><button type="button" onClick={() => { setGuestDraft(""); setImportPending(false); }}>从空白开始</button></main>
     : <div key={`${state.session.session_id ?? "guest"}:${getSessionEpoch()}`} className="np-auth-workspace">{children}</div>;
-  return <AuthContext.Provider value={{ ...state, login: () => { setRegisterMode(false); setLoginOpen(true); }, register: () => { setRegisterMode(true); setLoginOpen(true); }, refreshSession, logout, changePassword: () => setPasswordOpen(true), guestDraft, registerGuestCapture: setGuestCapture }}>
+  return <AuthContext.Provider value={{ ...state, login: () => { setRegisterMode(false); setLoginOpen(true); }, register: () => { setRegisterMode(registrationEnabled); setLoginOpen(true); }, refreshSession, logout, changePassword: () => setPasswordOpen(true), guestDraft, registerGuestCapture: setGuestCapture }}>
     {content}
-    {state.status === "authenticated" && state.session.account_type === "free" && membershipOpen && <LoginDialog label="会员功能说明" onClose={() => setMembershipOpen(false)}><div className="np-auth-dialog-message"><h2>开通会员以使用此功能</h2><p>普通账号可使用本地画板和公开示例。会员可使用科研服务与工作空间。</p><div className="np-auth-dialog-actions"><button className="is-primary" type="button" onClick={() => { setMembershipOpen(false); openSubscription(); }}>查看会员订阅</button><button type="button" onClick={() => setMembershipOpen(false)}>暂不开通</button></div></div></LoginDialog>}
-    {state.status === "guest" && loginOpen && <LoginDialog label={registerMode ? "注册账号" : "登录工作空间"} onClose={() => setLoginOpen(false)}><>{!registerMode || registration === "enabled" ? <CredentialsForm key={registerMode ? "register" : "login"} mode={registerMode ? "register" : "login"} error={state.error} submit={login} /> : <p className="np-auth-dialog-notice" role="status">{registration === "loading" ? "正在确认注册服务…" : registration === "disabled" ? "自助注册暂未开放，请使用已有账号登录。" : "暂时无法确认注册服务，请稍后重试。"}</p>}<div className="np-auth-dialog-switch"><span>{registerMode ? "已有账号？" : "还没有账号？"}</span><button type="button" onClick={() => { setRegisterMode(value => !value); setState(previous => ({ ...previous, error: null })); }}>{registerMode ? "返回登录" : "注册账号"}</button></div></></LoginDialog>}
+    {state.status === "authenticated" && state.session.account_type === "free" && membershipOpen && <LoginDialog label={subscriptionEnabled ? "会员功能说明" : "功能权限说明"} onClose={() => setMembershipOpen(false)}><div className="np-auth-dialog-message"><h2>{subscriptionEnabled ? "开通会员以使用此功能" : "当前账号暂无此功能权限"}</h2><p>{subscriptionEnabled ? "普通账号可使用本地画板和公开示例。会员可使用科研服务与工作空间。" : "你仍可使用本地画板和公开示例。如需使用此功能，请联系管理员。"}</p><div className="np-auth-dialog-actions">{subscriptionEnabled && <button className="is-primary" type="button" onClick={() => { setMembershipOpen(false); openSubscription(); }}>查看会员订阅</button>}<button type="button" onClick={() => setMembershipOpen(false)}>{subscriptionEnabled ? "暂不开通" : "关闭说明"}</button></div></div></LoginDialog>}
+    {state.status === "guest" && loginOpen && <LoginDialog label={registerMode && registrationEnabled ? "注册账号" : "登录工作空间"} onClose={() => setLoginOpen(false)}><>{!registerMode || !registrationEnabled || registration === "enabled" ? <CredentialsForm key={registerMode && registrationEnabled ? "register" : "login"} mode={registerMode && registrationEnabled ? "register" : "login"} error={state.error} submit={login} /> : <p className="np-auth-dialog-notice" role="status">{registration === "loading" ? "正在确认注册服务…" : registration === "disabled" ? "自助注册暂未开放，请使用已有账号登录。" : "暂时无法确认注册服务，请稍后重试。"}</p>}{registrationEnabled && <div className="np-auth-dialog-switch"><span>{registerMode ? "已有账号？" : "还没有账号？"}</span><button type="button" onClick={() => { setRegisterMode(value => !value); setState(previous => ({ ...previous, error: null })); }}>{registerMode ? "返回登录" : "注册账号"}</button></div>}</></LoginDialog>}
   </AuthContext.Provider>;
 }
 
@@ -247,7 +251,7 @@ function CredentialsForm({ mode, submit, error: externalError }: {
     finally { setBusy(false); }
   }
   return <form className={`np-auth-form${registering ? " np-auth-form--register" : ""}`} onSubmit={event => void handle(event)}>
-    {registering ? <header className="np-auth-form__register-header"><h2>注册账号</h2><p>注册后可使用本地画板和公开示例。会员服务需另行开通。</p></header> : <><h2>{login ? "登录工作空间" : "修改密码"}</h2><p>{login ? "使用账号和密码登录。" : "修改成功后，请使用新密码重新登录。"}</p></>}
+    {registering ? <header className="np-auth-form__register-header"><h2>注册账号</h2><p>{isSubscriptionEnabled() ? "注册后可使用本地画板和公开示例。会员服务需另行开通。" : "注册后可使用本地画板和公开示例。科研服务权限请联系管理员。"}</p></header> : <><h2>{login ? "登录工作空间" : "修改密码"}</h2><p>{login ? "使用账号和密码登录。" : "修改成功后，请使用新密码重新登录。"}</p></>}
     <label>{login ? "用户名" : "当前密码"}<input required maxLength={login ? 64 : 256} autoComplete={login ? "username" : "current-password"} type={login ? "text" : "password"} value={first} onChange={event => setFirst(event.target.value)} /></label>
     {registering ? <div className="np-auth-form__password-field"><label htmlFor={passwordId}>密码</label><span className="np-auth-form__field-hint" id={passwordHintId}>至少 12 位字符</span><input id={passwordId} aria-describedby={passwordHintId} required autoComplete="new-password" type="password" maxLength={256} minLength={12} value={second} onChange={event => setSecond(event.target.value)} /></div> : <label>{login ? "密码" : "新密码"}<input required autoComplete={login ? "current-password" : "new-password"} type="password" maxLength={256} minLength={login ? 1 : 12} value={second} onChange={event => setSecond(event.target.value)} /></label>}
     {(!login || registering) && <label>{registering ? "确认密码" : "确认新密码"}<input required type="password" autoComplete="new-password" maxLength={256} value={confirm} onChange={event => setConfirm(event.target.value)} /></label>}
@@ -286,8 +290,8 @@ export function AccountMenu({ onOpenUsage, onOpenSubscription }: { onOpenUsage?:
       const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
       items[next]?.focus();
     }}>
-      <div className="np-account-menu__summary"><strong>{username}</strong><span>{signedIn ? auth.session.account_type === "free" ? "普通账号 · 可开通会员" : "个人工作空间" : "登录后保存和管理科研任务"}</span></div>
-      {onOpenSubscription && <button type="button" role="menuitem" onClick={() => act(onOpenSubscription)}><Crown aria-hidden="true" />会员订阅</button>}
+      <div className="np-account-menu__summary"><strong>{username}</strong><span>{signedIn ? auth.session.account_type === "free" ? isSubscriptionEnabled() ? "普通账号 · 可开通会员" : "普通账号" : "个人工作空间" : "登录后保存和管理科研任务"}</span></div>
+      {isSubscriptionEnabled() && onOpenSubscription && <button type="button" role="menuitem" onClick={() => act(onOpenSubscription)}><Crown aria-hidden="true" />会员订阅</button>}
       {signedIn ? <>
         {onOpenUsage && <button type="button" role="menuitem" onClick={() => act(onOpenUsage)}><BarChart3 aria-hidden="true" />我的用量</button>}
         <button type="button" role="menuitem" onClick={() => act(auth.changePassword)}><KeyRound aria-hidden="true" />修改密码</button>

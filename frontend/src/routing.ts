@@ -1,6 +1,7 @@
 import type { DatasetKey } from "./components/database-analysis/types";
 import type { LabDataView } from "./components/LabDataPage";
 import { canvasRoutePaths } from "../shared/canvas-routes";
+import { isSubscriptionEnabled } from "./accountFeatures";
 
 export type ActiveModule =
   | "home"
@@ -59,7 +60,7 @@ export function normalizePath(pathname: string) {
 export function routeFromPath(pathname: string): AppRoute {
   const path = normalizePath(pathname);
 
-  if (path === "/account/subscription") return { module: "subscription", datasetKey: null };
+  if (path === "/account/subscription") return { module: isSubscriptionEnabled() ? "subscription" : "home", datasetKey: null };
 
   if (path === "/account/usage") {
     return { module: "personalUsage", datasetKey: null };
@@ -150,7 +151,7 @@ export function routeFromPath(pathname: string): AppRoute {
 }
 
 export function pathFromRoute(route: AppRoute) {
-  if (route.module === "subscription") return "/account/subscription";
+  if (route.module === "subscription") return isSubscriptionEnabled() ? "/account/subscription" : "/";
   if (route.module === "personalUsage") return "/account/usage";
   if (route.module === "structureWorkbench") {
     return canvasRoutePaths.structureWorkbench;
@@ -233,7 +234,9 @@ export function getInitialRoute() {
   }
 
   const route = routeFromPath(window.location.pathname);
-  if (normalizePath(window.location.pathname) === LEGACY_POLYTAO_ROUTE) {
+  if (!isSubscriptionEnabled() && normalizePath(window.location.pathname) === "/account/subscription") {
+    window.history.replaceState(route, "", "/");
+  } else if (normalizePath(window.location.pathname) === LEGACY_POLYTAO_ROUTE) {
     window.history.replaceState(route, "", POLYTAO_ROUTE);
   } else if (normalizePath(window.location.pathname) === LEGACY_DATABASE_FILTER_ROUTE) {
     window.history.replaceState(route, "", DATABASE_FILTER_ROUTE);

@@ -8,6 +8,11 @@ IMAGE_TAG="${FRONTEND_PERMISSION_IMAGE_TAG:-nexpoly-frontend-permission-smoke:lo
 CONTAINER_NAME="${FRONTEND_PERMISSION_CONTAINER_NAME:-nexpoly-frontend-permission-smoke-$$}"
 EXPECTED_WORKSPACE_URL="${FRONTEND_EXPECTED_WORKSPACE_URL:-}"
 EDITOR_ENGINE="${FRONTEND_STRUCTURE_EDITOR_ENGINE:-}"
+SUBSCRIPTION_ENABLED="${FRONTEND_SUBSCRIPTION_ENABLED:-true}"
+REGISTRATION_ENABLED="${FRONTEND_REGISTRATION_ENABLED:-true}"
+for account_feature in "$SUBSCRIPTION_ENABLED" "$REGISTRATION_ENABLED"; do
+  case "$account_feature" in true|false) ;; *) echo "invalid account feature flag" >&2; exit 2 ;; esac
+done
 EDITOR_BUILD_ARGS=()
 if [[ -n "$EDITOR_ENGINE" ]]; then
   case "$EDITOR_ENGINE" in react|iframe) ;; *) echo "invalid structure editor engine" >&2; exit 2 ;; esac
@@ -42,6 +47,8 @@ docker build \
   --tag "$IMAGE_TAG" \
   --build-arg "SOURCE_REVISION=$(git -C "$REPO_ROOT" rev-parse HEAD)" \
   --build-arg "VITE_AGENT_WORKSPACE_URL=$EXPECTED_WORKSPACE_URL" \
+  --build-arg "VITE_SUBSCRIPTION_ENABLED=$SUBSCRIPTION_ENABLED" \
+  --build-arg "VITE_REGISTRATION_ENABLED=$REGISTRATION_ENABLED" \
   "${EDITOR_BUILD_ARGS[@]}" \
   "$STAGING"
 
@@ -57,6 +64,7 @@ docker run \
   --detach \
   --name "$CONTAINER_NAME" \
   --add-host backend:127.0.0.1 \
+  --publish 127.0.0.1::80 \
   "$IMAGE_TAG" >/dev/null
 
 for _ in {1..30}; do
@@ -111,3 +119,9 @@ docker exec "$CONTAINER_NAME" sh -eu -c '
   worker_count="$(ps -o user,comm | awk '"'"'$1 != "root" && $2 == "nginx" { count += 1 } END { print count + 0 }'"'"')"
   test "$worker_count" -ge 1
 '
+
+if [[ "$SUBSCRIPTION_ENABLED" == false && "$REGISTRATION_ENABLED" == false ]]; then
+  WEB_PORT="$(docker port "$CONTAINER_NAME" 80/tcp)"
+  [[ "$WEB_PORT" =~ ^127\.0\.0\.1:[0-9]+$ ]]
+  node "$SCRIPT_DIR/verify_frontend_account_ui.mjs" "http://$WEB_PORT"
+fi

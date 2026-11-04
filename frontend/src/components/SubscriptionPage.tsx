@@ -6,6 +6,7 @@ import { randomId } from "../auth/randomId";
 import { createBillingOrder, fetchBillingOrder, fetchBillingOrders, fetchBillingPlans, fetchSubscription, type BillingOrder, type BillingPlans, type PaymentProvider, type Subscription } from "../services/billing";
 import { simulationCheckoutUrl } from "../services/billingSimulation";
 import { ModulePageHeader } from "./ModulePageHeader";
+import { isRegistrationEnabled, isSubscriptionEnabled } from "../accountFeatures";
 import "./SubscriptionPage.css";
 
 const providers: Record<PaymentProvider, string> = { wechat: "微信支付", alipay: "支付宝" };
@@ -16,6 +17,7 @@ const message = (error: unknown) => error instanceof Error ? error.message : "�
 
 export function SubscriptionPage({ onReturn }: { onReturn?: () => void } = {}) {
   const auth = useAuth();
+  if (!isSubscriptionEnabled()) return <section className="np-module-page"><ModulePageHeader>账号服务</ModulePageHeader><p role="status">此页面暂未开放。</p>{onReturn && <button type="button" onClick={onReturn}>返回工作空间</button>}</section>;
   return <section className="np-module-page np-subscription-page">
     <ModulePageHeader>会员订阅</ModulePageHeader>
     <SubscriptionContent key={auth?.session.user?.id ?? "guest"} onReturn={onReturn} />
@@ -170,7 +172,7 @@ function SubscriptionContent({ onReturn }: { onReturn?: () => void }) {
       </section>}
       {!legacy && !blocked && <section className="np-subscription-card np-subscription-plan" aria-label="月费会员套餐"><div><span className="np-subscription-eyebrow">NEXPOLY MEMBER</span><h3>月费会员</h3><p className="np-subscription-price">{plans.monthly_price_fen && plans.monthly_price_fen > 0 ? money(plans.monthly_price_fen) : "价格待开放"}<small> / 月{plans.simulation ? "（模拟展示价）" : ""}</small></p></div>
         <ul><li><ShieldCheck aria-hidden="true" />科研检索、预测与计算服务</li><li><ShieldCheck aria-hidden="true" />使用科研工作空间与任务管理</li><li><ShieldCheck aria-hidden="true" />续费时延长现有有效期</li></ul>
-        {!available ? <p role="status">在线购买暂未开放。价格及支付渠道准备完成后，可在此开通会员。</p> : !signedIn ? <div className="np-subscription-actions"><button type="button" className="is-primary" onClick={() => auth?.login()}>登录后开通</button>{plans.registration_enabled && <button type="button" onClick={() => auth?.register()}>注册账号</button>}</div> : !subscription || !ordersReady ? <p role="status">会员状态或订单记录暂时无法确认，请重新读取后再开通。</p> : <>
+        {!available ? <p role="status">在线购买暂未开放。价格及支付渠道准备完成后，可在此开通会员。</p> : !signedIn ? <div className="np-subscription-actions"><button type="button" className="is-primary" onClick={() => auth?.login()}>登录后开通</button>{isRegistrationEnabled() && plans.registration_enabled && <button type="button" onClick={() => auth?.register()}>注册账号</button>}</div> : !subscription || !ordersReady ? <p role="status">会员状态或订单记录暂时无法确认，请重新读取后再开通。</p> : <>
           <fieldset disabled={busy || activePending || Boolean(uncertainProvider)}><legend>支付方式</legend>{plans.providers.map(value => <label key={value}><input type="radio" name="payment-provider" value={value} checked={provider === value} onChange={() => setProvider(value)} />{providers[value]}{plans.simulation ? "（开发模拟）" : ""}</label>)}</fieldset>
           <button type="button" className="is-primary" disabled={busy || !subscription || activePending} onClick={() => void buy()}>{busy ? "正在处理…" : uncertainProvider ? "确认原订单" : subscription?.account_type === "member" ? "续费一个月" : "开通一个月"}</button>
           {uncertainProvider && <p role="status">上次订单提交结果尚未确认，请使用同一支付方式确认原订单。</p>}
