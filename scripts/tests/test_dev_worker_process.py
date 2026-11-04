@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import socket as unix_socket
+import stat
 import sys
 
 import pytest
@@ -184,10 +185,7 @@ def test_collect_dead_record_accepts_pid_reuse_without_touching_the_new_process(
     assert (proc_root / str(pid) / "stat").exists()
 
 
-@pytest.mark.parametrize("listening", [False, True])
-def test_dead_worker_collection_removes_only_an_unlistened_socket(
-    tmp_path: Path, listening: bool,
-) -> None:
+def _dead_worker_with_socket_path(tmp_path: Path):
     pid, python, socket, record, argv, proc_root = _fixture(tmp_path)
     socket = tmp_path / "w.sock"
     argv[-1] = str(socket)
@@ -200,6 +198,14 @@ def test_dead_worker_collection_removes_only_an_unlistened_socket(
     for child in (proc_root / str(pid)).iterdir():
         child.unlink()
     (proc_root / str(pid)).rmdir()
+    return socket, record, common
+
+
+@pytest.mark.parametrize("listening", [False, True])
+def test_dead_worker_collection_removes_only_an_unlistened_socket(
+    tmp_path: Path, listening: bool,
+) -> None:
+    socket, record, common = _dead_worker_with_socket_path(tmp_path)
     with unix_socket.socket(unix_socket.AF_UNIX) as listener:
         listener.bind(str(socket))
         socket.chmod(0o600)
@@ -211,6 +217,84 @@ def test_dead_worker_collection_removes_only_an_unlistened_socket(
         else:
             process_record.collect_dead_record(record, collect_socket=True, **common)
             assert not record.exists() and not socket.exists()
+
+
+def test_dead_worker_collection_allows_only_atime_change_during_liveness_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    socket, record, common = _dead_worker_with_socket_path(tmp_path)
+    original_lstat = Path.lstat
+    observations = []
+
+    def lstat(path):
+        metadata = original_lstat(path)
+        if path != socket:
+            return metadata
+        observations.append(metadata)
+        if len(observations) == 1:
+            return metadata
+        before = observations[0]
+        values = list(before)
+        values[7] = before.st_atime + 1
+        # Model an atime update deterministically, independent of mount flags
+        # and whether the test happens within the socket creation clock tick.
+        return os.stat_result(values, {"st_atime_ns": before.st_atime_ns + 1_000_000_000,
+                                       "st_mtime_ns": before.st_mtime_ns,
+                                       "st_ctime_ns": before.st_ctime_ns})
+
+    with unix_socket.socket(unix_socket.AF_UNIX) as stale:
+        stale.bind(str(socket))
+        socket.chmod(0o600)
+        monkeypatch.setattr(Path, "lstat", lstat)
+        process_record.collect_dead_record(record, collect_socket=True, **common)
+    assert len(observations) == 2
+    assert not record.exists() and not socket.exists()
+
+
+@pytest.mark.parametrize("change", ["replacement", "permissions", "ctime_ns"])
+def test_dead_worker_collection_refuses_socket_changes_after_liveness_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str,
+) -> None:
+    socket, record, common = _dead_worker_with_socket_path(tmp_path)
+    original_load = process_record.load_record
+    original_lstat = Path.lstat
+    loads = 0
+
+    with unix_socket.socket(unix_socket.AF_UNIX) as stale, unix_socket.socket(unix_socket.AF_UNIX) as replacement:
+        stale.bind(str(socket))
+        socket.chmod(0o600)
+        original_inode = socket.lstat().st_ino
+
+        def load(path):
+            nonlocal loads
+            value = original_load(path)
+            loads += 1
+            if loads == 2:
+                if change == "replacement":
+                    # Keep the first inode alive to prevent immediate reuse.
+                    socket.unlink()
+                    replacement.bind(str(socket))
+                    socket.chmod(0o600)
+                elif change == "permissions":
+                    socket.chmod(0o640)
+            return value
+
+        def lstat(path):
+            metadata = original_lstat(path)
+            if path == socket and loads == 2 and change == "ctime_ns":
+                return os.stat_result(metadata, {"st_mtime_ns": metadata.st_mtime_ns,
+                                                 "st_ctime_ns": metadata.st_ctime_ns + 1})
+            return metadata
+
+        monkeypatch.setattr(process_record, "load_record", load)
+        monkeypatch.setattr(Path, "lstat", lstat)
+        with pytest.raises(process_record.WorkerProcessRecordError, match="socket changed"):
+            process_record.collect_dead_record(record, collect_socket=True, **common)
+        assert record.exists() and socket.exists()
+        if change == "replacement":
+            assert socket.lstat().st_ino != original_inode
+        elif change == "permissions":
+            assert stat.S_IMODE(socket.stat().st_mode) == 0o640
 
 
 def test_dead_worker_collection_preserves_unexpected_socket_file(tmp_path: Path) -> None:

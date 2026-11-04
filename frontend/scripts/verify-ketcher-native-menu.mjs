@@ -9,6 +9,26 @@ export async function verifyKetcherNativeMenu(page) {
     await page.locator('[role="combobox"]:visible').first().click();
     await page.locator('.MuiModal-root .MuiMenuItem-root').first().waitFor();
     await page.mouse.move(0, 0);
+    await page.evaluate(async () => {
+      // Portal ownership can start CSS transitions after MUI autofocus. Even
+      // reduced motion keeps a nonzero duration; read the settled menu rather
+      // than its initial MUI values before the first animation frame.
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
+      const option = document.querySelector('.MuiModal-root .MuiMenuItem-root');
+      let timeout;
+      try {
+        await Promise.race([
+          Promise.all(option.getAnimations().filter(animation => animation instanceof CSSTransition)
+            .map(animation => animation.finished.catch(() => {}))),
+          new Promise((_, reject) => {
+            timeout = setTimeout(() => reject(new Error('Native menu CSS transitions did not settle')), 2000);
+          })
+        ]);
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
     result = await page.evaluate(() => {
       const root = document.querySelector('[data-structure-editor]');
       const option = document.querySelector('.MuiModal-root .MuiMenuItem-root');
