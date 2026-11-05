@@ -1,196 +1,57 @@
 # NexPoly / 智聚万物
 
-NexPoly 是面向聚合物研发的内部 Web 平台，覆盖结构处理、数据检索、性质预测、聚合物设计、知识检索和分子模拟。当前项目已经不再是早期基于 SQLite 的单一 PolyProp 查询器。
+> 面向聚合物研发的结构、数据与智能分析平台。
 
-本文档是仓库级内部开发入口，会同时出现在 dev 与 prod 工作区。README 的存在不代表当前环境是 dev；执行任何命令前，必须根据 Compose 项目名、使用的配置文件和 `docker compose config` 解析结果确认操作对象。部署、数据库迁移和 Worker 的操作细节以文末专项文档及代码清单为准。
+**2026.11 更新** · 更新日期：2026-11-05
 
-已提取文献的本地索引、同步工具、兼容迁移与回滚说明见 [知识检索文献接入](docs/knowledge-literature.md)。新来源默认关闭。
+NexPoly 将化学结构编辑、材料数据检索、性质预测、候选设计、知识检索与分子模拟整合到统一工作台，帮助研究人员从已有材料出发，查找数据、探索结构并评估新的研发方向。
 
-## 当前架构
+## 核心能力
 
-```text
-React 19 / Vite / Ketcher / 3Dmol
-                  |
-                  v
-          Nginx（生产入口）
-                  |
-                  v
-                    FastAPI API
-          /             |             |              \
- PostgreSQL      本地模型运行时      在线知识服务      科学计算 Worker
-                                                  （Monomer-MD；隔离开发 Monomer-DFT）
-```
+| 模块 | 可以做什么 |
+| --- | --- |
+| 结构工作台 | 绘制、编辑和标准化化学结构，查看 SMILES、二维结构与三维预览，保存结构供后续使用。 |
+| 数据检索与分析 | 按结构、相似性及多项性质条件查找聚合物记录，浏览数据集与统计分析结果。 |
+| 均聚物性质预测 | 从聚合物结构出发，预测热学、力学与气体渗透相关的九项性质。 |
+| 聚合物设计 | 按目标玻璃化转变温度（Tg）探索候选结构，或根据指定条件生成聚合物候选。 |
+| 单体正向聚合 | 对单体组合进行聚合物候选生成，支持逐对输入与上传单体表进行批量组合。 |
+| 单体逆合成反推 | 从目标单体探索单步前体候选组合，为后续合成研究提供参考。 |
+| 知识检索 | 检索聚合物相关资料与文献，查看摘要和关系信息，恢复检索历史并导出结果。 |
+| 分子模拟与分析 | 配置聚合物或单体模拟任务，跟踪计算状态并查看结果分析；可用计算项目以页面提示为准。 |
 
-- 前端负责工作台、数据分析、任务轮询、Ketcher 结构编辑和 3D 展示。
-- FastAPI 后端提供 `/api/v1` 接口，承载 RDKit 结构处理、随机森林预测和本地生成模型。
-- PostgreSQL 是唯一在线结构化数据后端；SQLite 仅保留为历史导入、迁移或审计输入。
-- OCSR、条件生成、逆合成和 PolyTAO 等能力依赖本地模型资产与功能开关。
-- Monomer-MD 通过 HTTP 或 Unix Domain Socket 连接独立 Worker，作业状态写入 PostgreSQL。
-- Monomer-DFT 使用 AIMNet2、Host Broker/MPS 与 Unix Domain Socket Worker；
-  当前仅允许在隔离开发栈启用，生产配置保持 hard-off。
+## 可预测性质
 
-## 功能边界
+均聚物性质预测覆盖以下三类指标：
 
-| 类型 | 模块 |
-|---|---|
-| 真实业务能力 | 结构工作台、SMILES 标准化与检索、性质预测、数据库分析、实验数据、知识检索、Tg 逆向设计、条件生成、PolyTAO、单体正向聚合与逆合成 |
-| 依赖外部运行时 | 结构图片识别、本地大模型生成、在线知识抽取、正式 Monomer-MD 协议、隔离开发 Monomer-DFT |
-| Demo 能力 | 内置轨迹 MD Demo、LocalStorage 实验流程、固定场景高通量优化、预制结果 PDF 相似度预览 |
+| 类别 | 指标 |
+| --- | --- |
+| 热学性质 | 玻璃化转变温度（Tg）、熔融温度（Tm）、热分解温度（Td）、热分解失重率。 |
+| 力学性质 | 断裂伸长率、断裂拉伸强度。 |
+| 气体渗透 | O₂、CO₂、H₂ 渗透率。 |
 
-功能是否可用应以对应 `/status` 接口、环境开关和模型资产检查结果为准，不应仅根据页面是否显示判断。Demo 结果不得描述为在线计算结果。
+## 典型使用流程
 
-## Dev 与 Prod 隔离
+1. **准备结构**：绘制化学结构或输入 SMILES，确认结构表示与研究对象一致。
+2. **查找参考**：检索已有记录，结合相似性、性质条件和文献资料筛选参考材料。
+3. **评估性质**：选择关注的性能指标，查看预测结果并与已有数据比较。
+4. **探索候选**：根据目标性质生成候选，或通过单体聚合与逆合成探索结构方案。
+5. **进一步验证**：对选定候选开展适用的模拟分析，并结合实验验证作出研发判断。
 
-本文件由 dev 和 prod 共用，不能根据仓库路径、README 内容或本地文件是否存在来推断当前运行环境。所有环境操作都必须显式使用对应的 Compose 项目名和配置文件，并以解析后的 Compose 配置为准。
+## 2026.11 功能概览
 
-| 环境 | Compose 项目名 | 前端入口（默认值） | 后端（默认值） | PostgreSQL（默认值） | 端口覆盖 |
-|---|---|---|---|---|---|
-| dev | `nexpoly_dev` | `127.0.0.1:9001` | `127.0.0.1:18000` | `127.0.0.1:15532` | `NEXPOLY_DEV_FRONTEND_PORT`、`NEXPOLY_DEV_BACKEND_PORT`、`NEXPOLY_DEV_POSTGRES_PORT` |
-| prod | `nexpoly` | `:9000` | Compose 内部 `:8000` | `127.0.0.1:55432` → 容器 `:5432` | `NEXPOLY_WEB_PORT`、`NEXPOLY_POSTGRES_PORT` |
+- **共享结构工作台**：在结构编辑、检索和预测等场景中衔接当前结构，减少重复输入。
+- **批量单体聚合**：通过表格组织单体组合，集中查看候选生成结果。
+- **知识检索记录**：支持历史恢复、摘要查看与结果导出，便于继续此前的检索工作。
+- **模拟任务与结果分析**：围绕任务配置、状态跟踪和结果查看组织计算流程。
 
-dev 的默认宿主机端口仅绑定 loopback，并使用独立数据库和开发配置。dev 端口可由表中的 `NEXPOLY_DEV_*_PORT` 变量覆盖；只有在明确需要从其他机器访问、且已安装并从白名单内外网络验证[公网入口 IP 白名单](docs/public-ingress-security.md)时，才将 `NEXPOLY_DEV_FRONTEND_BIND_ADDRESS` 设为 `0.0.0.0`，并把实际外部 Origin 加入 `NEXPOLY_DEV_ALLOWED_ORIGINS`。该设置会同时公开前端及其 `/api` 代理，Backend 和 PostgreSQL 端口仍只绑定 loopback。CORS 只约束浏览器，不是访问控制，不能代替白名单。prod 前端和 PostgreSQL 宿主机端口可分别由 `NEXPOLY_WEB_PORT`、`NEXPOLY_POSTGRES_PORT` 覆盖。未经明确授权，不得从 dev 流程启动、停止、迁移或探测 prod 服务。`9000` 和 `55432` 都只是 prod Compose 的默认值，不是识别 prod 的固定标志；端口被覆盖后仍须以 Compose 项目和解析配置判断环境。
+## 访问与使用
 
-OpenScience 是独立部署的前端，不属于 NexPoly Compose 服务；宿主机预留
-`9011` 作为其未来入口。`VITE_AGENT_WORKSPACE_URL` 为空时 NexPoly 只显示
-“正在同步”且不加载 iframe。本机浏览可配置 `http://127.0.0.1:9011/`；
-远程浏览必须使用浏览器可达的服务器 IP 或 DNS 地址，不能使用服务器视角的
-loopback。
+通过平台提供的访问入口，使用已开通的账号登录，再按页面导航进入相应模块。
 
-`scripts/dev_server_gpu.sh` 只能用于已配置的 dev 工作区，不得在 prod 工作区执行；prod 操作统一遵循生产部署文档。
+部分功能需要相应的数据、模型或计算服务支持，具体开放范围与可用状态以实际页面提示为准。
 
-## Dev 工作流（仅适用于已配置的 Dev 工作区）
+## 结果说明
 
-内部 dev 工作区可使用以下本机文件：
-
-- `docker-compose.dev.yml`
-- `.env.dev` 与可选的 `.env.dev.ai`
-- `scripts/dev_server_gpu.sh`
-
-Compose overlay、无密钥环境示例和启动脚本已纳入版本控制；`.env.dev`、`.env.dev.ai` 与 Worker 运行目录仍保持忽略并应为 mode `0600`。复制 `.env.dev.example` 后必须把 `NEXPOLY_ASSET_ROOT` 固定到只读资产 release，并确认解析后的 Compose 项目为 `nexpoly_dev`，才使用这些命令：
-
-```bash
-# 校验固定资产 release，构建后端，应用增量迁移并启动 dev 服务
-./scripts/dev_server_gpu.sh up
-
-# 仅在明确需要刷新源数据时执行全量导入
-./scripts/dev_server_gpu.sh refresh-data
-
-# 查看状态和日志
-./scripts/dev_server_gpu.sh ps
-./scripts/dev_server_gpu.sh logs backend
-./scripts/dev_server_gpu.sh logs frontend-dev
-
-# 验证数据库、API 和静态资源
-./scripts/dev_server_gpu.sh preflight
-./scripts/dev_server_gpu.sh smoke
-
-# 仅在审阅 destructive contract 后显式执行；普通 up 永不自动执行
-./scripts/dev_server_gpu.sh contract-migrate
-
-# 运行当前 dev 快速测试与前端构建
-./scripts/dev_server_gpu.sh test-backend
-./scripts/dev_server_gpu.sh build-frontend
-
-# 停止服务；down 会同时删除 Compose 网络，但不会删除命名卷
-./scripts/dev_server_gpu.sh stop
-./scripts/dev_server_gpu.sh down
-```
-
-首次构建统一 CUDA 镜像可能耗时较长。普通 `up` 只应用非破坏性增量迁移，不重复导入数据；检测到待执行 contract 时会失败并要求显式运行 `contract-migrate`。该命令会先生成全库和目标表归档、SHA-256 与行数证据，并在临时数据库真实恢复核对后才迁移。`refresh-data` 的首次或全量导入可能耗时较长。在 `postgres-init` 完成前，不要把尚未启动的后端或前端判断为代码故障。
-
-静态数据导入成功提交后，默认重新生成数据库分析统计；`refresh-data` 和发布流程也会发布更新后的统计结果。网页进入数据分析页面、切换数据集或切回浏览器窗口时自动读取最新结果，“刷新数据”按钮执行相同的读取操作。刷新失败保留原结果并允许重试。
-
-如通过其他维护 SQL 修改统计源表，应在提交后用管理连接运行 `python -m app.generate_database_analytics_snapshot`。导入命令的 `--no-refresh-analytics-snapshot` 仅供会另行生成统计的维护流程使用。
-
-导入数据和分析统计分别提交。若数据已提交但统计生成失败，命令会先输出已完成的数据集统计，再以非零状态提示刷新失败；已提交数据不会回滚。此时请使用相同的管理连接仅重试 `python -m app.generate_database_analytics_snapshot`，不要重复导入。发布流程仍通过 `--source-sha` 标明当前版本；普通维护刷新不会继承旧版本标记。
-
-开发后端使用 Docker Compose 的默认 builder 构建，不创建常驻的专用
-Buildx/BuildKit 容器。四类 GPU 模型共享严格 FIFO 的推理准入，默认同一
-时刻只执行一个模型加载或 GPU 推理；HTTP、数据库和轮询请求仍可并发。
-PolyTAO 的最大公开参数保持不变，但内部按最多 2 条序列的微批次采样，避免
-单个任务一次分配 100 条解码缓存而耗尽 24GB 显存。
-条件生成和 PolyTAO 保留 `202 + job_id + 轮询`，但作业状态存放在 Backend
-单进程的有界内存中；重启或终态淘汰后查询返回 410，前端会保留输入并提示重提。
-
-9001 的 GPU 直启会话在激活后每 5 秒检查单体 MD Worker 的进程身份、
-Unix socket 监听者和运行时健康。探测失败时不再显示“已就绪”；连续 3 次
-失败后回收本会话并恢复 CPU 后端，页面可重新触发 GPU 服务恢复。
-短暂失败后恢复健康不会重启会话。MD 启动和停止流程可清理已确认退出的
-原进程记录及无监听者的遗留 socket；仍有监听者或身份不符时会拒绝清理。
-关闭旧会话时使用该会话原有的 Worker 版本身份，新启动仍使用当前代码。
-
-Monomer-DFT 不属于上述通用 dev Compose。它使用独立数据库、端口、私有
-`.runtime/`、GPU1 主设备和 GPU3 overflow，并禁止向生产 GPU2 发起 CUDA
-或工作负载访问（正式验收仅进行只读稳定性采样）。准备
-AIMNet 锁定运行时、启动 Worker、恢复 journal 或生成正式 GPU 验收证据前，
-必须遵循 [Monomer-DFT 开发与恢复指南](docs/monomer-dft-development.md)；
-不得从生产仓、普通 dev Broker 或相邻的脏 AIMNet 仓启动。
-
-## 干净克隆与外部资产
-
-仓库不包含完整的生产数据、模型 checkpoint、密钥或宿主机 Worker 环境。干净克隆不能直接假定所有模块可用，需要单独准备：
-
-- PostgreSQL 与所需数据源；
-- OCSR、条件生成、逆合成及 PolyTAO 等模型资产；
-- 在线知识服务所需密钥；
-- 正式 Monomer-MD 所需的 ByteFF2/OpenMM/GROMACS 环境；
-- 隔离开发 Monomer-DFT 所需的锁定 AIMNet 源码、wheel、模型和 Host
-  Broker/MPS 环境；
-- 与目标机器匹配的 dev overlay 或生产环境配置。
-
-不要在 README 复制容易漂移的完整资产列表。模型清单以 [`backend/app/model_asset_manifest.py`](backend/app/model_asset_manifest.py) 为准，生产资产以只读 `ASSET-MANIFEST.json` 为准，部署检查以 [`scripts/pull_deploy_controller.py`](scripts/pull_deploy_controller.py) 及发布控制器文档为准。
-
-## 仓库目录
-
-| 目录 | 用途 |
-|---|---|
-| `frontend/` | React/Vite 前端、Ketcher 与 3Dmol 静态资源 |
-| `backend/` | FastAPI、领域服务、PostgreSQL 迁移、导入工具和测试 |
-| `workers/` | 需要独立科学计算环境的 Monomer-MD 与隔离开发 Monomer-DFT Worker；PolyTAO 直接运行在 backend 内 |
-| `database/` | 可跟踪的基础 CSV；大体量运行数据通常由部署环境提供 |
-| `model/` | 随仓库提供的 RF 模型和外部模型目录入口 |
-| `docs/` | 部署、数据库治理、Worker 和历史设计文档 |
-| `design-system/` | 平台 UI 规范与页面级设计约束 |
-| `scripts/` | 发布、部署、数据准备及本机开发辅助脚本 |
-
-## 测试与基本验证
-
-后端测试是 PostgreSQL 集成测试。测试账户必须能够创建和删除临时数据库；不得让测试静默回退到 SQLite。完整要求见 [`backend/tests/README.md`](backend/tests/README.md)。
-
-前端先运行单元测试，再执行作为主要门禁的 TypeScript/Vite 构建：
-
-```bash
-cd frontend
-npm ci
-npm test
-npm run build
-```
-
-生产 Compose 配置可用以下命令做无副作用检查：
-
-```bash
-docker compose config --quiet
-```
-
-## 开发约束
-
-- 运行时代码只面向 PostgreSQL；不要重新引入 SQLite 在线分支。
-- `backend/migrations/postgres/` 是 append-only 合约。已应用迁移不得直接改写，也不得通过手工更新账本绕过 checksum。
-- 资产切换不得执行数据库导入；静态 `--rebuild` 永远不包含或级联截断在线业务表。prod 仍禁止未经维护流程授权的静态重建、迁移账本修改或运行资产清理。
-- 模型、数据导入和 Worker 状态必须通过现有 preflight/status 机制判断。
-- 修改功能时应明确区分真实后端能力与纯前端 Demo，避免把预制结果描述为在线计算结果。
-- 文档入库保留维护契约、设计方案和精选最终验收；方案注明尚未实现，历史验收注明日期、基线、失败及未覆盖范围。仓库内文件使用相对链接，本地或私有证据注明不随仓库交付。
-- 临时 review 草稿、逐轮日志、截图和一次性验收脚本统一放在已忽略的 `.runtime/reviews/`，无需提交。重复 review 的有效结论合入维护文档或最终验收后删除，不覆盖历史失败记录，也不通过宽泛的 `*review*` 忽略规则隐藏正式文档或回归测试。
-
-## 权威文档
-
-- [生产 Pull 部署控制器](docs/release-controller.md)
-- [9000/9001/9011 公网入口 IP 白名单](docs/public-ingress-security.md)
-- [CI/CD 与生产部署入口](docs/deployment.md)
-- [PostgreSQL 迁移治理](docs/postgres-migration-governance.md)
-- [Monomer-MD Worker](docs/monomer-md-worker.md)
-- [Monomer-DFT 开发与恢复](docs/monomer-dft-development.md)
-- [后端测试环境](backend/tests/README.md)
-- [UI 设计系统](design-system/polyprop/MASTER.md)
-
-`docs/superpowers/` 保存历史设计和实施方案，其中大量内容基于旧 SQLite 架构，只用于追溯决策，不作为当前架构、运行方式或开发约束。
+- 性质预测、结构生成与逆合成结果用于研究辅助，需结合适用范围、已有证据与实验验证判断。
+- 模拟结果依赖所选体系、参数和计算条件，比较结果时应确认条件一致。
+- 演示页面用于理解操作流程，其示例数据与结果不代表实际实验或正式计算结论。
