@@ -15,6 +15,7 @@ import {
   Filter,
   FlaskConical,
   Grid2X2,
+  LayoutDashboard,
   Microscope,
   Route,
   Search,
@@ -31,7 +32,7 @@ import type { LabDataView } from "./components/LabDataPage";
 import type { StructureCanvasOwnerHandle } from "./components/StructureWorkbenchPage";
 import type { StructureSyncResult } from "./structure/workspace";
 import {
-  SubscriptionPage, PersonalUsagePage, ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
+  SubscriptionPage, PersonalUsagePage, OverviewPage, ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
   ExperimentWorkflowDemoPage, HighThroughputWorkflowDemoPage, HomopolymerPropertyPredictionPage,
   KnowledgeSearch, LabDataPage, PolymerMdSimulationPage, MonomerMdSimulationPage, MonomerDftPage,
   MonomerPolymerizationPage, MonomerRetrosynthesisPage, PolytaoGenerationPage, ReverseDesignPage,
@@ -570,6 +571,15 @@ function AppContent() {
 
   const standaloneModules: AppShellModuleItem[] = [
     {
+      id: "overview",
+      label: "系统总览",
+      description: "总览材料研发进展、计算任务与近期动态。",
+      route: "/overview",
+      icon: <LayoutDashboard className="h-4 w-4" />,
+      isActive: activeModule === "overview",
+      onClick: () => navigate({ module: "overview", datasetKey: null })
+    },
+    {
       id: "structureWorkbench",
       label: "结构工作台",
       description: "统一绘制、输入和预览当前共享结构。",
@@ -745,6 +755,7 @@ function AppContent() {
     }
   ];
   const isFullBleedModule =
+    activeModule === "overview" ||
     activeModule === "subscription" ||
     activeModule === "personalUsage" ||
     activeModule === "explorer" ||
@@ -830,6 +841,7 @@ function AppContent() {
 
       {isSubscriptionEnabled() && activeModule === "subscription" ? <SubscriptionPage onReturn={() => navigate(subscriptionReturnRoute.current ?? { module: "home", datasetKey: null })} /> : null}
       {activeModule === "personalUsage" ? <PersonalUsagePage /> : null}
+      {activeModule === "overview" ? <OverviewPage onNavigate={(module) => navigate({ module, datasetKey: null })} /> : null}
 
       {activeModule === "databaseQuery" ? (
         <DatabaseQueryPage

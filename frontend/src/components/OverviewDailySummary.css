@@ -1,0 +1,105 @@
+.ov-daily-summary {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  container: ov-daily / inline-size;
+  color: var(--np-theme-ink);
+  font-family: var(--ov-font-ui, var(--font-body));
+  font-size: var(--ov-text-base, 12px);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+.ov-daily-layout {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr);
+  min-height: 236px;
+}
+
+.ov-daily-output { min-width: 0; padding: 12px 16px; }
+.ov-daily-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; }
+.ov-daily-heading h3, .ov-daily-running-heading h3 { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: var(--ov-text-title, 14px); font-weight: 600; }
+.ov-daily-heading h3 > svg { flex: none; color: var(--np-theme-blue); stroke-width: 1.7; }
+.ov-daily-example { padding: 1px 6px; border: 1px solid var(--np-theme-border-soft); border-radius: 4px; color: var(--np-theme-muted); background: var(--np-theme-neutral-soft); font-size: var(--ov-text-sm, 11px); white-space: nowrap; }
+.ov-daily-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 6px 0 7px; }
+.ov-daily-totals > div { display: flex; flex-direction: column-reverse; gap: 0; }
+.ov-daily-totals dt { color: var(--np-theme-muted); font-size: var(--ov-text-sm, 11px); }
+.ov-daily-totals dd { margin: 0; font-family: var(--ov-font-ui, var(--font-body)); font-size: 27px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; letter-spacing: -.02em; }
+.ov-daily-success { color: var(--np-theme-success-text); }
+.ov-daily-blue { color: var(--np-theme-blue); }
+.ov-daily-warning { color: var(--np-theme-warning-text); }
+.ov-daily-additions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; padding-bottom: 8px; border-bottom: 1px solid var(--np-theme-border-soft); color: var(--np-theme-muted); font-size: var(--ov-text-sm, 11px); }
+.ov-daily-additions > span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.ov-daily-additions svg { color: var(--np-theme-cyan); }
+.ov-daily-additions strong { color: var(--np-theme-ink); font-weight: 600; }
+.ov-daily-running-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 7px 0 6px; }
+.ov-daily-running-heading h3 { font-size: var(--ov-text-base, 12px); }
+.ov-daily-running-heading > span { color: var(--np-theme-muted); font-size: var(--ov-text-sm, 11px); white-space: nowrap; }
+.ov-daily-running { display: grid; gap: 6px; padding: 0; margin: 0; list-style: none; }
+.ov-daily-task { --ov-daily-task-color: var(--np-theme-blue); display: flex; align-items: center; gap: 7px; min-width: 0; padding: 5px 7px; border: 1px solid var(--np-theme-border-soft); border-radius: 6px; background: color-mix(in srgb, var(--ov-daily-task-color) 3%, var(--np-theme-surface)); }
+.ov-daily-task-cyan { --ov-daily-task-color: var(--np-theme-cyan); }
+.ov-daily-task > svg { color: var(--ov-daily-task-color); flex: none; }
+.ov-daily-task-body { flex: 1; min-width: 0; }
+.ov-daily-task-label { display: flex; align-items: center; justify-content: space-between; gap: 7px; }
+.ov-daily-task-label > strong { color: var(--np-theme-ink); font-size: var(--ov-text-sm, 11px); font-weight: 600; }
+.ov-daily-task-label > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-daily-task-label > span { color: var(--np-theme-muted); font-size: var(--ov-text-sm, 11px); }
+.ov-daily-task-label > span { flex: none; white-space: nowrap; }
+.ov-daily-task-stage { display: block; margin-top: 3px; overflow: hidden; color: var(--np-theme-muted); font-size: var(--ov-text-sm, 11px); line-height: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.ov-daily-no-tasks { display: grid; min-height: 65px; place-items: center; padding: 8px; border: 1px dashed var(--np-theme-border); border-radius: 6px; color: var(--np-theme-muted); background: #fafcff; font-size: var(--ov-text-sm, 11px); }
+.ov-daily-task-track { height: 3px; margin-top: 4px; overflow: hidden; border-radius: 3px; background: color-mix(in srgb, var(--ov-daily-task-color) 10%, var(--np-theme-surface)); }
+.ov-daily-task-track > span { display: block; height: 100%; border-radius: inherit; background: var(--ov-daily-task-color); opacity: .75; }
+.ov-daily-stage { flex: none; color: var(--np-theme-muted); font-size: var(--ov-text-sm, 11px); }
+.ov-daily-guidance { display: grid; min-width: 0; grid-template-rows: auto auto 1fr; padding: 3px 16px; border-left: 1px solid var(--np-theme-border-soft); }
+.ov-daily-guidance-block { --ov-daily-section-accent: var(--np-theme-blue); --ov-daily-section-soft: var(--np-theme-info-soft); padding: 7px 0; border-bottom: 1px solid var(--np-theme-border-soft); }
+.ov-daily-guidance-block:last-child { border-bottom: 0; }
+.ov-daily-guidance-block .ov-daily-heading h3 > svg { box-sizing: border-box; width: 22px; height: 22px; padding: 4px; border-radius: 6px; color: var(--ov-daily-section-accent); background: var(--ov-daily-section-soft); }
+.ov-daily-guidance-block p { margin: 4px 0 0; color: var(--np-theme-muted); font-size: var(--ov-text-base, 12px); line-height: 1.5; }
+.ov-daily-attention { --ov-daily-section-accent: var(--np-theme-warning-text); --ov-daily-section-soft: var(--np-theme-warning-soft); }
+.ov-daily-plan { --ov-daily-section-accent: var(--np-theme-cyan); --ov-daily-section-soft: color-mix(in srgb, var(--np-theme-cyan) 8%, var(--np-theme-surface)); display: flex; flex-direction: column; justify-content: space-between; }
+.ov-daily-heading > span:not(.ov-daily-example) { color: var(--np-theme-muted); font-size: var(--ov-text-sm, 11px); }
+.ov-daily-action, .ov-daily-plan-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 26px; border: 1px solid var(--np-theme-border); border-radius: 5px; font-family: var(--ov-font-ui, var(--font-body)); font-size: var(--ov-text-sm, 11px); font-weight: 600; line-height: 1.5; white-space: nowrap; cursor: pointer; touch-action: manipulation; transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease; }
+.ov-daily-action { flex: none; padding: 2px 6px; border-color: transparent; color: var(--np-theme-blue); background: var(--np-theme-info-soft); }
+.ov-daily-plan-actions { display: grid; flex: 1; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-height: 64px; margin-top: 6px; }
+.ov-daily-plan-actions button { --ov-daily-entry-accent: var(--np-theme-blue); justify-content: flex-start; gap: 6px; min-width: 0; min-height: 46px; padding: 5px 7px; border-color: transparent; border-radius: 6px; background: color-mix(in srgb, var(--ov-daily-entry-accent) 6%, var(--np-theme-surface)); color: var(--np-theme-ink); }
+.ov-daily-plan-actions .ov-daily-plan-entry-knowledge { --ov-daily-entry-accent: var(--np-theme-cyan); }
+.ov-daily-plan-icon { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 5px; background: var(--np-theme-surface); color: var(--ov-daily-entry-accent); }
+.ov-daily-plan-copy { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; text-align: left; }
+.ov-daily-plan-copy > strong { font-size: var(--ov-text-base, 12px); font-weight: 600; line-height: 17px; }
+.ov-daily-plan-copy > small { overflow: hidden; color: var(--np-theme-muted); font-size: var(--ov-text-sm, 11px); font-weight: 500; line-height: 15px; text-overflow: ellipsis; }
+.ov-daily-plan-entry > svg:last-child { margin-left: auto; color: var(--ov-daily-entry-accent); }
+.ov-daily-action > svg, .ov-daily-plan-actions button > svg { flex: none; }
+.ov-daily-action > svg:last-child, .ov-daily-plan-actions button > svg:last-child { transition: transform 150ms ease; }
+.ov-daily-action:focus-visible, .ov-daily-plan-actions button:focus-visible { outline: 2px solid var(--np-theme-focus); outline-offset: 2px; }
+.ov-daily-action:active, .ov-daily-plan-actions button:active { border-color: var(--np-theme-info-border); background: color-mix(in srgb, var(--np-theme-blue) 12%, var(--np-theme-surface)); color: var(--np-theme-blue-strong); box-shadow: inset 0 1px 2px rgba(11,31,58,.08); }
+
+@media (hover: hover) and (pointer: fine) {
+  .ov-daily-action:hover, .ov-daily-plan-actions button:hover { border-color: var(--np-theme-info-border); color: var(--np-theme-blue-strong); background: color-mix(in srgb, var(--np-theme-blue) 8%, var(--np-theme-surface)); }
+  .ov-daily-action:hover > svg:last-child, .ov-daily-plan-actions button:hover > svg:last-child { transform: translateX(2px); }
+}
+
+@container ov-daily (max-width: 560px) {
+  .ov-daily-layout { grid-template-columns: minmax(0, 1fr); }
+  .ov-daily-output { padding: 12px 16px 14px; }
+  .ov-daily-totals { margin-top: 8px; }
+  .ov-daily-guidance { display: block; padding: 0 16px 3px; border-top: 1px solid var(--np-theme-border-soft); border-left: 0; }
+  .ov-daily-guidance-block { padding: 10px 0; }
+  .ov-daily-plan-actions { flex: initial; max-height: none; }
+}
+
+@container ov-daily (max-width: 340px) {
+  .ov-daily-plan-actions { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .ov-daily-output { padding-right: 20px; padding-left: 20px; }
+  .ov-daily-guidance { padding-right: 20px; padding-left: 20px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-daily-action, .ov-daily-plan-actions button, .ov-daily-action > svg:last-child, .ov-daily-plan-actions button > svg:last-child { transition: none; }
+  .ov-daily-action:hover > svg:last-child, .ov-daily-plan-actions button:hover > svg:last-child { transform: none; }
+}

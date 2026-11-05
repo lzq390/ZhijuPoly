@@ -34,16 +34,23 @@ afterEach(() => {
 });
 
 describe("智聚万物首页", () => {
-  it("侧栏按研发阶段组织模块，并将结构工作台独立置顶", () => {
+  it("侧栏按研发阶段组织模块，并将系统总览和结构工作台独立置顶", () => {
     render(<App />);
 
     const navigation = screen.getByRole("navigation", { name: "业务模块" });
+    const overview = screen.getByRole("button", { name: "系统总览" });
     const structureWorkbench = screen.getByRole("button", { name: "结构工作台" });
     const groupTitles = Array.from(
       navigation.querySelectorAll<HTMLButtonElement>("section > button")
     ).map((button) => button.getAttribute("aria-label"));
 
+    expect(overview.closest("section")).toBeNull();
     expect(structureWorkbench.closest("section")).toBeNull();
+    expect(
+      Array.from(navigation.querySelectorAll("[data-module-id]"))
+        .slice(0, 2)
+        .map(item => item.getAttribute("data-module-id"))
+    ).toEqual(["overview", "structureWorkbench"]);
     expect(groupTitles).toEqual([
       "材料发现 Discover",
       "材料设计 Build",

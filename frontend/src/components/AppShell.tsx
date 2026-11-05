@@ -168,6 +168,7 @@ export function AppShell({
   const gpuSessionControl = useDevGpuSessionControl(canReadGpuSession, canControlGpuSession);
 
   const isHome = activeModule === "home";
+  const isOverviewPage = activeModule === "overview";
   const isReverseDesignWorkbench = activeModule === "reverseDesign";
   const isConditionalGenerationWorkbench = activeModule === "conditionalGeneration";
   const isStructureWorkbench = activeModule === "structureWorkbench";
@@ -202,9 +203,9 @@ export function AppShell({
     isStructureWorkbench ||
     isReverseDesignWorkbench ||
     isConditionalGenerationWorkbench;
-  // Usage owns a fixed header and an inner scroll region, so its containing
+  // Usage and overview own a fixed header and an inner scroll region, so their containing
   // block must have a bounded height just like the workbenches.
-  const hasViewportLayout = isResearchWorkbench || isUsagePage;
+  const hasViewportLayout = isResearchWorkbench || isUsagePage || isOverviewPage;
 
   const activeGroupId =
     moduleGroups.find((group) => group.items.some((item) => item.isActive))?.id ?? null;
@@ -445,6 +446,7 @@ export function AppShell({
               : hasViewportLayout
                 ? `min-h-0 flex-1 overflow-hidden ${
                     isUsagePage ||
+                    isOverviewPage ||
                     isReverseDesignWorkbench ||
                     isConditionalGenerationWorkbench ||
                     isStructureWorkbench ||
@@ -476,7 +478,7 @@ export function AppShell({
                 ? "flex h-full min-h-0 flex-col"
                 : [
                     "relative mx-auto flex flex-col",
-                    isUsagePage ? "h-full min-h-0 gap-0" : isResearchWorkbench ? "h-full gap-0" : "gap-8",
+                    isUsagePage || isOverviewPage ? "h-full min-h-0 gap-0" : isResearchWorkbench ? "h-full gap-0" : "gap-8",
                     fullBleed ? "max-w-none" : "max-w-[1480px]"
                   ].join(" ")
             }
