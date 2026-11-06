@@ -1,0 +1,83 @@
+.np-usage-guide {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: #173b5d;
+  background: #f5f8fc;
+}
+.np-guide-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.np-guide-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 30px; width: min(1180px, 100%); margin: 0 auto; padding: 28px 30px 60px; }
+.np-guide-sidebar { position: sticky; top: 28px; align-self: start; max-height: calc(100dvh - 140px); overflow-y: auto; padding: 17px 14px; border: 1px solid #dbe6f0; border-radius: 13px; background: #fff; }
+.np-guide-sidebar__title, .np-guide-mobile-contents summary > span { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 650; }
+.np-guide-sidebar__title { padding: 0 6px 5px; }
+.np-guide-sidebar__title svg, .np-guide-mobile-contents svg { width: 17px; height: 17px; }
+.np-guide-contents__group { margin-top: 16px; }
+.np-guide-contents__group h3 { margin: 0 0 6px; padding: 0 6px; color: #7c8fa6; font-size: 11px; font-weight: 600; }
+.np-guide-contents__group button { display: flex; align-items: baseline; gap: 9px; width: 100%; border: 0; border-radius: 7px; padding: 7px 6px; color: #365370; background: transparent; text-align: left; font: inherit; font-size: 12px; cursor: pointer; }
+.np-guide-contents__group button span { color: #8aa1b8; font-size: 10px; font-variant-numeric: tabular-nums; }
+.np-guide-contents__group button:hover { color: #1764d5; background: #eff6ff; }
+.np-guide-content { min-width: 0; }
+.np-guide-introduction { display: flex; align-items: flex-start; gap: 12px; padding: 4px 2px 22px; color: #637a92; font-size: 13px; line-height: 1.8; }
+.np-guide-introduction svg { flex: 0 0 19px; width: 19px; height: 19px; margin-top: 3px; color: #3475cb; }
+.np-guide-introduction p { margin: 0; }
+.np-guide-section { margin-bottom: 22px; border: 1px solid #dce6f0; border-radius: 14px; background: #fff; box-shadow: 0 4px 18px rgb(38 65 95 / 3%); }
+.np-guide-section__header { display: flex; align-items: center; gap: 14px; padding: 20px 24px 17px; border-bottom: 1px solid #edf2f7; }
+.np-guide-section__number { display: grid; flex: 0 0 37px; place-items: center; width: 37px; height: 37px; border-radius: 10px; color: #2468cf; background: #edf5ff; font-size: 13px; font-weight: 650; }
+.np-guide-section__group { color: #8295a9; font-size: 10px; }
+.np-guide-section__header h2 { margin: 2px 0 0; font-size: 18px; font-weight: 650; line-height: 1.5; scroll-margin-top: 24px; }
+.np-guide-section__header h2:focus { outline: 0; }
+.np-guide-section__body { padding: 19px 24px 22px; }
+.np-guide-purpose { margin: 0 0 18px; font-size: 13px; line-height: 1.9; color: #526b83; }
+.np-guide-purpose strong { margin-right: 12px; color: #234661; font-weight: 650; white-space: nowrap; }
+.np-guide-steps-title { margin: 0 0 9px; font-size: 12px; font-weight: 650; }
+.np-guide-steps { margin: 0; padding-left: 20px; list-style: decimal outside; color: #45617c; font-size: 13px; line-height: 1.85; }
+.np-guide-steps li { padding: 0 0 9px 4px; }
+.np-guide-steps li::marker { color: #4c82bc; font-variant-numeric: tabular-nums; font-size: 12px; }
+.np-guide-screenshots { margin-top: 10px; border: 1px solid #e1eaf3; border-radius: 9px; background: #fbfdff; }
+.np-guide-screenshots summary, .np-guide-mobile-contents summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; color: #41637f; font-size: 12px; font-weight: 600; cursor: pointer; list-style: none; }
+.np-guide-screenshots summary::-webkit-details-marker, .np-guide-mobile-contents summary::-webkit-details-marker { display: none; }
+.np-guide-screenshots summary small { margin-left: 8px; color: #8ca0b6; font-size: 11px; font-weight: 400; }
+.np-guide-screenshots summary > svg { width: 15px; height: 15px; transition: transform 150ms ease; }
+.np-guide-screenshots[open] summary > svg { transform: rotate(180deg); }
+.np-guide-gallery { display: grid; gap: 18px; padding: 0 12px 14px; }
+.np-guide-figure { min-width: 0; margin: 0; }
+.np-guide-image-button { position: relative; display: block; width: 100%; padding: 0; overflow: hidden; border: 1px solid #dce6f1; border-radius: 7px; background: #eef4fa; cursor: zoom-in; }
+.np-guide-image-button img { display: block; width: 100%; height: auto; }
+.np-guide-image-button > span { position: absolute; right: 9px; bottom: 9px; display: flex; align-items: center; gap: 5px; padding: 6px 9px; border: 1px solid #dce6f1; border-radius: 6px; color: #45627d; background: rgb(255 255 255 / 94%); font-size: 10px; }
+.np-guide-image-button > span svg { width: 13px; height: 13px; }
+.np-guide-figure figcaption { padding: 8px 2px 0; color: #698197; font-size: 11px; line-height: 1.8; }
+.np-guide-image-error { padding: 20px; color: #667f97; text-align: center; font-size: 12px; }
+.np-guide-image-error button { padding: 6px 10px; border: 1px solid #cdddee; border-radius: 6px; background: #fff; color: #2769b8; cursor: pointer; }
+.np-guide-open-module { display: flex; align-items: center; gap: 6px; margin-top: 18px; padding: 0; border: 0; color: #276bc1; background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
+.np-guide-open-module svg { width: 15px; height: 15px; }
+.np-guide-mobile-contents { display: none; }
+.np-usage-guide button:focus-visible, .np-usage-guide summary:focus-visible, .np-guide-lightbox button:focus-visible { outline: 2px solid #377fe1; outline-offset: 3px; }
+.np-guide-lightbox { position: fixed; z-index: 1100; inset: 0; display: flex; align-items: center; justify-content: center; padding: 22px; background: rgb(18 37 59 / 68%); }
+.np-guide-lightbox__panel { display: flex; flex-direction: column; width: min(1400px, 100%); max-height: calc(100dvh - 44px); min-height: 0; overflow: hidden; border: 1px solid #d6e2ed; border-radius: 13px; background: #fff; box-shadow: 0 22px 70px rgb(0 0 0 / 25%); }
+.np-guide-lightbox__panel > header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid #e4ebf3; color: #375770; font-size: 13px; }
+.np-guide-lightbox__panel > header button { display: grid; place-items: center; width: 31px; height: 31px; border: 1px solid #dbe5ef; border-radius: 7px; color: #55748f; background: #fff; cursor: pointer; }
+.np-guide-lightbox__panel > header svg { width: 17px; height: 17px; }
+.np-guide-lightbox__image { display: flex; flex: 1; justify-content: center; min-height: 0; overflow: auto; background: #edf3f9; }
+.np-guide-lightbox__image img { display: block; width: auto; max-width: 100%; max-height: calc(100dvh - 156px); object-fit: contain; }
+.np-guide-lightbox__panel > p { flex: 0 0 auto; margin: 0; padding: 10px 16px; color: #59718a; font-size: 12px; line-height: 1.6; }
+@media (max-width: 1050px) {
+  .np-guide-layout { grid-template-columns: minmax(0, 1fr); padding: 22px 20px 45px; }
+  .np-guide-sidebar { display: none; }
+  .np-guide-mobile-contents { display: block; margin-bottom: 20px; border: 1px solid #dbe6f0; border-radius: 10px; background: #fff; }
+  .np-guide-mobile-contents .np-guide-contents { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; padding: 0 12px 15px; }
+}
+@media (max-width: 600px) {
+  .np-guide-layout { padding: 16px 12px 36px; }
+  .np-guide-introduction { font-size: 12px; }
+  .np-guide-section__header { padding: 17px 16px 14px; }
+  .np-guide-section__header h2 { font-size: 17px; }
+  .np-guide-section__body { padding: 16px; }
+  .np-guide-steps, .np-guide-purpose { font-size: 12px; }
+  .np-guide-lightbox { padding: 9px; }
+  .np-guide-lightbox__panel { max-height: calc(100dvh - 18px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .np-guide-screenshots summary > svg { transition: none; }
+}

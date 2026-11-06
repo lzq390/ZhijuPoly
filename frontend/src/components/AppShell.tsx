@@ -33,6 +33,7 @@ type AppShellProps = {
   moduleGroups: AppShellModuleGroup[];
   onOpenHome: () => void;
   onOpenUsage?: () => void;
+  onOpenGuide?: () => void;
   onOpenSubscription?: () => void;
   projects: OpenScienceProjectSummary[];
   activeProjectDirectory: string | null;
@@ -102,6 +103,7 @@ export function AppShell({
   moduleGroups,
   onOpenHome,
   onOpenUsage,
+  onOpenGuide,
   onOpenSubscription,
   projects,
   activeProjectDirectory,
@@ -185,6 +187,7 @@ export function AppShell({
   const isKnowledgeWorkbench = activeModule === "knowledge";
   const isPolytaoWorkbench = activeModule === "polytaoGeneration";
   const isUsagePage = activeModule === "personalUsage";
+  const isUsageGuidePage = activeModule === "usageGuide";
   const isResearchWorkbench =
     isSimilarityExplorerWorkbench ||
     isDatabaseQueryWorkbench ||
@@ -204,7 +207,7 @@ export function AppShell({
     isConditionalGenerationWorkbench;
   // Usage owns a fixed header and an inner scroll region, so its containing
   // block must have a bounded height just like the workbenches.
-  const hasViewportLayout = isResearchWorkbench || isUsagePage;
+  const hasViewportLayout = isResearchWorkbench || isUsagePage || isUsageGuidePage;
 
   const activeGroupId =
     moduleGroups.find((group) => group.items.some((item) => item.isActive))?.id ?? null;
@@ -379,6 +382,7 @@ export function AppShell({
     onNavigate: handleNavigate,
     onOpenSubscription: onOpenSubscription ? () => handleNavigate(onOpenSubscription, { id: "subscription", label: "会员订阅" }) : undefined,
     onOpenUsage: onOpenUsage ? () => handleNavigate(onOpenUsage, { id: "personalUsage", label: "我的用量" }) : undefined,
+    onOpenGuide: onOpenGuide ? () => handleNavigate(onOpenGuide, { id: "usageGuide", label: "使用说明" }) : undefined,
     pendingTarget: navigation.pendingTarget,
     showPending: navigation.showPending,
     expandedGroupIds,
@@ -444,7 +448,7 @@ export function AppShell({
               ? "min-h-0 flex-1 overflow-hidden"
               : hasViewportLayout
                 ? `min-h-0 flex-1 overflow-hidden ${
-                    isUsagePage ||
+                    isUsagePage || isUsageGuidePage ||
                     isReverseDesignWorkbench ||
                     isConditionalGenerationWorkbench ||
                     isStructureWorkbench ||
@@ -476,7 +480,7 @@ export function AppShell({
                 ? "flex h-full min-h-0 flex-col"
                 : [
                     "relative mx-auto flex flex-col",
-                    isUsagePage ? "h-full min-h-0 gap-0" : isResearchWorkbench ? "h-full gap-0" : "gap-8",
+                    isUsagePage || isUsageGuidePage ? "h-full min-h-0 gap-0" : isResearchWorkbench ? "h-full gap-0" : "gap-8",
                     fullBleed ? "max-w-none" : "max-w-[1480px]"
                   ].join(" ")
             }

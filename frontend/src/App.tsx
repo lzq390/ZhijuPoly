@@ -31,7 +31,7 @@ import type { LabDataView } from "./components/LabDataPage";
 import type { StructureCanvasOwnerHandle } from "./components/StructureWorkbenchPage";
 import type { StructureSyncResult } from "./structure/workspace";
 import {
-  SubscriptionPage, PersonalUsagePage, ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
+  SubscriptionPage, PersonalUsagePage, UsageGuidePage, ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
   ExperimentWorkflowDemoPage, HighThroughputWorkflowDemoPage, HomopolymerPropertyPredictionPage,
   KnowledgeSearch, LabDataPage, PolymerMdSimulationPage, MonomerMdSimulationPage, MonomerDftPage,
   MonomerPolymerizationPage, MonomerRetrosynthesisPage, PolytaoGenerationPage, ReverseDesignPage,
@@ -284,7 +284,7 @@ function AppContent() {
     const item = [...standaloneModules, ...moduleGroups.flatMap((group) => group.items)].find((candidate) => candidate.id === route.module);
     moduleTransition.request({
       route, href: pathFromRoute(route), history: "push", source: "navigation", kind: "module",
-      ...extra, target: { id: route.module, label: item?.label ?? (route.module === "home" ? "通用会话" : route.module === "personalUsage" ? "我的用量" : route.module === "subscription" ? "会员订阅" : "实验数据") }
+      ...extra, target: { id: route.module, label: item?.label ?? (route.module === "home" ? "通用会话" : route.module === "usageGuide" ? "使用说明" : route.module === "personalUsage" ? "我的用量" : route.module === "subscription" ? "会员订阅" : "实验数据") }
     });
   }
 
@@ -439,6 +439,12 @@ function AppContent() {
 
   function openModuleById(moduleId: string) {
     switch (moduleId) {
+      case "home":
+        openGeneralWorkspace();
+        break;
+      case "usageGuide":
+        navigate({ module: "usageGuide", datasetKey: null });
+        break;
       case "structureWorkbench":
         openStructureWorkbench();
         break;
@@ -745,6 +751,7 @@ function AppContent() {
     }
   ];
   const isFullBleedModule =
+    activeModule === "usageGuide" ||
     activeModule === "subscription" ||
     activeModule === "personalUsage" ||
     activeModule === "explorer" ||
@@ -786,6 +793,7 @@ function AppContent() {
       onOpenHome={openGeneralWorkspace}
       onOpenSubscription={isSubscriptionEnabled() ? openMemberSubscription : undefined}
       onOpenUsage={() => navigate({ module: "personalUsage", datasetKey: null })}
+      onOpenGuide={() => navigate({ module: "usageGuide", datasetKey: null })}
       projects={projectSnapshot?.projects ?? []}
       activeProjectDirectory={
         activeModule === "home" ? projectSnapshot?.activeDirectory ?? null : null
@@ -830,6 +838,7 @@ function AppContent() {
 
       {isSubscriptionEnabled() && activeModule === "subscription" ? <SubscriptionPage onReturn={() => navigate(subscriptionReturnRoute.current ?? { module: "home", datasetKey: null })} /> : null}
       {activeModule === "personalUsage" ? <PersonalUsagePage /> : null}
+      {activeModule === "usageGuide" ? <UsageGuidePage onOpenModule={openModuleById} /> : null}
 
       {activeModule === "databaseQuery" ? (
         <DatabaseQueryPage

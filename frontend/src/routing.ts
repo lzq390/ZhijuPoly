@@ -5,6 +5,7 @@ import { isSubscriptionEnabled } from "./accountFeatures";
 
 export type ActiveModule =
   | "home"
+  | "usageGuide"
   | "personalUsage"
   | "subscription"
   | "structureWorkbench"
@@ -59,6 +60,8 @@ export function normalizePath(pathname: string) {
 
 export function routeFromPath(pathname: string): AppRoute {
   const path = normalizePath(pathname);
+
+  if (path === "/help/usage") return { module: "usageGuide", datasetKey: null };
 
   if (path === "/account/subscription") return { module: isSubscriptionEnabled() ? "subscription" : "home", datasetKey: null };
 
@@ -151,6 +154,7 @@ export function routeFromPath(pathname: string): AppRoute {
 }
 
 export function pathFromRoute(route: AppRoute) {
+  if (route.module === "usageGuide") return "/help/usage";
   if (route.module === "subscription") return isSubscriptionEnabled() ? "/account/subscription" : "/";
   if (route.module === "personalUsage") return "/account/usage";
   if (route.module === "structureWorkbench") {

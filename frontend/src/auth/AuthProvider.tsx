@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { BarChart3, ChevronUp, KeyRound, LogIn, LogOut, UserRound, X, Crown } from "lucide-react";
+import { BarChart3, BookOpen, ChevronUp, KeyRound, LogIn, LogOut, UserRound, X, Crown } from "lucide-react";
 import { openSubscription } from "./access";
 import { fetchBillingPlans } from "../services/billing";
 import { authRequest } from "./api";
@@ -259,7 +259,7 @@ function CredentialsForm({ mode, submit, error: externalError }: {
     <button type="submit" disabled={busy}>{busy ? "处理中…" : registering ? "创建账号" : login ? "登录" : "修改密码并重新登录"}</button>
   </form>;
 }
-export function AccountMenu({ onOpenUsage, onOpenSubscription }: { onOpenUsage?: () => void; onOpenSubscription?: () => void } = {}) {
+export function AccountMenu({ onOpenUsage, onOpenSubscription, onOpenGuide }: { onOpenUsage?: () => void; onOpenSubscription?: () => void; onOpenGuide?: () => void } = {}) {
   const auth = useAuth();
   const [open, setOpen] = useState(false);
   const container = useRef<HTMLDivElement>(null);
@@ -291,6 +291,7 @@ export function AccountMenu({ onOpenUsage, onOpenSubscription }: { onOpenUsage?:
       items[next]?.focus();
     }}>
       <div className="np-account-menu__summary"><strong>{username}</strong><span>{signedIn ? auth.session.account_type === "free" ? isSubscriptionEnabled() ? "普通账号 · 可开通会员" : "普通账号" : "个人工作空间" : "登录后保存和管理科研任务"}</span></div>
+      {onOpenGuide && <button type="button" role="menuitem" onClick={() => act(onOpenGuide)}><BookOpen aria-hidden="true" />使用说明</button>}
       {isSubscriptionEnabled() && onOpenSubscription && <button type="button" role="menuitem" onClick={() => act(onOpenSubscription)}><Crown aria-hidden="true" />会员订阅</button>}
       {signedIn ? <>
         {onOpenUsage && <button type="button" role="menuitem" onClick={() => act(onOpenUsage)}><BarChart3 aria-hidden="true" />我的用量</button>}
