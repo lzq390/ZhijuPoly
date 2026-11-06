@@ -6,7 +6,7 @@ import { preloadPage } from "./pages";
 
 // These cases exercise routing after transport; cold loading is covered separately.
 beforeAll(async () => {
-  await Promise.all(["structureWorkbench", "knowledge", "databaseFilter", "monomerMdSimulation"].map(module => preloadPage(module as Parameters<typeof preloadPage>[0])));
+  await Promise.all(["structureWorkbench", "knowledge", "databaseFilter", "monomerMdSimulation", "usageGuide"].map(module => preloadPage(module as Parameters<typeof preloadPage>[0])));
 });
 
 const mocks = vi.hoisted(() => ({ guard: vi.fn(), knowledgeRender: vi.fn(), jobUpdate: null as ((id: string) => void) | null }));
@@ -17,7 +17,7 @@ vi.mock("./components/StructureWorkbenchPage", async () => {
       const result = await mocks.guard(signal);
       return result ?? { status: "saved" };
     } }));
-    return <section><h1>结构工作台</h1><iframe title="transition retained canvas" /><button onClick={() => onOpenModule("knowledge")}>内部打开知识检索</button></section>;
+    return <section><h1>结构工作台</h1><iframe title="transition retained canvas" /><button onClick={() => onOpenModule("knowledge")}>内部打开知识检索</button><button onClick={() => onOpenModule("usageGuide")}>内部打开使用说明</button></section>;
   }) };
 });
 vi.mock("./components/KnowledgeSearch", () => ({ KnowledgeSearch: ({ initialQuery }: { initialQuery: string }) => {
@@ -25,6 +25,9 @@ vi.mock("./components/KnowledgeSearch", () => ({ KnowledgeSearch: ({ initialQuer
   return <section data-testid="knowledge-view"><h1>知识检索内容</h1><span>{initialQuery}</span></section>;
 } }));
 vi.mock("./components/DatabaseFilterPage", () => ({ DatabaseFilterPage: () => <section data-testid="filter-view"><h1>筛选内容</h1></section> }));
+vi.mock("./components/UsageGuidePage", () => ({ UsageGuidePage: ({ onOpenModule }: { onOpenModule: (module: "structureWorkbench") => void }) =>
+  <section data-testid="guide-view"><h1>使用说明</h1><button onClick={() => onOpenModule("structureWorkbench")}>手册打开结构工作台</button></section>
+}));
 vi.mock("./components/MonomerMdSimulationPage", () => ({ MonomerMdSimulationPage: ({ initialJobId, onJobIdChange }: { initialJobId: string; onJobIdChange: (id: string) => void }) => {
   mocks.jobUpdate = onJobIdChange;
   return <section><span data-testid="job-id">{initialJobId}</span><button onClick={() => onJobIdChange("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")}>更新任务 URL</button></section>;
@@ -63,6 +66,23 @@ const discover = () => {
 };
 
 describe("App serial module integration", () => {
+  it("opens help through the canvas guard, retains the sidebar and returns through module navigation", async () => {
+    const view = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "内部打开使用说明" }));
+    await act(async () => {});
+    expect(mocks.guard).toHaveBeenCalledOnce();
+    expect(window.location.pathname).toBe("/structure-workbench");
+    end(); tick(232); tick(400); end();
+    expect(window.location.pathname).toBe("/help/usage");
+    expect(screen.getByTestId("guide-view")).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "业务模块" })).toBeTruthy();
+    expect(view.container.querySelector('[data-module-content="usageGuide"]')?.className).toContain("h-full");
+    fireEvent.click(screen.getByRole("button", { name: "手册打开结构工作台" }));
+    end(); tick(232); tick(400); end();
+    expect(window.location.pathname).toBe("/structure-workbench");
+    expect(mocks.guard).toHaveBeenCalledOnce();
+  });
+
   it("cancels an old save without a delayed recovery notice and starts a fresh guard on the next navigation", async () => {
     let release!: (result: { status: string }) => void;
     mocks.guard.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));

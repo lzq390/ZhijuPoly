@@ -37,6 +37,24 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
+it.each(["guest", "free", "member"] as const)("opens help without a login or subscription requirement for %s", async kind => {
+  vi.stubEnv("VITE_REGISTRATION_ENABLED", "false");
+  vi.stubEnv("VITE_SUBSCRIPTION_ENABLED", "false");
+  const session = kind === "guest" ? GUEST_SESSION : { ...account("guide-owner"), account_type: kind };
+  const fetch = vi.fn().mockResolvedValue(response(session));
+  vi.stubGlobal("fetch", fetch);
+  const onOpenGuide = vi.fn();
+  render(<AuthProvider><AccountMenu onOpenGuide={onOpenGuide} /></AuthProvider>);
+  fireEvent.click(await screen.findByRole("button", { name: kind === "guest" ? "游客账号菜单" : "账号菜单：guide-owner" }));
+  const help = screen.getByRole("menuitem", { name: "使用说明" });
+  expect(screen.getAllByRole("menuitem")[0]).toBe(help);
+  fireEvent.click(help);
+  expect(onOpenGuide).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("menu", { name: "账号操作" })).toBeNull();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual(["/api/v1/auth/session"]);
+});
+
 it("keeps existing-account login available while registration is hidden, including direct register requests", async () => {
   vi.stubEnv("VITE_REGISTRATION_ENABLED", "false");
   vi.stubEnv("VITE_SUBSCRIPTION_ENABLED", "false");

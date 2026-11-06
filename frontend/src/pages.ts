@@ -9,6 +9,7 @@ function page<T, C extends ComponentType<any>>(load: () => Promise<T>, select: (
 }
 
 const pages = {
+  usageGuide: page(() => import("./components/UsageGuidePage"), m => m.UsageGuidePage),
   subscription: page(() => import("./components/SubscriptionPage"), m => m.SubscriptionPage),
   personalUsage: page(() => import("./components/PersonalUsagePage"), m => m.PersonalUsagePage),
   conditionalGeneration: page(() => import("./components/ConditionalGenerationPage"), m => m.ConditionalGenerationPage),
@@ -32,6 +33,7 @@ const pages = {
 } satisfies Record<Exclude<ActiveModule, "home">, ReturnType<typeof createLazyPage>>;
 
 export const SubscriptionPage = pages.subscription.Page;
+export const UsageGuidePage = pages.usageGuide.Page;
 export const PersonalUsagePage = pages.personalUsage.Page;
 export const ConditionalGenerationPage = pages.conditionalGeneration.Page;
 export const DatabaseAnalysis = pages.database.Page;

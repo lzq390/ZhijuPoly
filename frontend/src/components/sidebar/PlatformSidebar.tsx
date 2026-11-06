@@ -47,6 +47,7 @@ type PlatformSidebarProps = {
   moduleGroups: AppShellModuleGroup[];
   onOpenHome: () => void;
   onOpenUsage?: () => void;
+  onOpenGuide?: () => void;
   onOpenSubscription?: () => void;
   onNavigate: (action: () => void, target?: NavigationTarget) => void;
   pendingTarget?: NavigationTarget | null;
@@ -86,6 +87,7 @@ export function PlatformSidebar({
   moduleGroups,
   onOpenHome,
   onOpenUsage,
+  onOpenGuide,
   onOpenSubscription,
   onNavigate,
   pendingTarget,
@@ -184,7 +186,7 @@ export function PlatformSidebar({
       <div className="np-sidebar-navigation-status" role="status" aria-live="polite" aria-atomic="true">
         {showPending && pendingTarget ? `正在切换到${pendingTarget.label}…` : ""}
       </div>
-      <AccountMenu onOpenUsage={onOpenUsage} onOpenSubscription={onOpenSubscription} />
+      <AccountMenu onOpenUsage={onOpenUsage} onOpenSubscription={onOpenSubscription} onOpenGuide={onOpenGuide} />
     </div>
   );
 }
