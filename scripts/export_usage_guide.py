@@ -37,12 +37,15 @@ CSS = '\n:root{color-scheme:light;--ink:#17343a;--muted:#5a6f76;--accent:#08766a
 # sit on the right. The balancing track grows only when the article has room.
 CSS += r"""
 @media screen and (min-width:961px){
-  .layout{grid-template-columns:minmax(0,900px) 210px;gap:30px;max-width:1216px;justify-content:center}
+  .layout{grid-template-columns:minmax(0,900px) 210px;gap:30px;max-width:1216px;justify-content:center;padding-left:72px;padding-right:24px}
   .content{grid-column:1;grid-row:1;width:100%;max-width:900px;margin-inline:auto}
   .toc{grid-column:2;grid-row:1}
 }
+@media screen and (min-width:961px) and (max-width:1080px){
+  .layout{padding-left:50px;padding-right:2px}
+}
 @media screen and (min-width:1280px){
-  .layout{grid-template-columns:clamp(0px,calc(65.625vw - 840px),210px) minmax(0,900px) 210px;gap:30px;max-width:1540px;padding:30px 40px 50px}
+  .layout{grid-template-columns:clamp(0px,calc(65.625vw - 840px),210px) minmax(0,900px) 210px;gap:30px;max-width:1540px;padding:30px 16px 50px 64px}
   .content{grid-column:2}
   .toc{grid-column:3}
 }
