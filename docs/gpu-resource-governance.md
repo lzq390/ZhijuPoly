@@ -249,3 +249,33 @@ zero leases on the target GPU. A missing Broker fails closed. The helper has a
 separate emergency `--break-glass-without-broker` path only when accompanied by
 `NEXPOLY_GPU_MPS_BREAK_GLASS_REASON`; it writes and `fsync`s a private audit
 record before issuing `quit`. Shipped systemd units never select this path.
+
+## Independent production observation
+
+`scripts/production_runtime_observer.py` separates ongoing production health
+checks from the before/after protection evidence collected during a release.
+Its private, versioned configuration describes only production containers,
+Worker units, sockets, release identities, resource limits and public loopback
+health routes. Development versions, process identities, unrelated containers
+and historical acceptance windows are not ongoing production dependencies.
+Backend and scientific Worker release identities are pinned separately.
+
+The `verify` mode checks contracts without changing observation files. The
+`guard` mode observes physical GPU2 and attributes compute processes to the
+configured production Backend or MD/DFT cgroups. It writes an atomic, private
+V1 guard snapshot; sampling or identity failures write a fresh unresolved
+observation rather than leave an old `ready` snapshot. Guard mode does not
+depend on unrelated web, database or analysis health checks. It preserves
+`observe` mode and never signals processes or changes admission.
+
+The `monitor` mode independently collects all configured checks, including
+GPU inference readiness, maintenance state, Worker socket peers, effective
+resource limits, PMD isolation and guard freshness. Normal active and queued
+tasks are allowed. Failures retain specific diagnostic codes in the report.
+
+Install a reviewed copy and its private configuration in a new runtime
+directory, then override only the two observation services' `ExecStart` paths.
+Keep their timers and preserve prior drop-ins and historical evidence for
+rollback. Do not edit old sealed release helpers or refresh a development
+baseline to make a production check pass. A later production deployment must
+update the production contracts when its images or runtime bindings change.
