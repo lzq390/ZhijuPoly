@@ -996,6 +996,15 @@ PY
 build_backend_image() {
   assert_clean_candidate
   assert_default_builder
+  local proxy_name
+  local -a proxy_build_args=()
+  # Docker's predefined proxy arguments are build-only. Pass only explicitly
+  # configured names so credentials are never expanded into command arguments.
+  for proxy_name in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy; do
+    if [[ -n "${!proxy_name:-}" ]]; then
+      proxy_build_args+=(--build-arg "$proxy_name")
+    fi
+  done
   "${COMPOSE[@]}" build \
     --builder default \
     --build-arg SOURCE_REVISION="$NEXPOLY_BUILD_REVISION" \
@@ -1004,6 +1013,7 @@ build_backend_image() {
     --build-arg BUILD_CONFIG_SHA256="$BACKEND_BUILD_CONFIG_SHA256" \
     --build-arg PYPI_INDEX_URL="$DEV_PYPI_INDEX_URL" \
     --build-arg PYPI_MIRROR_URL="$DEV_PYPI_MIRROR_URL" \
+    "${proxy_build_args[@]}" \
     backend
   docker image inspect "$DEV_BACKEND_IMAGE" >/dev/null
 }

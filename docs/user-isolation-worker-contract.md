@@ -61,6 +61,10 @@ NEXPOLY_DEV_USER_ISOLATION_ENABLED=true NEXPOLY_DEV_GPU_DIRECT_START=1 \
   NEXPOLY_DEV_GPU_SESSION_EXECUTE=1 scripts/dev_server_gpu.sh gpu-session-up
 ```
 
+跨版本更新时，旧 Controller 使用原会话的提交、源码树和 Git 锁文件对象清理 Worker；CPU 恢复仍要求镜像与当前干净提交一致。需要先构建当前 Backend 镜像，等待旧 Controller 完成回收，再启动新 GPU 会话。旧 operator 保留到 Controller 停止后，由新会话启动入口更新，避免提前停止同一 systemd cgroup。
+
+构建机需要宿主机网络时，可显式运行 `NEXPOLY_DEV_BUILD_NETWORK=host scripts/dev_server_gpu.sh build-backend`。已设置的 `HTTP_PROXY`、`HTTPS_PROXY`、`http_proxy`、`https_proxy` 仅作为 Docker 预定义构建参数转发；网络选项作用于镜像构建。
+
 ## 启动预检、审计与发布边界
 
 [PostgreSQL 隔离测试](../backend/tests/test_monomer_user_isolation_postgres.py)在独立 PostgreSQL 16 数据库创建真实的非所有者 API、service、audit 登录角色。覆盖用户内幂等、A/B 查询/取消/产物、漏 owner 的 RLS、防并发超额、禁用/启动锁顺序、attempt/Worker fencing、准确策略/权限漂移和无凭证审计。

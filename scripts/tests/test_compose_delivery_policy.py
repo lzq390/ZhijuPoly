@@ -17,6 +17,32 @@ DIGEST_B = "ghcr.io/lzq390/nexpoly-web@sha256:" + "b" * 64
 
 class ComposeDeliveryPolicyTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("docker"), "Docker Compose is not available")
+    def test_backend_build_network_selection_does_not_change_runtime_services(self) -> None:
+        command = ["docker", "compose", "--env-file", os.devnull, "-p", "nexpoly_build_test"]
+        for filename in ("docker-compose.yml", "docker-compose.dev.yml"):
+            command += ["-f", str(REPOSITORY_ROOT / filename)]
+        documents = []
+        for selected in (None, "host"):
+            environment = {
+                "PATH": os.environ.get("PATH", os.defpath),
+                "NEXPOLY_ASSET_ROOT": "/tmp/nexpoly-test-assets",
+            }
+            if selected is not None:
+                environment["NEXPOLY_DEV_BUILD_NETWORK"] = selected
+            result = subprocess.run(
+                command + ["config", "--format", "json", "--no-env-resolution"],
+                env=environment, text=True, capture_output=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            document = json.loads(result.stdout)
+            backend = document["services"]["backend"]
+            self.assertEqual(backend["build"].pop("network"), selected or "default")
+            self.assertNotIn("network_mode", backend)
+            self.assertNotIn("NEXPOLY_DEV_BUILD_NETWORK", backend["environment"])
+            documents.append(document)
+        self.assertEqual(documents[0], documents[1])
+
+    @unittest.skipUnless(shutil.which("docker"), "Docker Compose is not available")
     def test_development_frontend_proxy_uses_its_compose_project_backend(self) -> None:
         # Render with fixture values only; do not read local credential files.
         base_environment = {

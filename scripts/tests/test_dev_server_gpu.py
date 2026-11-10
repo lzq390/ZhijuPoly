@@ -848,6 +848,50 @@ gpu_session_up
         )
         self.assertIn("git ls-files --others --exclude-standard", source)
 
+    def test_native_build_only_forwards_configured_proxy_names_without_values(self) -> None:
+        function = self._shell_function_source("build_backend_image")
+        allowed = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
+        unwanted = ("ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "CUSTOM_PROXY")
+        with tempfile.TemporaryDirectory() as raw:
+            log = Path(raw) / "build-arguments"
+            for configured in ({}, {key: "http://test-only-secret.invalid" for key in allowed},
+                               {"HTTPS_PROXY": "http://test-only-secret.invalid", "http_proxy": ""}):
+                with self.subTest(configured_names=sorted(configured)):
+                    environment = {key: value for key, value in os.environ.items()
+                                   if key not in (*allowed, *unwanted)}
+                    environment.update({key: "ignored-test-only-secret" for key in unwanted})
+                    environment.update(configured)
+                    result = subprocess.run(
+                        ["bash", "-c", f'''
+set -euo pipefail
+LOG="$1"
+COMPOSE=(compose)
+NEXPOLY_BUILD_REVISION=revision
+CURRENT_SOURCE_TREE=tree
+BACKEND_DEPENDENCY_LOCK_SHA256=lock
+BACKEND_BUILD_CONFIG_SHA256=config
+DEV_PYPI_INDEX_URL=index
+DEV_PYPI_MIRROR_URL=mirror
+DEV_BACKEND_IMAGE=image
+assert_clean_candidate() {{ :; }}
+assert_default_builder() {{ :; }}
+compose() {{ printf '%s\\0' "$@" > "$LOG"; }}
+docker() {{ [[ "$*" == 'image inspect image' ]]; }}
+{function}
+build_backend_image
+''', "build-proxy-test", str(log)], env=environment, capture_output=True, text=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    arguments = log.read_bytes().decode().split("\0")[:-1]
+                    expected = [key for key in allowed if configured.get(key)]
+                    self.assertEqual(arguments[-(2 * len(expected) + 1):], [
+                        argument for key in expected for argument in ("--build-arg", key)
+                    ] + ["backend"])
+                    self.assertEqual([key for key in allowed if key in arguments], expected)
+                    self.assertFalse(set(unwanted) & set(arguments))
+                    self.assertNotIn("test-only-secret", " ".join(arguments))
+                    self.assertEqual(result.stdout, "")
+
     def test_direct_start_skips_only_runtime_cleanliness_checks(self) -> None:
         gate = self._shell_function_source(
             "assert_clean_candidate_unless_direct_start"
