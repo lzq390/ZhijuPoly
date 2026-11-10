@@ -339,16 +339,30 @@ BACKEND_BUILD_CONFIG_SHA256="sha256:$(
     sha256sum | awk '{print $1}'
 )"
 fi
-NEXPOLY_BUILD_REVISION="${NEXPOLY_BUILD_REVISION:-$CURRENT_SOURCE_REVISION}"
-[[ "$NEXPOLY_BUILD_REVISION" =~ ^[0-9a-f]{40}$ ]] || {
-  echo "NEXPOLY_BUILD_REVISION must be a full lowercase Git SHA." >&2
-  exit 2
+select_build_revision_for_command() {
+  local command="${1:-up}"
+  local requested_revision="${NEXPOLY_BUILD_REVISION:-$CURRENT_SOURCE_REVISION}"
+  [[ "$requested_revision" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "NEXPOLY_BUILD_REVISION must be a full lowercase Git SHA." >&2
+    return 2
+  }
+  case "$command" in
+    gpu-session-status|gpu-session-down|gpu-session-maintenance-stop|gpu-session-stop-owned-internal|gpu-session-restore-cpu-internal)
+      # A running controller inherits its launch revision, while its next
+      # recovery call executes this script from the updated checkout. Cleanup
+      # obtains the old Worker identities from the exact controller session;
+      # any CPU recreation must independently verify the current image below.
+      NEXPOLY_BUILD_REVISION="$CURRENT_SOURCE_REVISION"
+      ;;
+    *) NEXPOLY_BUILD_REVISION="$requested_revision" ;;
+  esac
+  [[ "$NEXPOLY_BUILD_REVISION" == "$CURRENT_SOURCE_REVISION" ]] || {
+    echo "NEXPOLY_BUILD_REVISION must match the currently checked-out Git HEAD." >&2
+    return 2
+  }
+  export NEXPOLY_BUILD_REVISION
 }
-[[ "$NEXPOLY_BUILD_REVISION" == "$CURRENT_SOURCE_REVISION" ]] || {
-  echo "NEXPOLY_BUILD_REVISION must match the currently checked-out Git HEAD." >&2
-  exit 2
-}
-export NEXPOLY_BUILD_REVISION
+select_build_revision_for_command "${1:-up}"
 export NEXPOLY_BUILD_SOURCE_TREE="$CURRENT_SOURCE_TREE"
 export NEXPOLY_BACKEND_DEPENDENCY_LOCK_SHA256="$BACKEND_DEPENDENCY_LOCK_SHA256"
 export NEXPOLY_BACKEND_BUILD_CONFIG_SHA256="$BACKEND_BUILD_CONFIG_SHA256"
@@ -542,6 +556,7 @@ gpu_operator_request() {
 }
 
 gpu_operator_status_is_current() {
+  local expected_revision="${1:-$CURRENT_SOURCE_REVISION}" expected_tree="${2:-$CURRENT_SOURCE_TREE}"
   gpu_operator_request status | python3 -c '
 import json
 import os
@@ -569,7 +584,30 @@ if os.getenv("NEXPOLY_DEV_MEMBERSHIP_ENABLED","false")=="true":
              "NEXPOLY_DEV_BILLING_SIMULATION_ENABLED":os.getenv("NEXPOLY_DEV_BILLING_SIMULATION_ENABLED","false"),
              "NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN":os.getenv("NEXPOLY_DEV_BILLING_MONTHLY_PRICE_FEN","")}
 assert identity.get("billing_configuration",{})==billing, "GPU operator billing configuration differs"
-' "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE" "${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}" "$GPU_OPERATOR_IDENTITY"
+' "$expected_revision" "$expected_tree" "${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}" "$GPU_OPERATOR_IDENTITY"
+}
+
+gpu_operator_verify_cpu_recovery() {
+  if gpu_operator_status_is_current >/dev/null 2>&1; then
+    return 0
+  fi
+  local identity revision tree
+  # The old operator can own the recovering controller's cgroup. Preserve
+  # that authority until cleanup ends; a later startup upgrades it. Accept
+  # only the exact live recovering session's source, with the usual operator
+  # process/configuration validation, never an arbitrary historical version.
+  identity="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status | python3 -c '
+import json, re, sys
+value = json.load(sys.stdin)
+if value.get("session_id") != sys.argv[1]:
+    raise SystemExit("CPU recovery operator controller session changed")
+keys = ("source_sha", "source_tree")
+if any(re.fullmatch(r"[0-9a-f]{40}", str(value.get(key))) is None for key in keys):
+    raise SystemExit("CPU recovery operator source identity is invalid")
+print(*(value[key] for key in keys))
+' "$NEXPOLY_DEV_GPU_SESSION_ID")" || return 1
+  read -r revision tree <<< "$identity"
+  gpu_operator_status_is_current "$revision" "$tree"
 }
 
 gpu_operator_cleanup_stale_identity() {
@@ -1330,7 +1368,11 @@ elif operator_mount:
     raise SystemExit("disabled development Backend must not mount the GPU operator")
 ' "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" "$ROOT_DIR"
   if [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]]; then
-    gpu_operator_status_is_current >/dev/null
+    if [[ "${1:-}" == cpu-recovery ]]; then
+      gpu_operator_verify_cpu_recovery >/dev/null
+    else
+      gpu_operator_status_is_current >/dev/null
+    fi
   fi
   if [[ "${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" == true || "${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" == true || "${NEXPOLY_DEV_MEMBERSHIP_ENABLED:-false}" == true ]]; then
     verify_research_runtime "$container_id" cpu
@@ -2662,6 +2704,16 @@ gpu_session_up() {
     fi
     return 0
   fi
+  # Replacing an operator can stop its systemd cgroup, including the old
+  # controller. Prove cleanup has finished before upgrading that authority.
+  "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status | python3 -c '
+import json, sys
+if json.load(sys.stdin).get("status") != "stopped":
+    raise SystemExit("GPU session startup requires the previous controller to be stopped")
+'
+  if [[ -z "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+    gpu_operator_up
+  fi
   if [[ "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" == "1" ]]; then
     [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]] || {
       echo "Direct GPU1 startup is restricted to the 9001 development launcher." >&2
@@ -2827,12 +2879,68 @@ for key in ("source_sha", "source_tree"):
 print(value["source_sha"], value["source_tree"])
 ' "$NEXPOLY_DEV_GPU_SESSION_ID")" || exit 1
     read -r CURRENT_SOURCE_REVISION CURRENT_SOURCE_TREE <<< "$identity"
+    if [[ -z "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+      identity="$(gpu_session_original_worker_locks "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE")" || exit 1
+      read -r WORKER_LOCK_SHA256 DFT_WORKER_LOCK_SHA256 <<< "$identity"
+    fi
     DFT_WORKER_VERSION="dev:${CURRENT_SOURCE_REVISION}:${CURRENT_SOURCE_TREE}:${DFT_WORKER_LOCK_SHA256}"
     worker_drain_stop || failed=1
     dft_worker_drain_stop || failed=1
     dft_worker_assert_stopped_runtime || failed=1
     exit "$failed"
   )
+}
+
+gpu_session_original_worker_locks() {
+  # Read immutable Git objects rather than today's lock files. A checkout
+  # update must not turn an exact old Worker into an unverified foreign one.
+  "$GPU_SESSION_PYTHON" -I - "$ROOT_DIR" "$1" "$2" <<'PY'
+import hashlib
+import re
+import subprocess
+import sys
+
+root, source, tree = sys.argv[1:]
+if any(re.fullmatch(r"[0-9a-f]{40}", value) is None for value in (source, tree)):
+    raise SystemExit("Worker cleanup source identity is invalid")
+
+def git(*arguments):
+    return subprocess.run(
+        ("git", "--no-optional-locks", "-C", root, *arguments),
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10,
+    ).stdout
+
+try:
+    if git("rev-parse", "--verify", source + "^{tree}").decode().strip() != tree:
+        raise SystemExit("Worker cleanup source tree differs from its commit")
+    locks = [
+        "sha256:" + hashlib.sha256(git("show", source + ":" + path)).hexdigest()
+        for path in (
+            "workers/monomer_md_worker/requirements.lock",
+            "workers/monomer_dft_worker/requirements.lock",
+        )
+    ]
+except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+    raise SystemExit("Worker cleanup requires its original immutable Git lock objects") from exc
+print(*locks)
+PY
+}
+
+gpu_session_verify_internal_recovery() {
+  [[ "$NATIVE_RECOVERY_FLAG_INPUT" == 1 &&
+    "$NATIVE_RECOVERY_SESSION_INPUT" =~ ^[0-9a-f]{32}$ ]] || {
+    echo "Internal GPU recovery command requires its original controller session." >&2
+    return 1
+  }
+  "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status | python3 -c '
+import json, sys
+value = json.load(sys.stdin)
+if value.get("session_id") != sys.argv[1]:
+    raise SystemExit("Internal GPU recovery controller session changed")
+' "$NATIVE_RECOVERY_SESSION_INPUT" || return 1
+  # dotenv is configuration, not authority to change the recovery target.
+  export NEXPOLY_DEV_GPU_SESSION_ID="$NATIVE_RECOVERY_SESSION_INPUT"
+  export NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY=1
 }
 
 gpu_session_status() {
@@ -2890,6 +2998,9 @@ gpu_session_down() {
   # drain may let a lease-free controller exit before Worker cleanup begins.
   # Retain its already verified identity instead of probing a stopped session.
   gpu_session_stop_workers "$payload"
+  if [[ -z "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+    verify_backend_image_build_identity || return 1
+  fi
   NEXPOLY_DEV_CONFIG_HASH="$(compute_backend_config_hash)"
   export NEXPOLY_DEV_CONFIG_HASH
   if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
@@ -2955,6 +3066,11 @@ gpu_session_restore_cpu_internal() {
     echo "Internal GPU recovery command is controller-only." >&2
     return 1
   }
+  if [[ -z "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+    # Never recreate a stale image with build labels taken from a newer
+    # checkout. Missing current provenance leaves recovery safely retryable.
+    verify_backend_image_build_identity || return 1
+  fi
   prepare_dft_runtime_directories
   NEXPOLY_DEV_CONFIG_HASH="$(compute_backend_config_hash)"
   export NEXPOLY_DEV_CONFIG_HASH
@@ -2964,7 +3080,7 @@ gpu_session_restore_cpu_internal() {
     "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
   fi
   wait_backend_configured
-  verify_backend_drift
+  verify_backend_drift cpu-recovery
 }
 
 require_deployment_drained() {
@@ -3441,9 +3557,11 @@ case "${1:-up}" in
     gpu_session_down
     ;;
   gpu-session-stop-owned-internal)
+    gpu_session_verify_internal_recovery
     gpu_session_stop_owned_internal
     ;;
   gpu-session-restore-cpu-internal)
+    gpu_session_verify_internal_recovery
     gpu_session_restore_cpu_internal
     ;;
   test-backend)
