@@ -15,6 +15,7 @@ import {
   Filter,
   FlaskConical,
   Grid2X2,
+  Layers,
   Microscope,
   Route,
   Search,
@@ -35,7 +36,7 @@ import {
   ExperimentWorkflowDemoPage, HighThroughputWorkflowDemoPage, HomopolymerPropertyPredictionPage,
   KnowledgeSearch, LabDataPage, PolymerMdSimulationPage, MonomerMdSimulationPage, MonomerDftPage,
   MonomerPolymerizationPage, MonomerRetrosynthesisPage, PolytaoGenerationPage, ReverseDesignPage,
-  PolymerSimilarityExplorerPage, StructureWorkbenchPage, preloadPage
+  PolymerSimilarityExplorerPage, StructureWorkbenchPage, ResearchToolsPage, preloadPage
 } from "./pages";
 import {
   canvasModules, getInitialRoute, normalizePath, routeFromPath, pathFromRoute,
@@ -117,6 +118,8 @@ function AppContent() {
   const canUseSharedWorkspace = !auth || (auth.status === "authenticated" && auth.session.capabilities["openscience.use"] === true);
   const [knowledgeLocalMode, setKnowledgeLocalMode] = useState(true);
   const [activeModule, setActiveModule] = useState<ActiveModule>(() => getInitialRoute().module);
+  const [expandedResearchGroupIds, setExpandedResearchGroupIds] = useState<Set<AppShellModuleGroup["id"]>>(() => new Set());
+  const [collapsedResearchGroupIds, setCollapsedResearchGroupIds] = useState<Set<AppShellModuleGroup["id"]>>(() => new Set());
   const [selectedDatasetKey, setSelectedDatasetKey] = useState<DatasetKey | null>(() => getInitialRoute().datasetKey);
   const [labDataView, setLabDataView] = useState<LabDataView>(() => getInitialRoute().labDataView ?? "collect");
   const [monomerDftJobId, setMonomerDftJobId] = useState<string | null>(() => {
@@ -284,7 +287,7 @@ function AppContent() {
     const item = [...standaloneModules, ...moduleGroups.flatMap((group) => group.items)].find((candidate) => candidate.id === route.module);
     moduleTransition.request({
       route, href: pathFromRoute(route), history: "push", source: "navigation", kind: "module",
-      ...extra, target: { id: route.module, label: item?.label ?? (route.module === "home" ? "通用会话" : route.module === "usageGuide" ? "使用说明" : route.module === "personalUsage" ? "我的用量" : route.module === "subscription" ? "会员订阅" : "实验数据") }
+      ...extra, target: { id: route.module, label: item?.label ?? (route.module === "home" ? "智能助手" : route.module === "usageGuide" ? "使用说明" : route.module === "personalUsage" ? "我的用量" : route.module === "subscription" ? "会员订阅" : "实验数据") }
     });
   }
 
@@ -439,6 +442,9 @@ function AppContent() {
 
   function openModuleById(moduleId: string) {
     switch (moduleId) {
+      case "researchTools":
+        navigate({ module: "researchTools", datasetKey: null });
+        break;
       case "home":
         openGeneralWorkspace();
         break;
@@ -583,6 +589,15 @@ function AppContent() {
       icon: <Grid2X2 className="h-4 w-4" />,
       isActive: activeModule === "structureWorkbench",
       onClick: openStructureWorkbench
+    },
+    {
+      id: "researchTools",
+      label: "实验工具",
+      description: "浏览材料发现、材料设计与实验优化工具。",
+      route: "/research-tools",
+      icon: <Layers className="h-4 w-4" />,
+      isActive: activeModule === "researchTools",
+      onClick: () => navigate({ module: "researchTools", datasetKey: null })
     }
   ];
   const moduleGroups: AppShellModuleGroup[] = [
@@ -839,6 +854,23 @@ function AppContent() {
       {isSubscriptionEnabled() && activeModule === "subscription" ? <SubscriptionPage onReturn={() => navigate(subscriptionReturnRoute.current ?? { module: "home", datasetKey: null })} /> : null}
       {activeModule === "personalUsage" ? <PersonalUsagePage /> : null}
       {activeModule === "usageGuide" ? <UsageGuidePage onOpenModule={openModuleById} /> : null}
+      {activeModule === "researchTools" ? <ResearchToolsPage
+        groups={moduleGroups.filter(group => group.id !== "data")}
+        expandedGroupIds={expandedResearchGroupIds}
+        collapsedGroupIds={collapsedResearchGroupIds}
+        onToggleCollapsedGroup={groupId => setCollapsedResearchGroupIds(current => {
+          const next = new Set(current);
+          if (next.has(groupId)) next.delete(groupId);
+          else next.add(groupId);
+          return next;
+        })}
+        onToggleGroup={groupId => setExpandedResearchGroupIds(current => {
+          const next = new Set(current);
+          if (next.has(groupId)) next.delete(groupId);
+          else next.add(groupId);
+          return next;
+        })}
+      /> : null}
 
       {activeModule === "databaseQuery" ? (
         <DatabaseQueryPage

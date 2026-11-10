@@ -9,15 +9,16 @@ beforeAll(async () => {
   await Promise.all(["structureWorkbench", "knowledge", "databaseFilter", "monomerMdSimulation", "usageGuide"].map(module => preloadPage(module as Parameters<typeof preloadPage>[0])));
 });
 
-const mocks = vi.hoisted(() => ({ guard: vi.fn(), knowledgeRender: vi.fn(), jobUpdate: null as ((id: string) => void) | null }));
+const mocks = vi.hoisted(() => ({ guard: vi.fn(), knowledgeRender: vi.fn(), workbenchNavigate: null as ((id: string) => void) | null, jobUpdate: null as ((id: string) => void) | null }));
 vi.mock("./components/StructureWorkbenchPage", async () => {
   const { forwardRef, useImperativeHandle } = await import("react");
   return { StructureWorkbenchPage: forwardRef(function Workbench({ onOpenModule }: { onOpenModule: (id: string) => void }, ref) {
+    mocks.workbenchNavigate = onOpenModule;
     useImperativeHandle(ref, () => ({ syncBeforeLeave: async (signal?: AbortSignal) => {
       const result = await mocks.guard(signal);
       return result ?? { status: "saved" };
     } }));
-    return <section><h1>结构工作台</h1><iframe title="transition retained canvas" /><button onClick={() => onOpenModule("knowledge")}>内部打开知识检索</button><button onClick={() => onOpenModule("usageGuide")}>内部打开使用说明</button></section>;
+    return <section><h1>结构工作台</h1><iframe title="transition retained canvas" /><button onClick={() => onOpenModule("knowledge")}>内部打开知识检索</button><button onClick={() => onOpenModule("databaseFilter")}>内部打开数据库筛选</button><button onClick={() => onOpenModule("monomerMdSimulation")}>内部打开单体 MD 模拟</button><button onClick={() => onOpenModule("usageGuide")}>内部打开使用说明</button></section>;
   }) };
 });
 vi.mock("./components/KnowledgeSearch", () => ({ KnowledgeSearch: ({ initialQuery }: { initialQuery: string }) => {
@@ -41,6 +42,7 @@ beforeEach(() => {
   mocks.guard.mockReset().mockResolvedValue({ status: "saved" });
   mocks.knowledgeRender.mockClear();
   mocks.jobUpdate = null;
+  mocks.workbenchNavigate = null;
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((fn) => window.setTimeout(() => fn(performance.now()), 16));
@@ -60,10 +62,6 @@ afterEach(() => {
 });
 const tick = (ms: number) => act(() => vi.advanceTimersByTime(ms));
 const end = () => act(() => animations.at(-1)?.onfinish?.());
-const discover = () => {
-  const button = screen.getByRole("button", { name: "材料发现 Discover" });
-  if (button.getAttribute("aria-expanded") === "false") fireEvent.click(button);
-};
 
 describe("App serial module integration", () => {
   it("opens help through the canvas guard, retains the sidebar and returns through module navigation", async () => {
@@ -86,15 +84,15 @@ describe("App serial module integration", () => {
   it("cancels an old save without a delayed recovery notice and starts a fresh guard on the next navigation", async () => {
     let release!: (result: { status: string }) => void;
     mocks.guard.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
-    const view = render(<App />); discover();
-    fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
+    const view = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "内部打开数据库筛选" }));
     const firstSignal = mocks.guard.mock.calls[0][0] as AbortSignal;
     fireEvent.click(screen.getByRole("button", { name: "结构工作台" }));
     expect(firstSignal.aborted).toBe(true);
     await act(async () => { await vi.advanceTimersByTimeAsync(1900); });
     expect(window.location.pathname).toBe("/structure-workbench");
     expect(view.container.querySelector(".np-structure-notice")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
+    fireEvent.click(screen.getByRole("button", { name: "内部打开数据库筛选" }));
     await act(async () => {});
     expect(mocks.guard).toHaveBeenCalledTimes(2);
     expect(mocks.guard.mock.calls[1][0]).not.toBe(firstSignal);
@@ -107,8 +105,8 @@ describe("App serial module integration", () => {
   it.each([false, true])("recovers at the deadline before routing even with reduced motion = %s", async reduced => {
     vi.stubGlobal("matchMedia", () => ({ matches: reduced, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     mocks.guard.mockImplementationOnce(() => new Promise(() => {}));
-    const view = render(<App />); discover();
-    fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
+    const view = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "内部打开数据库筛选" }));
     await act(async () => { await vi.advanceTimersByTimeAsync(1499); });
     expect(window.location.pathname).toBe("/structure-workbench");
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
@@ -143,14 +141,14 @@ describe("App serial module integration", () => {
   });
 
   it("replaces a just-pushed unseen URL in the blank phase, with no second exit", async () => {
-    const view = render(<App />); discover();
+    const view = render(<App />);
     const push = vi.spyOn(window.history, "pushState");
     const replace = vi.spyOn(window.history, "replaceState");
-    fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
+    fireEvent.click(screen.getByRole("button", { name: "内部打开数据库筛选" }));
     await act(async () => {}); end();
     expect(window.location.pathname).toBe("/database-filter");
     expect(view.container.querySelector("[data-module-content]")?.getAttribute("data-module-phase")).toBe("blank");
-    fireEvent.click(screen.getByRole("button", { name: "知识检索" }));
+    act(() => mocks.workbenchNavigate!("knowledge"));
     expect(window.location.pathname).toBe("/knowledge");
     expect(push).toHaveBeenCalledOnce();
     expect(replace).toHaveBeenCalledOnce();
@@ -160,9 +158,9 @@ describe("App serial module integration", () => {
   it("coalesces history snapshots and defers knowledge query props until the transparent commit", async () => {
     let resolve!: () => void;
     mocks.guard.mockImplementation(() => new Promise<void>((done) => { resolve = done; }));
-    render(<App />); discover();
+    render(<App />);
     const push = vi.spyOn(window.history, "pushState");
-    fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
+    fireEvent.click(screen.getByRole("button", { name: "内部打开数据库筛选" }));
     window.history.replaceState({}, "", "/knowledge?q=first");
     fireEvent(window, new PopStateEvent("popstate"));
     window.history.replaceState({}, "", "/knowledge?q=latest");
@@ -187,10 +185,9 @@ describe("App serial module integration", () => {
 
   it("replaces the unseen entry when a newly mounted module reports its task ID during the blank", async () => {
     const view = render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "材料设计 Build" }));
     const push = vi.spyOn(window.history, "pushState");
     const replace = vi.spyOn(window.history, "replaceState");
-    fireEvent.click(screen.getByRole("button", { name: "单体 MD 模拟" }));
+    fireEvent.click(screen.getByRole("button", { name: "内部打开单体 MD 模拟" }));
     await act(async () => {}); end();
     const content = view.container.querySelector<HTMLElement>("[data-module-content]")!;
     expect(content.dataset.modulePhase).toBe("blank");

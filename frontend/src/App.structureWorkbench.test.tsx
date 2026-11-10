@@ -9,7 +9,7 @@ import { preloadPage } from "./pages";
 
 // These cases exercise routing after transport; cold loading is covered separately.
 beforeAll(async () => {
-  await Promise.all(["monomerRetrosynthesis", "structureWorkbench", "knowledge", "databaseFilter", "monomerDft", "databaseQuery", "explorer", "homopolymerPrediction", "conditionalGeneration", "reverseDesign"].map(module => preloadPage(module as Parameters<typeof preloadPage>[0])));
+  await Promise.all(["researchTools", "monomerRetrosynthesis", "structureWorkbench", "knowledge", "databaseFilter", "monomerDft", "databaseQuery", "explorer", "homopolymerPrediction", "conditionalGeneration", "reverseDesign"].map(module => preloadPage(module as Parameters<typeof preloadPage>[0])));
 });
 
 vi.mock("@structure-editor-engine", () => import("./test/structureEditorEngineMock"));
@@ -84,14 +84,11 @@ function structureEditor(container: HTMLElement) {
   return container.querySelector<HTMLElement>('[data-editor-test-double][title="结构工作台结构编辑器"]');
 }
 
-function openDiscoverGroup() {
-  const group = screen.getByRole("button", { name: "材料发现 Discover" });
-  if (group.getAttribute("aria-expanded") !== "true") fireEvent.click(group);
-}
-
-function openBuildGroup() {
-  const group = screen.getByRole("button", { name: "材料设计 Build" });
-  if (group.getAttribute("aria-expanded") !== "true") fireEvent.click(group);
+async function openResearchGroup(label: string) {
+  fireEvent.click(screen.getByRole("button", { name: "实验工具" }));
+  await screen.findByRole("heading", { name: "实验工具" });
+  const toggle = screen.queryByRole("button", { name: new RegExp(`${label}.*展开`) });
+  if (toggle) fireEvent.click(toggle);
 }
 
 beforeEach(() => {
@@ -126,7 +123,7 @@ describe("App 结构工作台挂载与导航", () => {
     const firstEditor = structureEditor(view.container);
     expect(firstEditor).not.toBeNull();
 
-    openDiscoverGroup();
+    await openResearchGroup("材料发现");
     fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
     await screen.findByTestId("database-filter");
     expect(structureEditor(view.container)).toBe(firstEditor);
@@ -141,7 +138,7 @@ describe("App 结构工作台挂载与导航", () => {
     const firstEditor = structureEditor(view.container);
     expect(firstEditor).not.toBeNull();
 
-    openDiscoverGroup();
+    await openResearchGroup("材料发现");
     fireEvent.click(screen.getByRole("button", { name: "数据库查询" }));
     await screen.findByRole("heading", { name: "数据库查询" });
     expect(structureEditor(view.container)).toBeNull();
@@ -158,7 +155,7 @@ describe("App 结构工作台挂载与导航", () => {
     const view = render(<App />);
     expect(structureEditor(view.container)).not.toBeNull();
 
-    openBuildGroup();
+    await openResearchGroup("材料设计");
     fireEvent.click(screen.getByRole("button", { name: "单体 DFT" }));
 
     await screen.findByTestId("monomer-dft");
@@ -169,7 +166,7 @@ describe("App 结构工作台挂载与导航", () => {
 
   it("均聚物预测深链和工作台跳转始终只挂载一个共享 Ketcher", async () => {
     const view = render(<App />);
-    openBuildGroup();
+    await openResearchGroup("材料设计");
     fireEvent.click(screen.getByRole("button", { name: "均聚物性质预测" }));
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "均聚物性质预测" })).toBeTruthy());
@@ -183,7 +180,7 @@ describe("App 结构工作台挂载与导航", () => {
     const deepLink = render(<App />);
     expect(await screen.findByRole("heading", { name: "均聚物性质预测" })).toBeTruthy();
     expect(deepLink.container.querySelectorAll('[data-structure-editor]')).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "均聚物性质预测" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("button", { name: "实验工具" }).getAttribute("aria-current")).toBe("page");
   });
 
   it("相似性探索深链使用单一共享 Ketcher，并在离页前同步画板", async () => {
@@ -197,7 +194,7 @@ describe("App 结构工作台挂载与导航", () => {
     expect(await screen.findByRole("heading", { name: "聚合物相似性探索" })).toBeTruthy();
     expect(view.container.querySelectorAll('[data-structure-editor]')).toHaveLength(1);
     expect(screen.getByTitle("聚合物相似性探索结构编辑器")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "聚合物相似性探索" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("button", { name: "实验工具" }).getAttribute("aria-current")).toBe("page");
 
     window.history.pushState({}, "", "/knowledge");
     fireEvent(window, new PopStateEvent("popstate"));
@@ -216,16 +213,15 @@ describe("App 结构工作台挂载与导航", () => {
     const pushState = vi.spyOn(window.history, "pushState");
     render(<App />);
 
-    openDiscoverGroup();
-    const target = screen.getByRole("button", { name: "数据库筛选" });
+    const target = screen.getByRole("button", { name: "实验工具" });
     fireEvent.click(target);
     fireEvent.click(target);
-    expect(screen.queryByTestId("database-filter")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "实验工具" })).toBeNull();
     await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1));
 
     deferred.resolve?.();
-    await screen.findByTestId("database-filter");
-    expect(pushState.mock.calls.filter(([, , url]) => url === "/database-filter")).toHaveLength(1);
+    await screen.findByRole("heading", { name: "实验工具" });
+    expect(pushState.mock.calls.filter(([, , url]) => url === "/research-tools")).toHaveLength(1);
   });
 
   it("连续 popstate 共用同步任务并只应用最新目标", async () => {
@@ -338,14 +334,13 @@ describe("App 结构工作台挂载与导航", () => {
     }));
     render(<App />);
 
-    openDiscoverGroup();
-    fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
+    fireEvent.click(screen.getByRole("button", { name: "实验工具" }));
     window.history.pushState({}, "", "/knowledge");
     fireEvent(window, new PopStateEvent("popstate"));
     deferred.resolve?.();
 
     await screen.findByTestId("knowledge");
-    expect(screen.queryByTestId("database-filter")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "实验工具" })).toBeNull();
     expect(window.location.pathname).toBe("/knowledge");
     expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1);
   });
@@ -373,7 +368,7 @@ describe("App 单体反推导航", () => {
     expect((screen.getByLabelText("目标单体 SMILES") as HTMLTextAreaElement).value).toBe("CCN");
     expect((screen.getByLabelText("反推候选数") as HTMLInputElement).value).toBe("7");
     expect(structureEditor(view.container)).toBe(editor);
-    expect(screen.getByRole("button", { name: "单体逆合成反推" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("button", { name: "实验工具" }).getAttribute("aria-current")).toBe("page");
   });
   it.each(["saved", "failed"] as const)("同步为 %s 且无新结构时保留反推草稿", async status => {
     draft(); mocks.syncStatus = status; render(<App />);
@@ -385,7 +380,7 @@ describe("App 单体反推导航", () => {
   });
   it("侧栏与深链恢复草稿，刷新不启动画板", async () => {
     draft(); mocks.syncSmilesFromCanvas.mockResolvedValue("CCO");
-    const view = render(<App />); openDiscoverGroup();
+    const view = render(<App />); await openResearchGroup("材料发现");
     fireEvent.click(screen.getByRole("button", { name: "单体逆合成反推" }));
     await screen.findByRole("heading", { name: "单体逆合成反推" });
     expect((screen.getByLabelText("目标单体 SMILES") as HTMLTextAreaElement).value).toBe("CCN");
