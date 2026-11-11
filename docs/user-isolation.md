@@ -84,6 +84,7 @@ APP_SERVICE_POSTGRES_DSN=<属于 nexpoly_service 的登录角色连接>
 AUTH_ADMIN_POSTGRES_DSN=<仅维护命令使用的管理连接>
 AUTH_AUDIT_POSTGRES_DSN=<仅属于 nexpoly_mutable_audit 的登录角色连接>
 AUTH_RESTORE_TEST_DSN=<明确指定的空隔离恢复数据库管理连接>
+GPU_BROKER_ENVIRONMENT=dev
 AUTH_COOKIE_NAME=nexpoly_dev_session
 AUTH_COOKIE_SECURE=false
 ALLOWED_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
@@ -91,7 +92,17 @@ AUTH_DEV_HTTP_ORIGINS=
 MONOMER_DFT_START_AUTHORIZATION_TOKEN=<由 Backend 与 DFT Worker 共享的内部服务令牌>
 ```
 
-默认配置中，`AUTH_COOKIE_SECURE=false` 只允许 loopback 来源，可通过 SSH 隧道访问。需要通过非 loopback 地址访问开发环境时，显式配置完整 HTTP Origin；以下 `dev.example.test` 应替换为实际开发主机名：
+普通开发环境使用 `GPU_BROKER_ENVIRONMENT=dev`、`AUTH_COOKIE_SECURE=false` 和以 `nexpoly_dev_` 开头的 Cookie 名称时，与生产 HTTP 入口采用相同的实际 Host 校验。通过 SSH 或其他 HTTP 端口转发访问时，浏览器地址可以使用 localhost、其他 IP 和不同的本地端口，无须逐个添加到 `ALLOWED_ORIGINS`。例如，在客户端执行：
+
+```bash
+ssh -N -L 127.0.0.1:19001:127.0.0.1:9001 <user>@<development-host>
+```
+
+然后打开 `http://127.0.0.1:19001`。转发目标为开发前端 `9001`；前端通过同源 `/api/v1` 代理访问后端，并保留浏览器实际 Host 和 Origin。写请求必须带有唯一的 Origin，且等于 `http://` 加实际 Host；`Forwarded` 和 `X-Forwarded-*` 不能替代实际 Host。Cookie、CSRF、会话上下文、用户隔离和任务权限继续生效。专属隔离验收入口仍使用各自的固定来源策略。
+
+使用自定义域名转发时，还需在前端 Vite 的 `server.allowedHosts` 中明确添加该主机名；后端认证支持实际域名 Host，不会自动修改前端的 Host 配置。
+
+`ALLOWED_ORIGINS` 仍用于跨来源 CORS 配置。若配置文件需要列出非 loopback 的开发 HTTP 地址，保留以下显式配置方式；`dev.example.test` 应替换为实际开发主机名：
 
 ```dotenv
 GPU_BROKER_ENVIRONMENT=dev
@@ -101,7 +112,7 @@ ALLOWED_ORIGINS=http://localhost:9001,http://127.0.0.1:9001,http://dev.example.t
 AUTH_DEV_HTTP_ORIGINS=http://dev.example.test:9001
 ```
 
-`AUTH_DEV_HTTP_ORIGINS` 中每一项都必须是端口 `9001` 的完整 HTTP Origin，并已在 `ALLOWED_ORIGINS` 中明确列出；不接受通配、路径、查询、片段或 URL 凭证。例外还要求 `GPU_BROKER_ENVIRONMENT=dev`、非 Secure Cookie 和以 `nexpoly_dev_` 开头的 Cookie 名称，配置不匹配时拒绝启动认证服务。Origin、CSRF、会话上下文、用户隔离和后端任务权限不因该例外放宽。HTTP 不提供传输加密，此配置仅适用于开发环境；生产继续使用 Secure Cookie、HTTPS 和独立 Cookie 名称，生产 Compose 的 `prod` 环境不能启用该例外。
+`AUTH_DEV_HTTP_ORIGINS` 中每一项都必须是端口 `9001` 的完整 HTTP Origin，并已在 `ALLOWED_ORIGINS` 中明确列出；不接受通配、路径、查询、片段或 URL 凭证。例外还要求 `GPU_BROKER_ENVIRONMENT=dev`、非 Secure Cookie 和以 `nexpoly_dev_` 开头的 Cookie 名称，配置不匹配时拒绝启动认证服务。这些配置不替代写请求的同源校验。开发 HTTP 转发不启用生产认证模式；生产 HTTP 配置见 [9000 入口转发说明](production-9000-upgrade.md#login-through-ssh-forwarding)。公网入口的监听地址和来源 IP 防火墙策略保持现有配置。
 
 前端通过同源 `/api/v1` 代理访问，代理保留浏览器实际 Host。DFT Worker 还需 `MONOMER_DFT_START_AUTHORIZATION_URL` 指向可信 Backend 根地址；DFT 内部明文 HTTP 回调仍仅允许 loopback，该要求不受开发网页 HTTP 例外影响。
 

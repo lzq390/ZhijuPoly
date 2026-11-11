@@ -60,6 +60,7 @@ def test_normal_settings_and_all_other_identities_remain_twelve_hours(monkeypatc
     assert normal.session_hours == 12 and normal.isolated_ab_session_policy is None
     assert normal.new_session_max_age(A, peer='127.0.0.1', isolated_origin=ORIGIN) == 43200
     isolated = configured(monkeypatch)
+    assert not isolated.development_http_enabled
     assert isolated.new_session_max_age(A, peer=PROXY, isolated_origin=ORIGIN) == 129600
     assert isolated.new_session_max_age(B, peer=PROXY, isolated_origin=ORIGIN) == 129600
     assert isolated.new_session_max_age(C, peer=PROXY, isolated_origin=ORIGIN) == 43200

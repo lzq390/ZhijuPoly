@@ -133,6 +133,17 @@ class AuthSettings:
         elif self.acceptance_lab_dsns is not None:
             raise ValueError("Acceptance Lab connections require the finite acceptance policy")
 
+    @property
+    def development_http_enabled(self) -> bool:
+        """Permit forwarded HTTP entries only for the ordinary development runtime."""
+        return (
+            self.runtime_environment == "dev" and self.cookie_secure is False
+            and self.cookie_name.startswith("nexpoly_dev_")
+            and self.isolated_ab_session_policy is None
+            and self.isolated_acceptance_policy is None
+            and self.acceptance_lab_dsns is None
+        )
+
     def acceptance_lab_dsn(self, owner_id: str) -> str:
         policy = self.isolated_acceptance_policy
         if (policy is None or self.acceptance_lab_dsns is None
