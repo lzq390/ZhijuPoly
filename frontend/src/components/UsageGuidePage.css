@@ -8,7 +8,7 @@
   background: #f5f8fc;
 }
 .np-guide-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-.np-guide-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 30px; width: min(1180px, 100%); margin: 0 auto; padding: 28px 30px 60px; }
+.np-guide-layout { display: grid; grid-template-columns: minmax(0, 1fr) 210px; gap: 30px; width: min(1180px, 100%); margin: 0 auto; padding: 28px 6px 60px 54px; }
 .np-guide-sidebar { position: sticky; top: 28px; align-self: start; max-height: calc(100dvh - 140px); overflow-y: auto; padding: 17px 14px; border: 1px solid #dbe6f0; border-radius: 13px; background: #fff; }
 .np-guide-sidebar__title, .np-guide-mobile-contents summary > span { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 650; }
 .np-guide-sidebar__title { padding: 0 6px 5px; }

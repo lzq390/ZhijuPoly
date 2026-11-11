@@ -114,10 +114,6 @@ export function UsageGuidePage({ onOpenModule }: { onOpenModule: (module: Active
     <ModulePageHeader>{guide.title}</ModulePageHeader>
     <div className="np-guide-scroll" ref={scrollRegion}>
       <div className="np-guide-layout">
-        <aside className="np-guide-sidebar" aria-label="功能目录">
-          <div className="np-guide-sidebar__title"><List aria-hidden="true" />功能目录</div>
-          <GuideContents onSelect={selectSection} />
-        </aside>
         <div className="np-guide-content">
           <div className="np-guide-introduction"><BookOpen aria-hidden="true" /><p>{guide.introduction}</p></div>
           <details className="np-guide-mobile-contents" ref={mobileContents}>
@@ -140,6 +136,10 @@ export function UsageGuidePage({ onOpenModule }: { onOpenModule: (module: Active
             </div>
           </section>)}
         </div>
+        <aside className="np-guide-sidebar" aria-label="功能目录">
+          <div className="np-guide-sidebar__title"><List aria-hidden="true" />功能目录</div>
+          <GuideContents onSelect={selectSection} />
+        </aside>
       </div>
     </div>
     {preview && <ScreenshotPreview {...preview} onClose={() => setPreview(null)} />}
