@@ -40,10 +40,14 @@ it("跨知识库和筛选页面保留同一记录，切换后仍等待在途操�
   await waitFor(() => expect(mocks.operation).toHaveBeenCalledTimes(1));
   const id = mocks.start.mock.calls[0][0];
   expect(mocks.operation).toHaveBeenLastCalledWith(id);
+  fireEvent.click(screen.getByRole("button", { name: "实验工具" }));
+  await screen.findByRole("heading", { name: "实验工具" });
+  fireEvent.click(screen.getByRole("button", { name: /材料发现.*展开更多/ }));
   fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
   let release!: () => void;
   mocks.operation.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
   fireEvent.click(await screen.findByText("筛选测试"));
+  expect(window.location.pathname).toBe("/database-filter");
   expect(mocks.operation).toHaveBeenLastCalledWith(id);
   window.history.pushState({}, "", "/knowledge");
   fireEvent.popState(window);

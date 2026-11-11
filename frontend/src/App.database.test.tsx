@@ -64,7 +64,7 @@ describe("数据库分析深链路由", () => {
     render(<App />);
 
     expect(screen.getByTestId("database-analysis-route").textContent).toContain(expectedView);
-    expect(screen.getByRole("button", { name: "数据库分析" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("button", { name: "实验工具" }).getAttribute("aria-current")).toBe("page");
   });
 
   it("数据集回调与 popstate 均保持深链和工作面同步", () => {
@@ -90,6 +90,6 @@ describe("数据库分析深链路由", () => {
 
     expect(screen.getByTestId("database-filter-route")).not.toBeNull();
     expect(screen.queryByTestId("database-analysis-route")).toBeNull();
-    expect(screen.getByRole("button", { name: "数据库筛选" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("button", { name: "实验工具" }).getAttribute("aria-current")).toBe("page");
   });
 });
