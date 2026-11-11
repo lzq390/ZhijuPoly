@@ -26,7 +26,7 @@ DEFAULT_CONFIG = Path("/etc/nexpoly/public-ingress-allowlist.conf")
 TABLE_FAMILY = "inet"
 TABLE_NAME = "nexpoly_public_ingress"
 CHAIN_NAME = "prerouting"
-PROTECTED_PORTS = (81, 9000, 9001, 9011, 10000, 10001)
+PROTECTED_PORTS = (81, 9000, 9001, 9003, 9011, 10000, 10001)
 MAX_NETWORKS_PER_FAMILY = 256
 CONFIG_KEYS = {
     "NEXPOLY_INGRESS_ALLOW_IPV4",

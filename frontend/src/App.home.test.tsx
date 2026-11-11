@@ -34,16 +34,24 @@ afterEach(() => {
 });
 
 describe("智聚万物首页", () => {
-  it("侧栏用实验工具统一入口，结构工作台置顶且智能助手位于数据管理下方", () => {
+  it("侧栏保留实验工具统一入口，并将总览和结构工作台独立置顶", () => {
     render(<App />);
     const navigation = screen.getByRole("navigation", { name: "业务模块" });
+    const overview = screen.getByRole("button", { name: "系统总览" });
     const structureWorkbench = screen.getByRole("button", { name: "结构工作台" });
     const researchTools = screen.getByRole("button", { name: "实验工具" });
+    expect(overview.closest("section")).toBeNull();
+    expect(
+      Array.from(navigation.querySelectorAll("[data-module-id]"))
+        .slice(0, 3)
+        .map(item => item.getAttribute("data-module-id"))
+    ).toEqual(["overview", "structureWorkbench", "researchTools"]);
     const dataGroup = screen.getByRole("button", { name: "数据管理 Data" }) as HTMLButtonElement;
     const assistant = screen.getByRole("button", { name: "智能助手" });
     const buttons: HTMLElement[] = Array.from(navigation.querySelectorAll("button"));
     expect(structureWorkbench.closest("section")).toBeNull();
     expect(researchTools.closest("section")).toBeNull();
+    expect(buttons.indexOf(overview)).toBeLessThan(buttons.indexOf(structureWorkbench));
     expect(buttons.indexOf(structureWorkbench)).toBeLessThan(buttons.indexOf(researchTools));
     expect(buttons.indexOf(researchTools)).toBeLessThan(buttons.indexOf(dataGroup));
     expect(buttons.indexOf(dataGroup)).toBeLessThan(buttons.indexOf(assistant));

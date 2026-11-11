@@ -10,8 +10,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 export const structureLibraryApi = {
   status: (signal?: AbortSignal) => request<StructureLibraryStatus>('/status', { signal }),
-  list: (q: string, cursor?: string | null, signal?: AbortSignal) => request<{ items: StructureRecordSummary[]; next_cursor: string | null }>(
-    '/records?' + new URLSearchParams({ q, ...(cursor ? { cursor } : {}) }), { signal }),
+  list: (q: string, cursor?: string | null, signal?: AbortSignal, limit?: number) => request<{ items: StructureRecordSummary[]; next_cursor: string | null }>(
+    '/records?' + new URLSearchParams({ q, ...(cursor ? { cursor } : {}), ...(limit === undefined ? {} : { limit: String(limit) }) }), { signal }),
   detail: (id: string, signal?: AbortSignal) => request<StructureRecord>('/records/' + encodeURIComponent(id), { signal }),
   save: (document: StructureDocument, name: string, requestId: string, signal?: AbortSignal) => request<StructureRecord>('/records', {
     method: 'POST', signal, body: JSON.stringify({ name, smiles: document.smiles, ket: JSON.parse(document.ket),

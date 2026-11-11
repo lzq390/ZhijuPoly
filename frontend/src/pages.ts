@@ -11,6 +11,7 @@ function page<T, C extends ComponentType<any>>(load: () => Promise<T>, select: (
 const pages = {
   researchTools: page(() => import("./components/ResearchToolsPage"), m => m.ResearchToolsPage),
   usageGuide: page(() => import("./components/UsageGuidePage"), m => m.UsageGuidePage),
+  overview: page(() => import("./components/OverviewPage"), m => m.OverviewPage),
   subscription: page(() => import("./components/SubscriptionPage"), m => m.SubscriptionPage),
   personalUsage: page(() => import("./components/PersonalUsagePage"), m => m.PersonalUsagePage),
   conditionalGeneration: page(() => import("./components/ConditionalGenerationPage"), m => m.ConditionalGenerationPage),
@@ -36,6 +37,7 @@ const pages = {
 export const SubscriptionPage = pages.subscription.Page;
 export const ResearchToolsPage = pages.researchTools.Page;
 export const UsageGuidePage = pages.usageGuide.Page;
+export const OverviewPage = pages.overview.Page;
 export const PersonalUsagePage = pages.personalUsage.Page;
 export const ConditionalGenerationPage = pages.conditionalGeneration.Page;
 export const DatabaseAnalysis = pages.database.Page;
