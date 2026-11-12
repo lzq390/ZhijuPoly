@@ -161,12 +161,14 @@ gpu_operator_status_is_current
             for name in ["Dockerfile", *[p.name for p in ROOT.glob("docker-compose*.yml")]]:
                 (root / name).write_text(name + "\n")
             start = SOURCE.index("BACKEND_BUILD_CONFIG_FILES=(")
-            end = SOURCE.index("\nfi\nNEXPOLY_BUILD_REVISION", start)
+            end = SOURCE.index("\nfi\nselect_build_revision_for_command() {", start)
             arrays_start = SOURCE.index("DEV_COMPOSE_FILES=(-f")
             arrays_end = SOURCE.index("GPU_SESSION_CONTROLLER=", arrays_start)
             suffix = f'''
 cd "$(dirname "$1")"
 NEXPOLY_DEV_GPU_LAUNCHER_ENABLED=true
+BILLING_BUILD_CONFIG_FILES=()
+BILLING_COMPOSE_FILES=()
 {SOURCE[start:end]}
 printf '%s\\n' "$BACKEND_BUILD_CONFIG_SHA256"
 {SOURCE[arrays_start:arrays_end]}

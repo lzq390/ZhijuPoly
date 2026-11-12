@@ -94,13 +94,29 @@ async function checkLocalFade(page, selector, action, duration, to) {
   return { duration, intermediateFrames: probe.frames.filter((opacity) => opacity > .1 && opacity < .9).length, minimumOpacity: Math.min(...probe.frames) };
 }
 async function navigation(page, width, id) {
-  if (width < 1024) await page.getByRole("button", { name: "打开导航", exact: true }).click();
-  const root = page.locator(width < 1024 ? "#np-mobile-navigation" : ".np-sidebar-desktop");
-  const button = root.locator(`[data-module-id="${id}"]`);
-  if (!(await button.count())) {
-    for (const trigger of await root.locator('.np-sidebar-group__trigger[aria-expanded="false"]:not(:disabled)').all()) await trigger.click();
+  if (["home", "structureWorkbench", "researchTools"].includes(id)) {
+    if (width < 1024 && !(await page.locator("#np-mobile-navigation").count())) {
+      await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    }
+    const root = page.locator(width < 1024 ? "#np-mobile-navigation" : ".np-sidebar-desktop");
+    await root.locator(`[data-module-id="${id}"]`).click();
+  } else {
+    const groupByModule = Object.fromEntries([
+      ["discover", ["knowledge", "polytaoGeneration", "monomerRetrosynthesis", "explorer", "databaseQuery", "databaseFilter", "database"]],
+      ["build", ["homopolymerPrediction", "monomerPolymerization", "mdSimulationDemo", "monomerMdSimulation", "monomerDft", "conditionalGeneration"]],
+      ["optimize", ["reverseDesign", "highThroughputWorkflowDemo"]]
+    ].flatMap(([group, modules]) => modules.map(module => [module, group])));
+    const groupId = groupByModule[id];
+    assert.ok(groupId, `Known research category for ${id}`);
+    await navigation(page, width, "researchTools");
+    await page.getByRole("heading", { name: "实验工具", exact: true }).waitFor();
+    const group = page.locator(`main [data-research-group="${groupId}"]`);
+    const reopen = group.locator('.np-research-tools__collapse[aria-expanded="false"]');
+    if (await reopen.count()) await reopen.click();
+    const expand = group.locator('.np-research-tools__expand:not(.np-research-tools__collapse)[aria-expanded="false"]');
+    if (await expand.count()) await expand.click();
+    await group.locator(`[data-module-id="${id}"]`).click();
   }
-  await button.click();
   await page.locator(`[data-module-content="${id}"][data-module-phase="idle"]:not([inert])`).waitFor();
   if (width < 1024) await page.locator(".np-sidebar-mobile-layer").waitFor({ state: "detached" });
 }
@@ -140,7 +156,7 @@ try {
       const url = new URL(request.url());
       if (url.origin !== new URL(base).origin) return route.abort();
       if (url.pathname.endsWith("/knowledge/search")) return route.fulfill({ json: knowledgeFixture(request.postDataJSON()) });
-      if (url.pathname.endsWith("/monomer-retrosynthesis")) return route.fulfill({ json: { total: 0, candidates: [], input_smiles: "CCO", target_role: "auto" } });
+      if (url.pathname === "/api/v1/monomer-retrosynthesis" && request.method() === "POST") return route.fulfill({ json: { total: 0, candidates: [], input_smiles: "CCO", target_role: "auto" } });
       if (url.pathname.endsWith("/polytao/status")) return route.fulfill({ json: polytaoStatusFixture });
       if (url.pathname.endsWith("/polytao/jobs") && request.method() === "POST") {
         polytaoSubmits++;
@@ -178,10 +194,11 @@ try {
       await phase(page, "rapid-navigation");
       if (viewport.width < 1024) await page.getByRole("button", { name: "打开导航", exact: true }).click();
       const nav = page.locator(viewport.width < 1024 ? "#np-mobile-navigation" : ".np-sidebar-desktop");
-      await nav.locator('[data-group-id="discover"] .np-sidebar-group__trigger').click();
+      // Research cards are inert during transitions. Race the persistent
+      // platform entries while preserving the retained editor assertion.
       await nav.evaluate((root) => {
         window.__editorBefore = document.querySelector("[data-structure-editor]");
-        for (const id of ["knowledge", "databaseQuery", "structureWorkbench"]) root.querySelector(`[data-module-id="${id}"]`).click();
+        for (const id of ["researchTools", "home", "structureWorkbench"]) root.querySelector(`[data-module-id="${id}"]`).click();
       });
       await page.waitForTimeout(1650);
       result.retainedEditor = await page.evaluate(() => document.querySelector("[data-structure-editor]") === window.__editorBefore);
@@ -198,7 +215,8 @@ try {
         await settle(page, "#structure-module-panel");
         assert.equal(await page.locator(".np-sw-editor").evaluate((element) => getComputedStyle(element).transitionDuration), "0.4s");
       }
-      await page.getByRole("button", { name: "设置单体逆合成反推参数" }).click();
+      await page.getByRole("button", { name: "打开单体逆合成反推", exact: true }).click();
+      await page.locator('[data-module-content="monomerRetrosynthesis"][data-module-phase="idle"]:not([inert])').waitFor();
       await page.getByRole("textbox", { name: "目标单体 SMILES" }).fill("CCO");
       await page.getByRole("button", { name: "运行反推", exact: true }).click();
       await settle(page, ".np-sw-drawer");
@@ -206,7 +224,7 @@ try {
       result.workbenchMode = inline ? "inline" : "overlay";
       if (viewport.width >= 1024) assert.equal(await page.locator(".np-sidebar-desktop").evaluate((element) => element.inert), false, "Workbench result overlay must not block platform navigation");
       if (inline) result.workbenchResizedWidth = await checkDrag(page, ".np-sw-drawer");
-      const workbenchSlide = { workspace: ".np-sw-workspace", drawer: ".np-sw-drawer", inline, reduced: reducedControl };
+      const workbenchSlide = { workspace: ".np-monomer-retrosynthesis .np-sw-workspace", drawer: ".np-sw-drawer", inline, reduced: reducedControl };
       result.workbenchClose = await checkDrawerSlide(page, { ...workbenchSlide, open: false,
         action: () => page.getByRole("button", { name: "关闭单体反推结果", exact: true }).click() });
       await page.getByRole("button", { name: "展开反推结果", exact: true }).waitFor();
@@ -222,7 +240,7 @@ try {
         assert.equal(await page.locator(".np-sw-drawer-layer").evaluate(element => element.classList.contains("is-resizing")), false);
       } else await page.getByRole("button", { name: "关闭单体反推结果", exact: true }).click();
       await page.waitForFunction(() => document.querySelector(".np-sw-drawer")?.dataset.motionPhase === "closed");
-      if (!reducedControl) result.workbenchReversal = await checkDrawerReversal(page, { workspace: ".np-sw-workspace", drawer: ".np-sw-drawer",
+      if (!reducedControl) result.workbenchReversal = await checkDrawerReversal(page, { workspace: ".np-monomer-retrosynthesis .np-sw-workspace", drawer: ".np-sw-drawer",
         openAction: () => page.getByRole("button", { name: "展开反推结果", exact: true }).evaluate(button => button.click()),
         closeAction: () => page.getByRole("button", { name: "关闭单体反推结果", exact: true }).evaluate(button => button.click()) });
 

@@ -242,6 +242,13 @@ def replace_exact(path: Path, old: str, new: str) -> None:
         raise PackagingError(f'Adaptation anchor must occur once: {path.name}: {old[:100]!r}')
     path.write_text(value.replace(old, new))
 
+def replace_reviewed_variant(path: Path, old: str, new: str, *alternatives: str) -> None:
+    value = path.read_text()
+    matches = [variant for variant in (old, *alternatives) if variant in value]
+    if len(matches) != 1:
+        raise PackagingError(f'Expected one reviewed adaptation variant: {path.name}: {old[:100]!r}')
+    replace_exact(path, matches[0], new)
+
 def remove_png_metadata(path: Path) -> None:
     original = path.read_bytes()
     if not original.startswith(b'\x89PNG\r\n\x1a\n'):
@@ -275,47 +282,122 @@ def adapt_page_fixture_routes(page_check: Path) -> None:
                   '    const payload = fixture.response(url);')
 
 
+def adapt_motion_navigation(motion: Path) -> None:
+    # Older snapshots still have sidebar-only selectors. Upgrade exactly that
+    # reviewed function; current snapshots must retain the complete directory
+    # traversal, settled-content guards, and mobile navigation teardown.
+    legacy = '''async function navigation(page, width, id) {
+  if (width < 1024) await page.getByRole("button", { name: "打开导航", exact: true }).click();
+  const root = page.locator(width < 1024 ? "#np-mobile-navigation" : ".np-sidebar-desktop");
+  const button = root.locator(`[data-module-id="${id}"]`);
+  if (!(await button.count())) {
+    for (const trigger of await root.locator('.np-sidebar-group__trigger[aria-expanded="false"]:not(:disabled)').all()) await trigger.click();
+  }
+  await button.click();
+  await page.locator(`[data-module-content="${id}"][data-module-phase="idle"]:not([inert])`).waitFor();
+  if (width < 1024) await page.locator(".np-sidebar-mobile-layer").waitFor({ state: "detached" });
+}'''
+    current = '''async function navigation(page, width, id) {
+  if (["home", "structureWorkbench", "researchTools"].includes(id)) {
+    if (width < 1024 && !(await page.locator("#np-mobile-navigation").count())) {
+      await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    }
+    const root = page.locator(width < 1024 ? "#np-mobile-navigation" : ".np-sidebar-desktop");
+    await root.locator(`[data-module-id="${id}"]`).click();
+  } else {
+    const groupByModule = Object.fromEntries([
+      ["discover", ["knowledge", "polytaoGeneration", "monomerRetrosynthesis", "explorer", "databaseQuery", "databaseFilter", "database"]],
+      ["build", ["homopolymerPrediction", "monomerPolymerization", "mdSimulationDemo", "monomerMdSimulation", "monomerDft", "conditionalGeneration"]],
+      ["optimize", ["reverseDesign", "highThroughputWorkflowDemo"]]
+    ].flatMap(([group, modules]) => modules.map(module => [module, group])));
+    const groupId = groupByModule[id];
+    assert.ok(groupId, `Known research category for ${id}`);
+    await navigation(page, width, "researchTools");
+    await page.getByRole("heading", { name: "实验工具", exact: true }).waitFor();
+    const group = page.locator(`main [data-research-group="${groupId}"]`);
+    const reopen = group.locator('.np-research-tools__collapse[aria-expanded="false"]');
+    if (await reopen.count()) await reopen.click();
+    const expand = group.locator('.np-research-tools__expand:not(.np-research-tools__collapse)[aria-expanded="false"]');
+    if (await expand.count()) await expand.click();
+    await group.locator(`[data-module-id="${id}"]`).click();
+  }
+  await page.locator(`[data-module-content="${id}"][data-module-phase="idle"]:not([inert])`).waitFor();
+  if (width < 1024) await page.locator(".np-sidebar-mobile-layer").waitFor({ state: "detached" });
+}'''
+    legacy_rapid = '''      await nav.locator('[data-group-id="discover"] .np-sidebar-group__trigger').click();
+      await nav.evaluate((root) => {
+        window.__editorBefore = document.querySelector("[data-structure-editor]");
+        for (const id of ["knowledge", "databaseQuery", "structureWorkbench"]) root.querySelector(`[data-module-id="${id}"]`).click();
+      });'''
+    current_rapid = '''      await nav.evaluate((root) => {
+        window.__editorBefore = document.querySelector("[data-structure-editor]");
+        for (const id of ["researchTools", "home", "structureWorkbench"]) root.querySelector(`[data-module-id="${id}"]`).click();
+      });'''
+    replace_reviewed_variant(motion, legacy, current, current)
+    replace_reviewed_variant(motion, legacy_rapid, current_rapid, current_rapid)
+
+
 def adapt_workbench_verifiers(frontend: Path) -> None:
     # The retained editor navigates through App to the standalone result module.
     # Keep the original focus, reversal, animation, and request-count assertions.
     for filename, indent in (('verify-workbench-drawer-focus.mjs', '          '),
                              ('verify-motion.mjs', '      ')):
         path = frontend / 'scripts' / filename
-        replace_exact(path,
+        navigation = (
+            'await page.getByRole("button", { name: "打开单体逆合成反推", exact: true }).click();\n'
+            + indent + "await page.locator('[data-module-content=\"monomerRetrosynthesis\"][data-module-phase=\"idle\"]:not([inert])').waitFor();"
+        )
+        replace_reviewed_variant(path,
                       'await page.getByRole("button", { name: "设置单体逆合成反推参数" }).click();',
-                      'await page.getByRole("button", { name: "打开单体逆合成反推", exact: true }).click();\n'
-                      + indent + "await page.locator('[data-module-content=\"monomerRetrosynthesis\"][data-module-phase=\"idle\"]:not([inert])').waitFor();")
+                      navigation, navigation)
         # A frontend navigation GET must never count as the fixture business POST.
-        replace_exact(path, 'url.pathname.endsWith("/monomer-retrosynthesis")',
-                      'url.pathname === "/api/v1/monomer-retrosynthesis" && request.method() === "POST"')
+        replace_reviewed_variant(path, 'if (url.pathname.endsWith("/monomer-retrosynthesis"))',
+                      'if (url.pathname === "/api/v1/monomer-retrosynthesis" && request.method() === "POST")',
+                      'if (request.method() === "POST" && url.pathname.endsWith("/monomer-retrosynthesis"))',
+                      'if (url.pathname === "/api/v1/monomer-retrosynthesis" && request.method() === "POST")')
     focus = frontend / 'scripts/verify-workbench-drawer-focus.mjs'
+    # The handoff's local HTTP Mock owns identity and entitlements. Retain the
+    # verifier's origin and method guard without manufacturing another session.
+    if re.search(r'auth|entitlement', focus.read_text(), re.I):
+        replace_exact(focus,
+                      '          if (url.pathname === "/api/v1/auth/session") return route.fulfill({ json: { authenticated: true,\n'
+                      '            user: { id: "drawer-focus-fixture", username: "反推焦点测试", must_change_password: false },\n'
+                      '            session_id: "drawer-focus-session", csrf_token: "drawer-focus-csrf", capabilities: {} } });\n'
+                      '          if (url.pathname === "/api/v1/usage/entitlements") return route.fulfill({ json: { enabled: false } });\n', '')
+        if re.search(r'auth|entitlement', focus.read_text(), re.I):
+            raise PackagingError('Unreviewed workbench identity or entitlement fixture remains')
     # Standalone result modules unmount on navigation. Absence means focus is
     # outside the old drawer; initial geometry/drawer assertions remain strict.
     replace_exact(focus, 'const titleBox = title.getBoundingClientRect();',
                   'const titleBox = title?.getBoundingClientRect();')
-    replace_exact(focus, 'focusInDrawer: drawer?.contains(active),',
+    replace_reviewed_variant(focus, 'focusInDrawer: drawer?.contains(active),',
+                  'focusInDrawer: Boolean(drawer?.contains(active)),',
                   'focusInDrawer: Boolean(drawer?.contains(active)),')
     replace_exact(focus, 'title: { x: titleBox.x - main.x, y: titleBox.y - main.y }',
                   'title: titleBox ? { x: titleBox.x - main.x, y: titleBox.y - main.y } : null')
     # Shell restores the original connected submitter on first close; subsequent
     # reopen controls are remounted and must match their new exact DOM identity.
-    replace_exact(focus, 'async function expectClosed(page) {\n  await page.waitForFunction(() => document.querySelector(".np-sw-drawer")?.dataset.motionPhase === "closed");\n  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "展开反推结果");\n  await page.waitForTimeout(150);\n  const state = await snapshot(page);\n  assert.equal(state.focusInDrawer, false);\n  assert.equal(state.focusedInert, false);\n  return state;\n}', 'async function focusIdentity(page, expected) {\n  return page.evaluate(expected => {\n    const describe = element => element ? {\n      tag: element.tagName, id: element.id, type: element.getAttribute("type"),\n      ariaLabel: element.getAttribute("aria-label"), text: element.textContent.trim().replace(/\\s+/g, " ").slice(0, 120),\n      connected: element.isConnected, inert: Boolean(element.closest("[inert], [aria-hidden=\'true\']")),\n      module: element.closest("[data-module]")?.getAttribute("data-module") || null,\n    } : null;\n    return { sameElement: document.activeElement === expected,\n      actual: describe(document.activeElement), expected: describe(expected) };\n  }, expected);\n}\n\nasync function expectClosed(page, submittedTrigger = null) {\n  let expected = submittedTrigger;\n  try {\n    await page.waitForFunction(() => document.querySelector(".np-sw-drawer")?.dataset.motionPhase === "closed");\n    // The first close restores the still-connected form submitter. Later opens\n    // unmount the reopen control; restore the exact newly rendered reopen node.\n    expected ||= await page.getByRole("button", { name: "展开反推结果", exact: true }).elementHandle();\n    assert.ok(expected, "The exact focus-restoration trigger must exist");\n    await page.waitForFunction(expected => expected.isConnected && document.activeElement === expected, expected);\n    await page.waitForTimeout(150);\n    const identity = await focusIdentity(page, expected);\n    assert.equal(identity.sameElement, true, JSON.stringify(identity));\n    const state = await snapshot(page);\n    assert.equal(state.focusInDrawer, false);\n    assert.equal(state.focusedInert, false);\n    return { ...state, focusIdentity: identity };\n  } catch (error) {\n    error.focusIdentity = await focusIdentity(page, expected).catch(() => null);\n    throw error;\n  }\n}')
+    replace_reviewed_variant(focus, 'async function expectClosed(page) {\n  await page.waitForFunction(() => document.querySelector(".np-sw-drawer")?.dataset.motionPhase === "closed");\n  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "展开反推结果");\n  await page.waitForTimeout(150);\n  const state = await snapshot(page);\n  assert.equal(state.focusInDrawer, false);\n  assert.equal(state.focusedInert, false);\n  return state;\n}', 'async function focusIdentity(page, expected) {\n  return page.evaluate(expected => {\n    const describe = element => element ? {\n      tag: element.tagName, id: element.id, type: element.getAttribute("type"),\n      ariaLabel: element.getAttribute("aria-label"), text: element.textContent.trim().replace(/\\s+/g, " ").slice(0, 120),\n      connected: element.isConnected, inert: Boolean(element.closest("[inert], [aria-hidden=\'true\']")),\n      module: element.closest("[data-module]")?.getAttribute("data-module") || null,\n    } : null;\n    return { sameElement: document.activeElement === expected,\n      actual: describe(document.activeElement), expected: describe(expected) };\n  }, expected);\n}\n\nasync function expectClosed(page, submittedTrigger = null) {\n  let expected = submittedTrigger;\n  const expectedFocus = submittedTrigger ? "运行反推" : "展开反推结果";\n  try {\n    await page.waitForFunction(() => document.querySelector(".np-sw-drawer")?.dataset.motionPhase === "closed");\n    // The first close restores the still-connected form submitter. Later opens\n    // unmount the reopen control; restore the exact newly rendered reopen node.\n    expected ||= await page.getByRole("button", { name: "展开反推结果", exact: true }).elementHandle();\n    assert.ok(expected, "The exact focus-restoration trigger must exist");\n    await page.waitForFunction(expected => expected.isConnected && document.activeElement === expected, expected);\n    await page.waitForTimeout(150);\n    const identity = await focusIdentity(page, expected);\n    assert.equal(identity.sameElement, true, JSON.stringify(identity));\n    const state = await snapshot(page);\n    assert.equal(state.focusInDrawer, false);\n    assert.equal(state.focusedLabel, expectedFocus);\n    assert.equal(state.focusedInert, false);\n    return { ...state, focusIdentity: identity };\n  } catch (error) {\n    error.focusIdentity = await focusIdentity(page, expected).catch(() => null);\n    throw error;\n  }\n}', 'async function expectClosed(page, expectedFocus = "展开反推结果") {\n  await page.waitForFunction(() => document.querySelector(".np-sw-drawer")?.dataset.motionPhase === "closed");\n  await page.waitForFunction(label => {\n    const active = document.activeElement;\n    return (active?.getAttribute("aria-label") || active?.textContent?.trim()) === label;\n  }, expectedFocus);\n  await page.waitForTimeout(150);\n  const state = await snapshot(page);\n  assert.equal(state.focusInDrawer, false);\n  assert.equal(state.focusedLabel, expectedFocus);\n  assert.equal(state.focusedInert, false);\n  return state;\n}')
     replace_exact(focus, 'const result = { viewport, reducedMotion, total, passed: false };',
                   'const result = { viewport, reducedMotion, total, passed: false };\n        let submitTrigger = null;')
     replace_exact(focus, 'await page.getByRole("button", { name: "运行反推", exact: true }).click();',
                   'submitTrigger = await page.getByRole("button", { name: "运行反推", exact: true }).elementHandle();\n'
                   '          assert.ok(submitTrigger, "Capture the exact form submitter before opening results");\n'
                   '          await page.getByRole("button", { name: "运行反推", exact: true }).click();')
-    replace_exact(focus, 'result.closed = await expectClosed(page);',
-                  'result.closed = await expectClosed(page, submitTrigger);')
+    replace_reviewed_variant(focus, 'result.closed = await expectClosed(page);',
+                  'result.closed = await expectClosed(page, submitTrigger);',
+                  'result.closed = await expectClosed(page, "运行反推");')
     replace_exact(focus, 'result.error = String(error);',
                   'result.error = String(error);\n'
                   '          result.focusFailure = error.focusIdentity || await focusIdentity(page, submitTrigger).catch(() => null);')
     motion = frontend / 'scripts/verify-motion.mjs'
+    adapt_motion_navigation(motion)
     # The original editor stays mounted. Measure the active result workspace.
-    replace_exact(motion, 'const workbenchSlide = { workspace: ".np-sw-workspace",',
+    replace_reviewed_variant(motion, 'const workbenchSlide = { workspace: ".np-sw-workspace",',
+                  'const workbenchSlide = { workspace: ".np-monomer-retrosynthesis .np-sw-workspace",',
                   'const workbenchSlide = { workspace: ".np-monomer-retrosynthesis .np-sw-workspace",')
-    replace_exact(motion, 'checkDrawerReversal(page, { workspace: ".np-sw-workspace", drawer: ".np-sw-drawer",',
+    replace_reviewed_variant(motion, 'checkDrawerReversal(page, { workspace: ".np-sw-workspace", drawer: ".np-sw-drawer",',
+                  'checkDrawerReversal(page, { workspace: ".np-monomer-retrosynthesis .np-sw-workspace", drawer: ".np-sw-drawer",',
                   'checkDrawerReversal(page, { workspace: ".np-monomer-retrosynthesis .np-sw-workspace", drawer: ".np-sw-drawer",')
 
 
