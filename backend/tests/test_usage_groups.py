@@ -23,9 +23,20 @@ def test_groups_match_real_sidebar_order_labels_and_never_invent_unclassified_me
     groups = module_groups()
     source = (ROOT / "frontend/src/App.tsx").read_text()
     sidebar = source[source.index("const standaloneModules:"):source.index("const isFullBleedModule =")]
-    actual_sidebar = re.findall(r'id: "([^"]+)",\s+label: "([^"]+)",\s+description:', sidebar)
-    assert len(actual_sidebar) == 16
-    assert [(row["id"], row["label"]) for row in groups] == actual_sidebar
+    navigation = re.findall(
+        r'id: "([^"]+)",\s+label: "([^"]+)",\s+'
+        r'(?:placement: "[^"]+"(?: as const)?,\s+)?description:', sidebar)
+    # Overview, the tool directory and server monitoring do not submit metered
+    # research tasks. Keep them visible to this check without inventing groups.
+    navigation_only = {
+        ("overview", "系统总览"), ("researchTools", "实验工具"),
+        ("serverMonitoring", "服务器节点"),
+    }
+    expected_groups = [(row["id"], row["label"]) for row in groups]
+    assert set(navigation) - set(expected_groups) == navigation_only
+    actual_tools = [row for row in navigation if row not in navigation_only]
+    assert len(actual_tools) == 16
+    assert expected_groups == actual_tools
     members = [module for group in groups for module in group["modules"]]
     assert len(members) == len(set(members))
     assert {item["id"] for item in catalog_modules()} - set(members) == {

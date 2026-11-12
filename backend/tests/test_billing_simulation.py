@@ -129,7 +129,13 @@ def test_simulation_requires_owner_login_origin_and_csrf(simulation_client):
     order = create_order(client)
     path = '/api/v1/billing/orders/' + order['id'] + '/simulate-payment'
     with TestClient(client.app) as visitor:
-        assert visitor.post(path).status_code == 401
+        # Ordinary development HTTP validates the entry before resolving login.
+        missing_origin = visitor.post(path)
+        assert missing_origin.status_code == 403, missing_origin.text
+        assert missing_origin.json()['code'] == 'untrusted_origin'
+        unauthenticated = visitor.post(path, headers={'Origin': 'http://testserver'})
+        assert unauthenticated.status_code == 401, unauthenticated.text
+        assert unauthenticated.json()['code'] == 'authentication_required'
     assert client.post(path, headers={'X-CSRF-Token': 'invalid'}).status_code == 403
     assert client.post(path, headers={'Origin': 'https://untrusted.invalid'}).status_code == 403
     register(client)
