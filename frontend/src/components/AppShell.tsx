@@ -1,7 +1,7 @@
 import { useAuth } from "../auth/AuthProvider";
 import type { ReactNode, RefObject } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Menu, MessageSquare } from "lucide-react";
+import { Menu, MessageSquare, MessagesSquare } from "lucide-react";
 import { ModuleTransitionContext } from "../hooks/ModuleTransitionContext";
 import type { ModuleTransitionView } from "../hooks/useModuleTransition";
 import { useGuardedNavigation } from "../hooks/useGuardedNavigation";
@@ -170,6 +170,8 @@ export function AppShell({
   const gpuSessionControl = useDevGpuSessionControl(canReadGpuSession, canControlGpuSession);
 
   const isHome = activeModule === "home";
+  const isResearchToolsPage = activeModule === "researchTools";
+  const isOverviewPage = activeModule === "overview";
   const isReverseDesignWorkbench = activeModule === "reverseDesign";
   const isConditionalGenerationWorkbench = activeModule === "conditionalGeneration";
   const isStructureWorkbench = activeModule === "structureWorkbench";
@@ -188,6 +190,7 @@ export function AppShell({
   const isPolytaoWorkbench = activeModule === "polytaoGeneration";
   const isUsagePage = activeModule === "personalUsage";
   const isUsageGuidePage = activeModule === "usageGuide";
+  const isServerMonitoringPage = activeModule === "serverMonitoring";
   const isResearchWorkbench =
     isSimilarityExplorerWorkbench ||
     isDatabaseQueryWorkbench ||
@@ -205,9 +208,9 @@ export function AppShell({
     isStructureWorkbench ||
     isReverseDesignWorkbench ||
     isConditionalGenerationWorkbench;
-  // Usage owns a fixed header and an inner scroll region, so its containing
+  // Usage, guide, overview, and monitoring own a fixed header and an inner scroll region, so their containing
   // block must have a bounded height just like the workbenches.
-  const hasViewportLayout = isResearchWorkbench || isUsagePage || isUsageGuidePage;
+  const hasViewportLayout = isResearchWorkbench || isUsagePage || isUsageGuidePage || isOverviewPage || isServerMonitoringPage;
 
   const activeGroupId =
     moduleGroups.find((group) => group.items.some((item) => item.isActive))?.id ?? null;
@@ -376,9 +379,20 @@ export function AppShell({
   }
 
   const sharedSidebarProps = {
-    standaloneModules,
-    moduleGroups,
-    onOpenHome: () => handleNavigate(onOpenHome, { id: "home", label: "首页" }),
+    standaloneModules: standaloneModules.map(item => item.id === "researchTools" ? {
+      ...item,
+      isActive: activeModule === "researchTools" || activeGroupId === "discover" || activeGroupId === "build" || activeGroupId === "optimize"
+    } : item),
+    moduleGroups: moduleGroups.filter(group => group.id === "data"),
+    assistantModule: {
+      id: "home",
+      label: "智能助手",
+      description: "打开 OpenScience 智能助手工作空间。",
+      route: "/",
+      icon: <MessagesSquare />,
+      isActive: isHome,
+      onClick: onOpenHome
+    },
     onNavigate: handleNavigate,
     onOpenSubscription: onOpenSubscription ? () => handleNavigate(onOpenSubscription, { id: "subscription", label: "会员订阅" }) : undefined,
     onOpenUsage: onOpenUsage ? () => handleNavigate(onOpenUsage, { id: "personalUsage", label: "我的用量" }) : undefined,
@@ -446,9 +460,13 @@ export function AppShell({
           className={
             isHome
               ? "min-h-0 flex-1 overflow-hidden"
+              : isResearchToolsPage
+                ? "flex-1 overflow-y-auto p-0"
               : hasViewportLayout
                 ? `min-h-0 flex-1 overflow-hidden ${
                     isUsagePage || isUsageGuidePage ||
+                    isOverviewPage ||
+                    isServerMonitoringPage ||
                     isReverseDesignWorkbench ||
                     isConditionalGenerationWorkbench ||
                     isStructureWorkbench ||
@@ -480,8 +498,8 @@ export function AppShell({
                 ? "flex h-full min-h-0 flex-col"
                 : [
                     "relative mx-auto flex flex-col",
-                    isUsagePage || isUsageGuidePage ? "h-full min-h-0 gap-0" : isResearchWorkbench ? "h-full gap-0" : "gap-8",
-                    fullBleed ? "max-w-none" : "max-w-[1480px]"
+                    isResearchToolsPage ? "min-h-full gap-0" : isUsagePage || isUsageGuidePage || isOverviewPage || isServerMonitoringPage ? "h-full min-h-0 gap-0" : isResearchWorkbench ? "h-full gap-0" : "gap-8",
+                    fullBleed || isResearchToolsPage ? "max-w-none" : "max-w-[1480px]"
                   ].join(" ")
             }
           >

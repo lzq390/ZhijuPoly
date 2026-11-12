@@ -90,6 +90,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      network: "${NEXPOLY_DEV_BUILD_NETWORK:-default}"
       args:
         SOURCE_REVISION: "${NEXPOLY_BUILD_REVISION:-dev}"
         SOURCE_TREE: "${NEXPOLY_BUILD_SOURCE_TREE:-unknown}"

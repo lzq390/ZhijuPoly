@@ -112,9 +112,12 @@ try {
       let nav = await sidebar();
       await nav.getByRole("button", { name: "侧栏回归：近期研究", exact: true }).waitFor();
       await page.evaluate(() => { window.__sidebarOriginalFrame = document.querySelector('iframe[title="智聚万物智能体工作台"]'); });
-      const group = nav.getByRole("button", { name: "材料设计 Build", exact: true });
-      if (await group.getAttribute("aria-expanded") === "false") await group.click();
-      await nav.locator('[data-module-id="monomerMdSimulation"]').click();
+      await nav.getByRole("button", { name: "实验工具", exact: true }).click();
+      await settled("researchTools");
+      await page.getByRole("heading", { name: "实验工具", exact: true }).waitFor();
+      const expand = page.getByRole("button", { name: /材料设计.*展开/ });
+      if (await expand.count()) await expand.click();
+      await page.locator('main [data-module-id="monomerMdSimulation"]').click();
       await settled("monomerMdSimulation");
       await page.locator(".np-monomer-md-simulation").waitFor({ state: "visible" });
       nav = await verifyHistory(false);

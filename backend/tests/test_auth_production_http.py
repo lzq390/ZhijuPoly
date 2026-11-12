@@ -1,4 +1,4 @@
-"""Production HTTP entry contract; no database or listening server is used.
+"""Production and development HTTP entries; no database or server is used.
 
 The in-memory identity fixture tests the real router/middleware transport.
 Database revocation, owner filtering and RLS remain covered by auth isolation
@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import anyio
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 import httpx
 import pytest
@@ -21,11 +22,12 @@ from app.auth.settings import (
     AuthSettings, PRODUCTION_HTTP_COOKIE_NAME, PRODUCTION_HTTP_HOST,
     PRODUCTION_HTTP_ORIGIN,
 )
+from app.middleware import BrowserCrossSiteProtectionMiddleware
 
 
 FORWARDED_ORIGINS = (
     'http://localhost:19000', 'http://127.0.0.1:19001', 'http://[::1]:19002',
-    'http://forward.example:28080', 'http://192.168.1.2:19000',
+    'http://127.0.0.2:29001', 'http://forward.example:28080', 'http://192.168.1.2:19000',
 )
 
 
@@ -143,12 +145,23 @@ class IdentityFixture:
         pass
 
 
+@pytest.fixture(params=['prod', 'dev'])
+def http_entry_settings(monkeypatch, request):
+    if request.param == 'prod':
+        return production_settings(monkeypatch)
+    monkeypatch.setenv('AUTH_COOKIE_SECURE', 'false')
+    return AuthSettings.from_settings(SimpleNamespace(
+        allowed_origins_list=('http://localhost:9001',), app_postgres_dsn='unused',
+        gpu_broker_environment='dev'))
+
+
 @pytest.fixture
-def production_client(monkeypatch, request):
+def production_client(http_entry_settings, request):
     origin = getattr(request, 'param', PRODUCTION_HTTP_ORIGIN)
-    auth = IdentityFixture(production_settings(monkeypatch))
+    auth = IdentityFixture(http_entry_settings)
     app = FastAPI()
     app.state.auth = auth
+    app.state.settings = SimpleNamespace(allowed_origins_list=auth.settings.allowed_origins)
     app.state.parsed = False
     app.include_router(router)
 
@@ -165,12 +178,17 @@ def production_client(monkeypatch, request):
         app.state.parsed = True
         return await request.json()
 
+    # Match the browser-facing CORS/cross-site/auth layers in create_app.
+    app.add_middleware(BrowserCrossSiteProtectionMiddleware)
     app.add_middleware(AuthenticationMiddleware, auth_service=auth)
+    app.add_middleware(CORSMiddleware, allow_origins=auth.settings.allowed_origins,
+                       allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
     # This Starlette TestClient version cannot parse IPv6 server netlocs.
     # Preserve the browser's actual Host/Origin while using its IPv4 transport.
     transport_origin = 'http://localhost:19002' if origin == 'http://[::1]:19002' else origin
     with TestClient(app, base_url=transport_origin) as client:
         client.headers['Host'] = origin.removeprefix('http://')
+        client.headers['Sec-Fetch-Site'] = 'same-origin'
         yield client, auth, app
 
 
@@ -189,7 +207,7 @@ def test_http_login_refresh_and_cookie_contract(production_client):
     client, auth, _ = production_client
     result, _ = login(client)
     header = result.headers['set-cookie']
-    assert header.startswith(PRODUCTION_HTTP_COOKIE_NAME + '=')
+    assert header.startswith(auth.settings.cookie_name + '=')
     assert 'HttpOnly' in header and 'SameSite=lax' in header and 'Path=/' in header
     assert 'Max-Age=43200' in header and 'Secure' not in header and 'Domain=' not in header
     session = client.get('/api/v1/auth/session')
@@ -199,7 +217,8 @@ def test_http_login_refresh_and_cookie_contract(production_client):
 
 
 @pytest.mark.parametrize('headers', [
-    {}, {'Origin': 'http://114.214.255.154:9001'}, {'Origin': 'http://114.214.255.154:9011'},
+    {}, {'Origin': 'http://localhost:9001'}, {'Origin': 'http://114.214.255.154:9001'},
+    {'Origin': 'http://114.214.255.154:9011'},
     {'Origin': 'https://114.214.255.154:9000'},
     {'Origin': PRODUCTION_HTTP_ORIGIN, 'Host': '114.214.255.154:9001'},
     {'Origin': PRODUCTION_HTTP_ORIGIN, 'Host': '127.0.0.1:9000',
@@ -277,6 +296,21 @@ def test_forwarded_entry_uses_actual_host_and_ignores_proxy_header_claims(produc
     assert auth.login_calls == 1
 
 
+@pytest.mark.parametrize('production_client', FORWARDED_ORIGINS, indirect=True)
+def test_forwarded_entry_works_without_fetch_metadata(production_client):
+    client, _, _ = production_client
+    del client.headers['Sec-Fetch-Site']
+    login(client)
+
+
+def test_cross_site_browser_cannot_login_even_with_matching_origin(production_client):
+    client, auth, _ = production_client
+    result = client.post('/api/v1/auth/login', headers={
+        'Origin': 'http://' + client.headers['Host'], 'Sec-Fetch-Site': 'cross-site'},
+        json={'username': 'fixture-a', 'password': 'transport-fixture'})
+    assert result.status_code == 403 and auth.login_calls == 0
+
+
 @pytest.mark.parametrize('production_client', [PRODUCTION_HTTP_ORIGIN, *FORWARDED_ORIGINS], indirect=True)
 def test_private_requests_keep_csrf_context_owner_and_revocation(production_client):
     client, _, app = production_client
@@ -314,12 +348,12 @@ def test_session_accepts_a_forwarded_host_and_loopback_health_remains_available(
 
 
 def test_cookie_is_host_only_but_still_shared_with_other_ports(production_client):
-    client, _, _ = production_client
+    client, auth, _ = production_client
     login(client)
     for port in (9001, 9011):
         request = httpx.Request('GET', f'http://114.214.255.154:{port}/api/v1/auth/session')
         client.cookies.set_cookie_header(request)
-        assert PRODUCTION_HTTP_COOKIE_NAME + '=' in request.headers['cookie']
+        assert auth.settings.cookie_name + '=' in request.headers['cookie']
     other_host = httpx.Request('GET', 'http://elsewhere.invalid:9000/api/v1/auth/session')
     client.cookies.set_cookie_header(other_host)
     assert 'cookie' not in other_host.headers

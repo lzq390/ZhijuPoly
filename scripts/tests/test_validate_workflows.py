@@ -64,7 +64,10 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         self.assertEqual(failures, [])
 
     def test_lightweight_tests_cannot_leak_into_unittest_or_skip_pytest(self) -> None:
-        for pattern in ("test_*_poc_*.py", "test_lightweight_*.py"):
+        for pattern in (
+            "test_*_poc_*.py", "test_lightweight_*.py",
+            "test_server_monitoring_*.py", "test_verify_server_monitoring_*.py",
+        ):
             for needle in (f"! -name '{pattern}'", f"-name '{pattern}'"):
                 with self.subTest(needle=needle):
                     job_name = "script-tests" if needle.startswith("!") else "lightweight-backend-tests"
@@ -83,7 +86,10 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         self.assertTrue(any("ci-gate" in failure for failure in failures), failures)
 
     def test_new_lightweight_modules_are_collected_once_without_editing_ci(self) -> None:
-        names = {"test_future_poc_routes.py", "test_lightweight_future.py", "test_regular_script.py"}
+        names = {
+            "test_future_poc_routes.py", "test_lightweight_future.py", "test_regular_script.py",
+            "test_server_monitoring_future.py", "test_verify_server_monitoring_future.py",
+        }
         with tempfile.TemporaryDirectory() as directory:
             tests = Path(directory) / "scripts/tests"
             tests.mkdir(parents=True)
@@ -101,6 +107,22 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
                 selected[job_name] = {Path(path).name for path in result.stdout.splitlines()}
             self.assertEqual(selected["lightweight-backend-tests"], names - {"test_regular_script.py"})
             self.assertEqual(selected["script-tests"], {"test_regular_script.py"})
+
+    def test_server_monitoring_suite_requires_its_locked_runtime_and_complete_collection(self) -> None:
+        job = policy.workflow_job_body(CI_TEXT, "lightweight-backend-tests", [])
+        for before, after in (
+            ("-r server_monitoring/requirements.lock", ""),
+            ("python -m pytest server_monitoring/tests -q", "python -m unittest discover server_monitoring/tests"),
+            ("python -m pytest server_monitoring/tests -q", "python -m pytest server_monitoring/tests -q -k api"),
+            ("      - name: Run standalone server monitoring tests\n",
+             "      - name: Run standalone server monitoring tests\n        if: false\n"),
+        ):
+            with self.subTest(before=before, after=after):
+                self.assertIn(before, job)
+                changed = CI_TEXT.replace(job, job.replace(before, after, 1), 1)
+                failures: list[str] = []
+                policy.validate_lightweight_backend_tests(changed, failures)
+                self.assertTrue(failures)
 
     def test_polymer_md_operator_tests_use_the_locked_offline_pytest_runtime(self) -> None:
         failures: list[str] = []

@@ -5247,6 +5247,18 @@ class SessionController:
             "NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY": "1",
             "NEXPOLY_DEV_GPU_SESSION_ID": self.session_id,
         }
+        if self.cohort is None:
+            # Recovery runs the current checkout's shell entry. Its old
+            # controller launch provenance describes the owned session, not
+            # the image that a current CPU restoration may create. The shell
+            # also handles older, already-running controllers that inherit it.
+            for name in (
+                "NEXPOLY_BUILD_REVISION",
+                "NEXPOLY_BUILD_SOURCE_TREE",
+                "NEXPOLY_BACKEND_DEPENDENCY_LOCK_SHA256",
+                "NEXPOLY_BACKEND_BUILD_CONFIG_SHA256",
+            ):
+                environment.pop(name, None)
         if self.cohort is not None:
             try:
                 self.cohort.verify()

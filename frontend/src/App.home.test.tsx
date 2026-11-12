@@ -9,7 +9,7 @@ import { preloadPage } from "./pages";
 
 // These cases exercise routing after transport; cold loading is covered separately.
 beforeAll(async () => {
-  await Promise.all(["structureWorkbench", "databaseFilter", "polytaoGeneration", "homopolymerPrediction", "monomerDft", "databaseQuery", "database", "knowledge", "monomerMdSimulation", "mdSimulationDemo", "monomerPolymerization", "highThroughputWorkflowDemo", "experimentWorkflowDemo", "reverseDesign", "conditionalGeneration", "explorer", "labData"].map(module => preloadPage(module as Parameters<typeof preloadPage>[0])));
+  await Promise.all(["researchTools", "structureWorkbench", "databaseFilter", "polytaoGeneration", "homopolymerPrediction", "monomerDft", "databaseQuery", "database", "knowledge", "monomerMdSimulation", "mdSimulationDemo", "monomerPolymerization", "highThroughputWorkflowDemo", "experimentWorkflowDemo", "reverseDesign", "conditionalGeneration", "explorer", "labData"].map(module => preloadPage(module as Parameters<typeof preloadPage>[0])));
 });
 
 vi.mock("./components/DatabaseFilterPage", () => ({
@@ -34,48 +34,32 @@ afterEach(() => {
 });
 
 describe("智聚万物首页", () => {
-  it("侧栏按研发阶段组织模块，并将结构工作台独立置顶", () => {
+  it("侧栏保留实验工具统一入口，并将总览和结构工作台独立置顶", () => {
     render(<App />);
-
     const navigation = screen.getByRole("navigation", { name: "业务模块" });
+    const overview = screen.getByRole("button", { name: "系统总览" });
     const structureWorkbench = screen.getByRole("button", { name: "结构工作台" });
-    const groupTitles = Array.from(
-      navigation.querySelectorAll<HTMLButtonElement>("section > button")
-    ).map((button) => button.getAttribute("aria-label"));
-
-    expect(structureWorkbench.closest("section")).toBeNull();
-    expect(groupTitles).toEqual([
-      "材料发现 Discover",
-      "材料设计 Build",
-      "实验优化 Optimize",
-      "数据管理 Data"
-    ]);
-
-    const expectedModules = new Map([
-      [
-        "材料发现 Discover",
-        ["知识检索", "聚合物生成", "单体逆合成反推", "聚合物相似性探索", "数据库查询", "数据库筛选", "数据库分析"]
-      ],
-      [
-        "材料设计 Build",
-        ["均聚物性质预测", "单体正向聚合", "MD 模拟", "单体 MD 模拟", "单体 DFT", "条件聚合物生成"]
-      ],
-      ["实验优化 Optimize", ["Tg 逆向设计", "高通量优化演示"]]
-    ]);
-
-    expectedModules.forEach((labels, title) => {
-      const toggle = screen.getByRole("button", { name: title });
-      fireEvent.click(toggle);
-      expect(
-        Array.from(
-          toggle.closest("section")?.querySelectorAll<HTMLElement>("[data-module-id]") ?? []
-        ).map((item) => item.textContent?.trim())
-      ).toEqual(labels);
-    });
-
+    const researchTools = screen.getByRole("button", { name: "实验工具" });
+    expect(overview.closest("section")).toBeNull();
+    expect(
+      Array.from(navigation.querySelectorAll("[data-module-id]"))
+        .slice(0, 3)
+        .map(item => item.getAttribute("data-module-id"))
+    ).toEqual(["overview", "structureWorkbench", "researchTools"]);
     const dataGroup = screen.getByRole("button", { name: "数据管理 Data" }) as HTMLButtonElement;
+    const assistant = screen.getByRole("button", { name: "智能助手" });
+    const buttons: HTMLElement[] = Array.from(navigation.querySelectorAll("button"));
+    expect(structureWorkbench.closest("section")).toBeNull();
+    expect(researchTools.closest("section")).toBeNull();
+    expect(buttons.indexOf(overview)).toBeLessThan(buttons.indexOf(structureWorkbench));
+    expect(buttons.indexOf(structureWorkbench)).toBeLessThan(buttons.indexOf(researchTools));
+    expect(buttons.indexOf(researchTools)).toBeLessThan(buttons.indexOf(dataGroup));
+    expect(buttons.indexOf(dataGroup)).toBeLessThan(buttons.indexOf(assistant));
+    expect(screen.queryByRole("button", { name: "材料发现 Discover" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "材料设计 Build" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "实验优化 Optimize" })).toBeNull();
+    expect(assistant.getAttribute("aria-current")).toBe("page");
     expect(dataGroup.disabled).toBe(true);
-    expect(dataGroup.closest("section")?.querySelectorAll("[data-module-id]")).toHaveLength(0);
   });
 
   it("支持数据库筛选规范路由，并将旧地址历史替换到新路由", () => {
@@ -83,7 +67,7 @@ describe("智聚万物首页", () => {
     const canonical = render(<App />);
 
     expect(screen.getByTestId("database-filter-page")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "数据库筛选" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("button", { name: "实验工具" }).getAttribute("aria-current")).toBe("page");
 
     window.history.pushState({}, "", "/database");
     fireEvent(window, new PopStateEvent("popstate"));
@@ -557,18 +541,26 @@ describe("智聚万物首页", () => {
     });
   });
 
-  it("离开首页后清除工作台活动态并允许对话入口返回首页", () => {
+  it("离开首页后清除工作台活动态，并由智能助手入口返回原工作台地址", () => {
     render(<App />);
 
+    const workspace = screen.getByTitle("智聚万物智能体工作台");
+    const assistant = screen.getByRole("button", { name: "智能助手" });
     const conversationEntry = screen.getByRole("button", { name: "对话" });
+    expect(assistant.getAttribute("aria-current")).toBe("page");
     expect(conversationEntry.getAttribute("aria-current")).toBe("page");
 
-    fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
-    fireEvent.click(screen.getByRole("button", { name: "知识检索" }));
+    fireEvent.click(screen.getByRole("button", { name: "实验工具" }));
 
+    expect(assistant.getAttribute("aria-current")).toBeNull();
     expect(conversationEntry.getAttribute("aria-current")).toBeNull();
-    fireEvent.click(conversationEntry);
+    fireEvent.click(assistant);
+    expect(window.location.pathname).toBe("/");
+    expect(assistant.getAttribute("aria-current")).toBe("page");
     expect(conversationEntry.getAttribute("aria-current")).toBe("page");
+    const reopenedWorkspace = screen.getByTitle("智聚万物智能体工作台");
+    expect(reopenedWorkspace).not.toBe(workspace);
+    expect(reopenedWorkspace.getAttribute("src")).toBe(WORKSPACE_URL);
   });
 
   it("离开首页后不再把 OpenScience 项目标记为当前页面", async () => {
@@ -610,8 +602,7 @@ describe("智聚万物首页", () => {
       expect(activeProject?.getAttribute("aria-current")).toBe("page");
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
-    fireEvent.click(screen.getByRole("button", { name: "知识检索" }));
+    fireEvent.click(screen.getByRole("button", { name: "实验工具" }));
     fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
 
     const inactiveProject = screen
@@ -695,7 +686,9 @@ describe("游客共享工作空间", () => {
   it("允许游客切换真实模块页面，任务入口弹出登录表单", async () => {
     const fetch = guestPage();
     await screen.findByRole("button", { name: "游客账号菜单" });
-    fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
+    fireEvent.click(screen.getByRole("button", { name: "实验工具" }));
+    await screen.findByRole("heading", { name: "实验工具" });
+    fireEvent.click(screen.getByRole("button", { name: /材料发现.*展开/ }));
     fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
     expect(await screen.findByTestId("database-filter-page")).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();

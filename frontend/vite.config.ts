@@ -8,10 +8,12 @@ import { retryableImports } from "./build/retryable-imports.ts";
 import { developmentEntryPreload } from "./build/development-entry-preload.ts";
 import { ketcherRuntimePlugin } from "./build/ketcher-runtime-plugin.ts";
 import { developmentMcpProxy } from "./build/development-mcp-proxy.ts";
+import { developmentMonitoringProxy } from "./build/development-monitoring-proxy.ts";
 
 export default defineConfig(({ mode, command, isPreview }) => {
   const env = loadEnv(mode, process.cwd(), "DEV_PROXY_");
   const mcpEnv = loadEnv(mode, process.cwd(), "DEV_MCP_PROXY_");
+  const monitoringEnv = loadEnv(mode, process.cwd(), ["DEV_MONITORING_PROXY_", "VITE_SERVER_MONITORING_ENABLED"]);
   const editorEnv = loadEnv(mode, process.cwd(), "VITE_STRUCTURE_EDITOR_ENGINE");
   const editor = structureEngine(process.env.VITE_STRUCTURE_EDITOR_ENGINE ?? editorEnv.VITE_STRUCTURE_EDITOR_ENGINE);
   const proxyTarget =
@@ -19,6 +21,11 @@ export default defineConfig(({ mode, command, isPreview }) => {
     env.DEV_PROXY_TARGET?.trim() ||
     "http://localhost:8000";
   const proxy = {
+    ...developmentMonitoringProxy(
+      process.env.VITE_SERVER_MONITORING_ENABLED ?? monitoringEnv.VITE_SERVER_MONITORING_ENABLED,
+      process.env.DEV_MONITORING_PROXY_TARGET ?? monitoringEnv.DEV_MONITORING_PROXY_TARGET,
+      process.env.DEV_MONITORING_PROXY_SOCKET ?? monitoringEnv.DEV_MONITORING_PROXY_SOCKET
+    ),
     "/api": {
       target: proxyTarget,
       // Preserve the browser-facing Host for the API's Origin/Referer check.

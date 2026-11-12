@@ -1,3 +1,4 @@
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +23,19 @@ def clean_auth_environment(monkeypatch):
 def test_secure_cookies_remain_default():
     configured = AuthSettings.from_settings(settings())
     assert configured.cookie_secure
+    assert not configured.production_http_enabled
+    assert not configured.development_http_enabled
+
+
+@pytest.mark.parametrize('changes,enabled', [
+    ({}, True), ({'cookie_name': 'nexpoly_dev_custom'}, True),
+    ({'runtime_environment': 'prod'}, False), ({'runtime_environment': ''}, False),
+    ({'cookie_secure': True}, False), ({'cookie_name': 'nexpoly_session'}, False),
+])
+def test_http_forwarding_requires_development_runtime_and_cookie(monkeypatch, changes, enabled):
+    monkeypatch.setenv('AUTH_COOKIE_SECURE', 'false')
+    configured = AuthSettings.from_settings(settings(('http://localhost:9001',)))
+    assert replace(configured, **changes).development_http_enabled is enabled
     assert not configured.production_http_enabled
 
 

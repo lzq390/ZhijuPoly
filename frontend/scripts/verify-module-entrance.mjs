@@ -10,20 +10,46 @@ await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ executablePath: process.env.MOTION_CHROMIUM_PATH || undefined, headless: true, args: ["--no-sandbox"] });
 const results = [];
 
-async function choose(page, width, module) {
+const groupByModule = Object.fromEntries([
+  ["discover", ["knowledge", "polytaoGeneration", "monomerRetrosynthesis", "explorer", "databaseQuery", "databaseFilter", "database"]],
+  ["build", ["homopolymerPrediction", "monomerPolymerization", "mdSimulationDemo", "monomerMdSimulation", "monomerDft", "conditionalGeneration"]],
+  ["optimize", ["reverseDesign", "highThroughputWorkflowDemo"]]
+].flatMap(([group, modules]) => modules.map(module => [module, group])));
+async function sidebar(page, width) {
   if (width < 1024 && !(await page.locator("#np-mobile-navigation").count())) await page.getByRole("button", { name: "打开导航", exact: true }).click();
-  const nav = page.locator(width < 1024 ? "#np-mobile-navigation" : ".np-sidebar-desktop");
-  const groups = nav.locator('.np-sidebar-group__trigger[aria-expanded="false"]:not(:disabled)');
-  while (await groups.count()) await groups.first().click();
-  if (module === "home") await nav.locator(".np-sidebar__brand-link").click();
-  else await nav.locator(`[data-module-id="${module}"]`).click();
+  return page.locator(width < 1024 ? "#np-mobile-navigation" : ".np-sidebar-desktop");
+}
+async function prepareChoice(page, width, module) {
+  if (["home", "structureWorkbench", "researchTools"].includes(module)) {
+    const nav = await sidebar(page, width);
+    return nav.locator(`[data-module-id="${module}"]`);
+  }
+  const groupId = groupByModule[module];
+  assert.ok(groupId, `Known research category for ${module}`);
+  if (!(await page.locator('[data-module-content="researchTools"][data-module-phase="idle"]:not([inert])').count())) {
+    const nav = await sidebar(page, width);
+    await nav.locator('[data-module-id="researchTools"]').click();
+    await settled(page, "researchTools");
+  }
+  await page.getByRole("heading", { name: "实验工具", exact: true }).waitFor();
+  const group = page.locator(`main [data-research-group="${groupId}"]`);
+  const reopen = group.locator('.np-research-tools__collapse[aria-expanded="false"]');
+  if (await reopen.count()) await reopen.click();
+  const expand = group.locator('.np-research-tools__expand:not(.np-research-tools__collapse)[aria-expanded="false"]');
+  if (await expand.count()) await expand.click();
+  return group.locator(`[data-module-id="${module}"]`);
+}
+async function choose(page, width, module) {
+  const target = await prepareChoice(page, width, module);
+  await target.click();
 }
 async function settled(page, module) {
   await page.locator(`[data-module-content="${module}"][data-module-phase="idle"]:not([inert])`).waitFor();
 }
 async function cycle(page, width, module) {
+  const target = await prepareChoice(page, width, module);
   const begin = await page.evaluate(() => ({ animations: window.__motion.animations.length, frames: window.__motion.frames.length, module: document.querySelector("[data-module-content]").dataset.moduleContent }));
-  await choose(page, width, module); await settled(page, module);
+  await target.click(); await settled(page, module);
   const run = await page.evaluate((begin) => ({ animations: window.__motion.animations.slice(begin.animations), frames: window.__motion.frames.slice(begin.frames),
     finalOpacity: getComputedStyle(document.querySelector("[data-module-content]")).opacity, focused: document.activeElement === document.querySelector("main") }), begin);
   assert.equal(run.animations.length, 2, `${module}: one exit and one entry`);
@@ -53,9 +79,16 @@ async function stopTrace(client) {
 }
 try {
   for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 390, height: 844 }, { width: 2560, height: 1440 }]
-    .filter((v) => !process.env.MOTION_VIEWPORT || Number(process.env.MOTION_VIEWPORT) === v.width)) {
+    .filter((v) => !process.env.MOTION_VIEWPORT || process.env.MOTION_VIEWPORT.split(",").map(Number).includes(v.width))) {
     const context = await browser.newContext({ viewport, reducedMotion: "no-preference" });
-    await context.route("**/*", (r) => new URL(r.request().url()).origin === new URL(base).origin && ["GET", "HEAD"].includes(r.request().method()) ? r.continue() : r.abort());
+    await context.route("**/*", route => {
+      const request = route.request(), url = new URL(request.url());
+      if (url.origin !== new URL(base).origin || !["GET", "HEAD"].includes(request.method())) return route.abort();
+      if (url.pathname === "/api/v1/auth/session") return route.fulfill({ json: { authenticated: true,
+        user: { id: "module-motion-fixture", username: "模块切换测试", must_change_password: false },
+        session_id: "module-motion-session", csrf_token: "module-motion-csrf", capabilities: {} } });
+      return route.continue();
+    });
     const page = await context.newPage(); page.setDefaultTimeout(25000);
     const errors = []; page.on("pageerror", (error) => errors.push(error.message));
     await page.addInitScript(() => {
@@ -92,6 +125,7 @@ try {
       await page.waitForFunction(() => document.querySelector("[data-structure-editor]")?.dataset.editorStatus === "ready", null, { timeout: 30000 });
       assert.equal(await page.evaluate(() => window.__motion.animations.length), 0, "No first-load transition");
       await page.evaluate(() => { window.__retainedCanvas = document.querySelector("[data-structure-editor]"); });
+      await prepareChoice(page, viewport.width, "knowledge");
       if (viewport.width === 1440) {
         client = await context.newCDPSession(page);
         await client.send("Tracing.start", { categories: "devtools.timeline,blink.user_timing,v8.execute", transferMode: "ReturnAsStream" }); tracing = true;
@@ -114,30 +148,32 @@ try {
       }
       if (viewport.width === 1440) {
         for (const module of ["polytaoGeneration", "explorer", "databaseQuery", "databaseFilter", "database", "homopolymerPrediction", "monomerPolymerization", "mdSimulationDemo", "monomerMdSimulation", "monomerDft", "conditionalGeneration", "reverseDesign", "highThroughputWorkflowDemo", "home"]) result.modules.push(await cycle(page, viewport.width, module));
-        await choose(page, viewport.width, "databaseFilter");
+        // Rapid retargeting uses the three persistent sidebar entries. Research
+        // siblings are now cards in inert page content during transitions.
+        await choose(page, viewport.width, "researchTools");
         await page.waitForFunction(() => document.querySelector("[data-module-content]")?.dataset.modulePhase === "exiting");
         await page.evaluate(() => {
-          document.querySelector('.np-sidebar-desktop [data-module-id="knowledge"]').click();
-          document.querySelector('.np-sidebar-desktop [data-module-id="mdSimulationDemo"]').click();
+          document.querySelector('.np-sidebar-desktop [data-module-id="home"]').click();
+          document.querySelector('.np-sidebar-desktop [data-module-id="structureWorkbench"]').click();
         });
-        await settled(page, "mdSimulationDemo"); result.latestTarget = true;
-        await choose(page, viewport.width, "databaseFilter");
-        await page.waitForFunction(() => document.querySelector('[data-module-content="databaseFilter"]')?.dataset.modulePhase === "blank");
-        await page.evaluate(() => document.querySelector('.np-sidebar-desktop [data-module-id="knowledge"]').click());
-        await settled(page, "knowledge"); result.blankReplacement = true;
-        await choose(page, viewport.width, "databaseFilter");
+        await settled(page, "structureWorkbench"); result.latestTarget = true;
+        await choose(page, viewport.width, "researchTools");
+        await page.waitForFunction(() => document.querySelector('[data-module-content="researchTools"]')?.dataset.modulePhase === "blank");
+        await page.evaluate(() => document.querySelector('.np-sidebar-desktop [data-module-id="home"]').click());
+        await settled(page, "home"); result.blankReplacement = true;
+        await choose(page, viewport.width, "researchTools");
         await page.waitForFunction(() => {
-          const content = document.querySelector('[data-module-content="databaseFilter"]');
+          const content = document.querySelector('[data-module-content="researchTools"]');
           const opacity = content ? Number(getComputedStyle(content).opacity) : 0;
           return content?.dataset.modulePhase === "entering" && opacity > .1 && opacity < .8;
         });
         await page.evaluate(() => {
-          for (const module of ["knowledge", "mdSimulationDemo", "monomerDft"]) document.querySelector(`.np-sidebar-desktop [data-module-id="${module}"]`).click();
+          for (const module of ["home", "structureWorkbench", "home"]) document.querySelector(`.np-sidebar-desktop [data-module-id="${module}"]`).click();
         });
-        await settled(page, "monomerDft"); result.latestDuringEntry = true;
+        await settled(page, "home"); result.latestDuringEntry = true;
         const historyLength = await page.evaluate(() => history.length);
-        await page.goBack(); await settled(page, "databaseFilter");
-        await page.goForward(); await settled(page, "monomerDft");
+        await page.goBack(); await settled(page, "researchTools");
+        await page.goForward(); await settled(page, "home");
         assert.equal(await page.evaluate(() => history.length), historyLength);
         result.historyNavigation = true;
         let slowRequested = false;

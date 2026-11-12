@@ -27,6 +27,7 @@ type WorkbenchSelectProps<T extends string> = {
   ariaDescribedBy?: string;
   ariaInvalid?: boolean;
   constrainToScrollParent?: boolean;
+  placement?: "auto" | "bottom";
 };
 
 export function WorkbenchSelect<T extends string>({
@@ -39,7 +40,8 @@ export function WorkbenchSelect<T extends string>({
   ariaLabelledBy,
   ariaDescribedBy,
   ariaInvalid,
-  constrainToScrollParent = false
+  constrainToScrollParent = false,
+  placement = "auto"
 }: WorkbenchSelectProps<T>) {
   const [open, setOpen] = useState(false);
   const presence = useMotionPresence<HTMLDivElement>(open);
@@ -53,46 +55,76 @@ export function WorkbenchSelect<T extends string>({
   const selectedOption = options[selectedIndex] ?? options[0];
   const listboxId = `${id}-listbox`;
 
-  function positionMenu() {
+  function positionMenu(makeRoom = false) {
     const trigger = triggerRef.current;
     if (!trigger) return;
-    const bounds = trigger.getBoundingClientRect();
+    let bounds = trigger.getBoundingClientRect();
     if (!constrainToScrollParent) {
       const below = window.innerHeight - bounds.bottom;
-      setOpensUp(below < 300 && bounds.top > below);
+      setOpensUp(placement === "auto" && below < 300 && bounds.top > below);
       return;
     }
     // An inline menu must fit inside every clipping ancestor, including a
     // workbench's scroll region beneath its fixed toolbar.
-    let top = 0, bottom = window.innerHeight;
+    const clippingParents: HTMLElement[] = [];
     for (let parent = rootRef.current?.parentElement; parent; parent = parent.parentElement) {
       if (!/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)) continue;
-      const rect = parent.getBoundingClientRect();
-      top = Math.max(top, rect.top + parent.clientTop);
-      bottom = Math.min(bottom, rect.top + parent.clientTop + parent.clientHeight);
+      clippingParents.push(parent);
     }
+    const clippingBounds = () => {
+      let top = 0, bottom = window.innerHeight;
+      let bottomClip: HTMLElement | null = null;
+      for (const parent of clippingParents) {
+        const rect = parent.getBoundingClientRect();
+        top = Math.max(top, rect.top + parent.clientTop);
+        const edge = rect.top + parent.clientTop + parent.clientHeight;
+        if (edge < bottom || (edge === bottom && !bottomClip)) { bottom = edge; bottomClip = parent; }
+      }
+      return { top, bottom, bottomClip };
+    };
     const style = getComputedStyle(rootRef.current!);
     const gap = parseFloat(style.getPropertyValue("--np-select-menu-gap")) || 6;
     const maxHeight = parseFloat(style.getPropertyValue("--np-select-menu-max-height")) || 310;
     const menu = presence.ref.current;
     const desired = menu ? Math.min(maxHeight, menu.scrollHeight + 2) : maxHeight;
+    if (makeRoom && placement === "bottom" && menu) {
+      // Make room once on opening/resizing, never in the scroll handler: a
+      // user scrolling an open menu must not trigger a scroll feedback loop.
+      for (const parent of clippingParents) {
+        if (!/(auto|scroll)/.test(getComputedStyle(parent).overflowY)) continue;
+        const { top, bottom, bottomClip } = clippingBounds();
+        bounds = trigger.getBoundingClientRect();
+        const targetHeight = Math.min(desired, Math.max(0, bottom - top - bounds.height - gap - 2));
+        const needed = targetHeight - (bottom - bounds.bottom - gap - 2);
+        if (needed <= 0) break;
+        // Scrolling an ancestor of the limiting clip moves that clip with the
+        // trigger, so it cannot create any usable space inside the clip.
+        if (bottomClip && !bottomClip.contains(parent)) continue;
+        const delta = Math.min(needed, Math.max(0, bounds.top - top), Math.max(0, parent.scrollHeight - parent.clientHeight - parent.scrollTop));
+        if (delta > 0) parent.scrollTop += delta;
+      }
+      bounds = trigger.getBoundingClientRect();
+    }
+    const { top, bottom } = clippingBounds();
     const below = Math.max(0, bottom - bounds.bottom - gap - 2);
     const above = Math.max(0, bounds.top - top - gap - 2);
-    const up = below < desired && above > below;
+    const up = placement === "auto" && below < desired && above > below;
     setOpensUp(up);
     setMenuMaxHeight(Math.min(maxHeight, up ? above : below));
   }
 
   useLayoutEffect(() => {
     if (!open || !constrainToScrollParent) return;
-    positionMenu();
-    window.addEventListener("resize", positionMenu);
-    window.addEventListener("scroll", positionMenu, true);
+    positionMenu(true);
+    const resize = () => positionMenu(true);
+    const scroll = () => positionMenu();
+    window.addEventListener("resize", resize);
+    window.addEventListener("scroll", scroll, true);
     return () => {
-      window.removeEventListener("resize", positionMenu);
-      window.removeEventListener("scroll", positionMenu, true);
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("scroll", scroll, true);
     };
-  }, [open, constrainToScrollParent]);
+  }, [open, constrainToScrollParent, placement]);
 
   useEffect(() => {
     if (!open) return;

@@ -151,6 +151,8 @@ jobs:
             find scripts/tests -maxdepth 1 -type f -name 'test_*.py' \
               ! -name 'test_*_poc_*.py' \
               ! -name 'test_lightweight_*.py' \
+              ! -name 'test_server_monitoring_*.py' \
+              ! -name 'test_verify_server_monitoring_*.py' \
               ! -name 'test_acceptance_*.py' \
               ! -name 'test_gpu1_acceptance_audit.py' \
               ! -name 'test_dev_gpu_session.py' \
@@ -191,14 +193,17 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements-knowledge-poc.lock
+          cache-dependency-path: |
+            backend/requirements-knowledge-poc.lock
+            server_monitoring/requirements.lock
       - name: Install locked lightweight dependencies
-        run: python -m pip install --require-hashes -r backend/requirements-knowledge-poc.lock
+        run: python -m pip install --require-hashes -r backend/requirements-knowledge-poc.lock -r server_monitoring/requirements.lock
       - name: Run lightweight backend tests
         run: |
           mapfile -t tests < <(
             find scripts/tests -maxdepth 1 -type f \
               \( -name 'test_*_poc_*.py' -o -name 'test_lightweight_*.py' \
+              -o -name 'test_server_monitoring_*.py' -o -name 'test_verify_server_monitoring_*.py' \
               -o -name 'test_acceptance_*.py' -o -name 'test_gpu1_acceptance_audit.py' \) -print | sort
           )
           if (( ${#tests[@]} == 0 )); then
@@ -206,6 +211,8 @@ jobs:
             exit 1
           fi
           python -m pytest "${tests[@]}" -q
+      - name: Run standalone server monitoring tests
+        run: python -m pytest server_monitoring/tests -q
 
   property-filter-mcp-tests:
     name: Independent property-filter MCP tests

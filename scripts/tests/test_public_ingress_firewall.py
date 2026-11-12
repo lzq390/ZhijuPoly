@@ -57,7 +57,7 @@ class PublicIngressFirewallTests(unittest.TestCase):
         )
         self.assertEqual(
             firewall.PROTECTED_PORTS,
-            (81, 9000, 9001, 9011, 10000, 10001),
+            (81, 9000, 9001, 9003, 9011, 10000, 10001),
         )
 
     def test_adjacent_networks_cannot_combine_into_allow_all(self) -> None:
@@ -106,7 +106,7 @@ class PublicIngressFirewallTests(unittest.TestCase):
         self.assertIn("hook prerouting priority -310", rendered)
         self.assertIn('meta iifname != "lo" fib daddr type local', rendered)
         self.assertIn(
-            "tcp dport { 81, 9000, 9001, 9011, 10000, 10001 }",
+            "tcp dport { 81, 9000, 9001, 9003, 9011, 10000, 10001 }",
             rendered,
         )
         self.assertIn("ip saddr @allowed_ipv4", rendered)

@@ -22,6 +22,98 @@ DEV_BUILDKIT_CONFIG = REPOSITORY_ROOT / "ops" / "config" / "buildkitd.dev.toml"
 
 
 class DevServerGpuScriptTests(unittest.TestCase):
+    def test_old_controller_build_environment_only_allows_session_cleanup_commands(self) -> None:
+        function = self._shell_function_source("select_build_revision_for_command")
+        cleanup = (
+            "gpu-session-status", "gpu-session-down", "gpu-session-maintenance-stop",
+            "gpu-session-stop-owned-internal", "gpu-session-restore-cpu-internal",
+        )
+        for command in (*cleanup, "up", "up-prebuilt", "build-backend", "gpu-session-up",
+                        "gpu-session-up-locked-internal", "maintenance-up-prebuilt"):
+            with self.subTest(command=command):
+                result = subprocess.run(
+                    ["bash", "-c", f'''
+set -euo pipefail
+CURRENT_SOURCE_REVISION={'b' * 40}
+NEXPOLY_BUILD_REVISION={'a' * 40}
+{function}
+select_build_revision_for_command "$1"
+[[ "$NEXPOLY_BUILD_REVISION" == "$CURRENT_SOURCE_REVISION" ]]
+''', "old-controller-test", command], capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 0 if command in cleanup else 2, result.stderr)
+
+    def test_worker_cleanup_reads_its_original_locks_after_checkout_update(self) -> None:
+        function = self._shell_function_source("gpu_session_original_worker_locks")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            def git(*arguments: str) -> str:
+                return subprocess.check_output(
+                    ("git", "-C", str(root), *arguments), text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+            git("init", "-q")
+            files = [root / "workers" / name / "requirements.lock"
+                     for name in ("monomer_md_worker", "monomer_dft_worker")]
+            for index, path in enumerate(files):
+                path.parent.mkdir(parents=True)
+                path.write_text(f"original-{index}\n")
+            git("add", ".")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "-qm", "original locks")
+            source, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+            expected = ["sha256:" + hashlib.sha256(path.read_bytes()).hexdigest() for path in files]
+            for path in files:
+                path.write_text("new checkout lock\n")
+            git("add", ".")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "-qm", "updated locks")
+            new_tree = git("rev-parse", "HEAD^{tree}")
+            for selected_tree, accepted in ((tree, True), (new_tree, False)):
+                with self.subTest(tree=selected_tree):
+                    result = subprocess.run(
+                        ["bash", "-c", f'''
+set -euo pipefail
+GPU_SESSION_PYTHON="$1"
+ROOT_DIR="$2"
+{function}
+gpu_session_original_worker_locks "$3" "$4"
+''', "old-lock-test", sys.executable, str(root), source, selected_tree],
+                        capture_output=True, text=True,
+                    )
+                    if accepted:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout.split(), expected)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual(result.stdout, "")
+
+    def test_internal_recovery_rejects_replaced_controller_and_ignores_dotenv_target(self) -> None:
+        function = self._shell_function_source("gpu_session_verify_internal_recovery")
+        with tempfile.TemporaryDirectory() as raw:
+            controller = Path(raw) / "controller.py"
+            controller.write_text("import json, sys; print(json.dumps({'session_id': sys.argv[2]}))\n")
+            # The small wrapper passes its test session into the status helper.
+            for live_session, accepted in (("a" * 32, True), ("b" * 32, False)):
+                result = subprocess.run(
+                    ["bash", "-c", f'''
+set -euo pipefail
+GPU_SESSION_PYTHON=controller_wrapper
+GPU_SESSION_CONTROLLER="$2"
+PYTHON_EXECUTABLE="$1"
+controller_wrapper() {{ "$PYTHON_EXECUTABLE" -I "$GPU_SESSION_CONTROLLER" status "$LIVE_SESSION"; }}
+LIVE_SESSION="$3"
+NATIVE_RECOVERY_FLAG_INPUT=1
+NATIVE_RECOVERY_SESSION_INPUT={'a' * 32}
+NEXPOLY_DEV_GPU_SESSION_ID={'c' * 32}
+{function}
+gpu_session_verify_internal_recovery
+[[ "$NEXPOLY_DEV_GPU_SESSION_ID" == "$NATIVE_RECOVERY_SESSION_INPUT" ]]
+''', "recovery-fence-test", sys.executable, str(controller), live_session],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
     def test_prebuilt_isolation_start_checks_identity_and_schema_before_traffic(self) -> None:
         function = self._shell_function_source("up_prebuilt")
         with tempfile.TemporaryDirectory() as raw:
@@ -167,6 +259,7 @@ gpu_backend_stop_exact_session() {{ event backend-stop; }}
 worker_drain_stop() {{ event "md:$CURRENT_SOURCE_REVISION"; }}
 dft_worker_drain_stop() {{ event "dft:$CURRENT_SOURCE_REVISION"; }}
 dft_worker_assert_stopped_runtime() {{ :; }}
+gpu_session_original_worker_locks() {{ printf '%s %s' sha256:md-lock sha256:lock; }}
 verify_gpu_session_runtime_paths_removed() {{ event verified; }}
 wait_backend_configured() {{ exit 97; }}
 docker() {{ exit 98; }}
@@ -215,7 +308,9 @@ gpu_backend_stop_exact_session() {{ event backend-stop; }}
 worker_drain_stop() {{ event "md:$CURRENT_SOURCE_REVISION"; }}
 dft_worker_drain_stop() {{ event "dft:$DFT_WORKER_VERSION"; }}
 dft_worker_assert_stopped_runtime() {{ :; }}
+gpu_session_original_worker_locks() {{ printf '%s %s' sha256:md-lock sha256:lock; }}
 gpu_operator_up() {{ event operator-up; }}
+verify_backend_image_build_identity() {{ :; }}
 compute_backend_config_hash() {{ printf hash; }}
 wait_backend_configured() {{ event backend-healthy; }}
 verify_backend_drift() {{ :; }}
@@ -246,6 +341,7 @@ EVENT_LOG="$1"
 NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY=1
 COMPOSE=(compose)
 prepare_dft_runtime_directories() {{ :; }}
+verify_backend_image_build_identity() {{ :; }}
 gpu_operator_up() {{ echo unexpected-operator-restart >&2; return 99; }}
 compute_backend_config_hash() {{ printf hash; }}
 compose() {{ printf 'cpu-up\\n' >> "$EVENT_LOG"; }}
@@ -257,6 +353,80 @@ gpu_session_restore_cpu_internal
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(log.read_text().splitlines(), ["cpu-up", "healthy", "verified"])
+
+    def test_cpu_recovery_refuses_stale_image_before_recreating_backend(self) -> None:
+        functions = "\n".join(self._shell_function_source(name) for name in (
+            "verify_backend_image_build_identity", "gpu_session_restore_cpu_internal",
+        ))
+        expected = {"revision": "a" * 40, "tree": "b" * 40,
+                    "lock": "sha256:" + "c" * 64, "config": "sha256:" + "d" * 64}
+        with tempfile.TemporaryDirectory() as raw:
+            log = Path(raw) / "events"
+            for stale in (None, "revision", "tree", "lock", "config"):
+                with self.subTest(stale=stale):
+                    log.unlink(missing_ok=True)
+                    image = {key: "stale" if key == stale else value for key, value in expected.items()}
+                    result = subprocess.run(
+                        ["bash", "-c", f'''
+set -euo pipefail
+LOG="$1"
+NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY=1
+NEXPOLY_BUILD_REVISION={expected['revision']}
+CURRENT_SOURCE_TREE={expected['tree']}
+BACKEND_DEPENDENCY_LOCK_SHA256={expected['lock']}
+BACKEND_BUILD_CONFIG_SHA256={expected['config']}
+DEV_BACKEND_IMAGE=test-backend
+COMPOSE=(compose)
+docker() {{
+  case "$*" in
+    *org.opencontainers.image.revision*) printf '%s' {image['revision']} ;;
+    *com.nexpoly.source.tree*) printf '%s' {image['tree']} ;;
+    *com.nexpoly.backend.dependency-lock*) printf '%s' {image['lock']} ;;
+    *com.nexpoly.backend.build-config*) printf '%s' {image['config']} ;;
+    *) return 98 ;;
+  esac
+}}
+prepare_dft_runtime_directories() {{ :; }}
+compute_backend_config_hash() {{ printf hash; }}
+compose() {{ printf 'cpu-up\n' >> "$LOG"; }}
+wait_backend_configured() {{ :; }}
+verify_backend_drift() {{ [[ "$1" == cpu-recovery ]]; }}
+{functions}
+gpu_session_restore_cpu_internal
+''', "image-provenance-test", str(log)], capture_output=True, text=True,
+                    )
+                    self.assertEqual(result.returncode, 0 if stale is None else 1, result.stderr)
+                    self.assertEqual(log.exists(), stale is None)
+
+    def test_cpu_recovery_can_preserve_only_its_live_controllers_old_operator(self) -> None:
+        function = self._shell_function_source("gpu_operator_verify_cpu_recovery")
+        with tempfile.TemporaryDirectory() as raw:
+            controller = Path(raw) / "controller.py"
+            for same_session, same_operator, accepted in (
+                (True, True, True), (False, True, False), (True, False, False),
+            ):
+                controller.write_text("import json; print(json.dumps(" + repr({
+                    "session_id": ("d" if same_session else "e") * 32,
+                    "source_sha": "a" * 40, "source_tree": "b" * 40,
+                }) + "))\n")
+                result = subprocess.run(
+                    ["bash", "-c", f'''
+set -euo pipefail
+GPU_SESSION_PYTHON="$1"
+GPU_SESSION_CONTROLLER="$2"
+NEXPOLY_DEV_GPU_SESSION_ID={'d' * 32}
+CURRENT_SOURCE_REVISION={'f' * 40}
+CURRENT_SOURCE_TREE={'f' * 40}
+gpu_operator_status_is_current() {{
+  [[ "${{1:-$CURRENT_SOURCE_REVISION}}" == {('a' if same_operator else 'c') * 40} &&
+    "${{2:-$CURRENT_SOURCE_TREE}}" == {'b' * 40} ]]
+}}
+{function}
+gpu_operator_verify_cpu_recovery
+''', "recovery-operator-test", sys.executable, str(controller)],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
 
     def test_worker_teardown_uses_only_the_same_controllers_original_source(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -279,6 +449,7 @@ DFT_WORKER_LOCK_SHA256=sha256:lock
 worker_drain_stop() {{ printf '%s %s\\n' "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE" >> "$LOG"; }}
 dft_worker_drain_stop() {{ printf '%s\\n' "$DFT_WORKER_VERSION" >> "$LOG"; }}
 dft_worker_assert_stopped_runtime() {{ :; }}
+gpu_session_original_worker_locks() {{ printf '%s %s' sha256:md-lock sha256:lock; }}
 {function}
 gpu_session_stop_workers
 [[ "$CURRENT_SOURCE_REVISION" == current-checkout && "$CURRENT_SOURCE_TREE" == current-tree ]]
@@ -397,6 +568,7 @@ dft_worker_drain_stop() {{
   [[ "$DFT_WORKER_VERSION" == dev:{'b' * 40}:{'c' * 40}:sha256:lock ]]
 }}
 dft_worker_assert_stopped_runtime() {{ :; }}
+gpu_session_original_worker_locks() {{ printf '%s %s' sha256:md-lock sha256:lock; }}
 gpu_session_restore_cpu_internal() {{
   RESTORE_CALLS=$((RESTORE_CALLS + 1))
   printf '%s\n' restore-cpu >> "$FALLBACK_LOG"
@@ -436,7 +608,9 @@ gpu_session_up_rollback
             )
         return completed, controller_calls, fallback_calls
 
-    def _run_gpu_session_up(self, *, direct: bool) -> list[str]:
+    def _run_gpu_session_up(
+        self, *, direct: bool, previous_status: str = "stopped",
+    ) -> list[str]:
         with tempfile.TemporaryDirectory() as raw:
             calls = Path(raw) / "calls.log"
             harness = f"""
@@ -449,6 +623,7 @@ GPU_SESSION_CONTROLLER=ignored-controller
 GPU_SESSION_ROLLBACK_ARMED=false
 DFT_WORKER_SOCKET_DIR=/ignored-dft-socket
 CALLS="$2"
+PREVIOUS_STATUS="$3"
 GPU_COMPOSE=(fake_gpu_compose)
 COMPOSE=(fake_cpu_compose)
 
@@ -465,6 +640,7 @@ validate_dft_session_prerequisites() {{ record verify-dft; }}
 verify_direct_cpu_backend_baseline() {{ record verify-direct-baseline; }}
 build_backend_image() {{ record build-backend; }}
 verify_backend_image_build_identity() {{ record verify-image; }}
+gpu_operator_up() {{ record operator-up; }}
 gpu_session_up_rollback() {{ record rollback; }}
 dft_worker_ctl() {{ record "dft-$*"; }}
 dft_worker_session_record() {{ record "dft-record-$1"; }}
@@ -484,7 +660,9 @@ gpu_backend_candidate_identity_lost() {{ return 9; }}
 curl() {{ printf '%s\n' '{{"status":"ok"}}'; }}
 fake_controller() {{
   record "controller-$*"
-  if [[ "$*" == *" up --execute"* ]]; then
+  if [[ "$*" == *" status" ]]; then
+    printf '{{"status":"%s"}}\n' "$PREVIOUS_STATUS"
+  elif [[ "$*" == *" up --execute"* ]]; then
     printf '%s\n' '{{"status":"plane-ready","session_id":"dddddddddddddddddddddddddddddddd"}}'
   fi
 }}
@@ -515,11 +693,12 @@ gpu_session_up
                     "gpu-session-up-harness",
                     "1" if direct else "0",
                     str(calls),
+                    previous_status,
                 ],
                 text=True,
                 capture_output=True,
             )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.returncode, 0 if previous_status == "stopped" else 1, completed.stderr)
             return calls.read_text(encoding="utf-8").splitlines()
 
     def _asset_verifier_source(self) -> str:
@@ -668,6 +847,50 @@ gpu_session_up
             source[drift_start:drift_end],
         )
         self.assertIn("git ls-files --others --exclude-standard", source)
+
+    def test_native_build_only_forwards_configured_proxy_names_without_values(self) -> None:
+        function = self._shell_function_source("build_backend_image")
+        allowed = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
+        unwanted = ("ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "CUSTOM_PROXY")
+        with tempfile.TemporaryDirectory() as raw:
+            log = Path(raw) / "build-arguments"
+            for configured in ({}, {key: "http://test-only-secret.invalid" for key in allowed},
+                               {"HTTPS_PROXY": "http://test-only-secret.invalid", "http_proxy": ""}):
+                with self.subTest(configured_names=sorted(configured)):
+                    environment = {key: value for key, value in os.environ.items()
+                                   if key not in (*allowed, *unwanted)}
+                    environment.update({key: "ignored-test-only-secret" for key in unwanted})
+                    environment.update(configured)
+                    result = subprocess.run(
+                        ["bash", "-c", f'''
+set -euo pipefail
+LOG="$1"
+COMPOSE=(compose)
+NEXPOLY_BUILD_REVISION=revision
+CURRENT_SOURCE_TREE=tree
+BACKEND_DEPENDENCY_LOCK_SHA256=lock
+BACKEND_BUILD_CONFIG_SHA256=config
+DEV_PYPI_INDEX_URL=index
+DEV_PYPI_MIRROR_URL=mirror
+DEV_BACKEND_IMAGE=image
+assert_clean_candidate() {{ :; }}
+assert_default_builder() {{ :; }}
+compose() {{ printf '%s\\0' "$@" > "$LOG"; }}
+docker() {{ [[ "$*" == 'image inspect image' ]]; }}
+{function}
+build_backend_image
+''', "build-proxy-test", str(log)], env=environment, capture_output=True, text=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    arguments = log.read_bytes().decode().split("\0")[:-1]
+                    expected = [key for key in allowed if configured.get(key)]
+                    self.assertEqual(arguments[-(2 * len(expected) + 1):], [
+                        argument for key in expected for argument in ("--build-arg", key)
+                    ] + ["backend"])
+                    self.assertEqual([key for key in allowed if key in arguments], expected)
+                    self.assertFalse(set(unwanted) & set(arguments))
+                    self.assertNotIn("test-only-secret", " ".join(arguments))
+                    self.assertEqual(result.stdout, "")
 
     def test_direct_start_skips_only_runtime_cleanliness_checks(self) -> None:
         gate = self._shell_function_source(
@@ -885,16 +1108,42 @@ worker_stop() { :; }
             up,
         )
         self.assertNotIn("ensure_cpu_backend_baseline", up)
-        self.assertNotIn("gpu_operator_up", up)
+        self.assertLess(up.index('get("status") != "stopped"'), up.index("gpu_operator_up"))
+        self.assertLess(up.index("gpu_operator_up"), up.index("verify_backend_drift"))
+
+    def test_operator_upgrade_cannot_interrupt_an_unfinished_controller(self) -> None:
+        for direct in (False, True):
+            for status in ("ready", "isolation-waiting", "cleanup-blocked"):
+                with self.subTest(direct=direct, status=status):
+                    self.assertEqual(
+                        self._run_gpu_session_up(direct=direct, previous_status=status),
+                        ["controller--I ignored-controller status"],
+                    )
+
+    def test_provenance_checks_do_not_restart_operator_or_require_stopped_session(self) -> None:
+        check = self._shell_function_source("assert_clean_candidate_unless_direct_start")
+        result = subprocess.run(
+            ["bash", "-c", f'''
+set -euo pipefail
+NEXPOLY_DEV_GPU_DIRECT_START=1
+gpu_operator_up() {{ exit 97; }}
+GPU_SESSION_PYTHON=unexpected_controller
+unexpected_controller() {{ exit 98; }}
+{check}
+assert_clean_candidate_unless_direct_start
+'''], capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_9001_direct_start_reuses_cpu_backend_without_build_or_recreate(
         self,
     ) -> None:
         direct_calls = self._run_gpu_session_up(direct=True)
-        self.assertEqual(direct_calls[0], "verify-direct-baseline")
+        self.assertEqual(direct_calls[:3], [
+            "controller--I ignored-controller status", "operator-up", "verify-direct-baseline",
+        ])
         self.assertNotIn("build-backend", direct_calls)
         self.assertNotIn("verify-image", direct_calls)
-        self.assertNotIn("operator-up", direct_calls)
         self.assertNotIn("ensure-cpu-baseline", direct_calls)
         self.assertNotIn("cpu-backend-up", direct_calls)
         self.assertEqual(direct_calls.count("gpu-backend-up"), 1)

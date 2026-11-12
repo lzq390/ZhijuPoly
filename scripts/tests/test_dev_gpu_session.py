@@ -9570,6 +9570,36 @@ def test_activate_command_waits_for_matching_post_signal_full_audit(
     assert signals == [session.signal.SIGUSR1]
 
 
+def test_recovery_does_not_reuse_controller_launch_build_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = session.SessionController(
+        tmp_path / ("run-" + "d" * 32), "a" * 40, "b" * 40, direct_start=True,
+    )
+    build_keys = (
+        "NEXPOLY_BUILD_REVISION", "NEXPOLY_BUILD_SOURCE_TREE",
+        "NEXPOLY_BACKEND_DEPENDENCY_LOCK_SHA256", "NEXPOLY_BACKEND_BUILD_CONFIG_SHA256",
+    )
+    for key in build_keys:
+        monkeypatch.setenv(key, "old-controller-provenance")
+    monkeypatch.setenv("NEXPOLY_DEV_USER_ISOLATION_ENABLED", "true")
+    environments: list[dict[str, str]] = []
+
+    def recover(_command, **kwargs):
+        environments.append(kwargs["env"])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(session.subprocess, "run", recover)
+    assert controller._recovery_command("gpu-session-stop-owned-internal") is True
+    assert len(environments) == 1
+    environment = environments[0]
+    assert not set(build_keys) & environment.keys()
+    assert environment["NEXPOLY_DEV_GPU_SESSION_ID"] == "d" * 32
+    assert environment["NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY"] == "1"
+    assert environment["NEXPOLY_DEV_GPU_DIRECT_START"] == "1"
+    assert environment["NEXPOLY_DEV_USER_ISOLATION_ENABLED"] == "true"
+
+
 def test_automatic_recovery_restores_cpu_before_waiting_for_mps_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

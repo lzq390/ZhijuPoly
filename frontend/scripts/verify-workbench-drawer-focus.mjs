@@ -24,12 +24,12 @@ function fixture(total) {
 async function snapshot(page) {
   return page.evaluate(() => {
     const drawer = document.querySelector(".np-sw-drawer");
-    const title = Array.from(document.querySelectorAll(".np-module-page-title")).find(element => element.getBoundingClientRect().width > 0);
+    const title = Array.from(document.querySelectorAll(".np-module-page-title, .np-research-tools__intro h1")).find(element => element.getBoundingClientRect().width > 0);
     const main = document.querySelector(".np-app-shell__body > main").getBoundingClientRect();
     const titleBox = title.getBoundingClientRect();
     const active = document.activeElement;
-    return { phase: drawer?.dataset.motionPhase, focusInDrawer: drawer?.contains(active),
-      focusedLabel: active.getAttribute("aria-label") || active.tagName,
+    return { phase: drawer?.dataset.motionPhase, focusInDrawer: Boolean(drawer?.contains(active)),
+      focusedLabel: active.getAttribute("aria-label") || (active.tagName === "BUTTON" ? active.textContent?.trim() : null) || active.tagName,
       focusedInert: Boolean(active.closest("[inert]")), title: { x: titleBox.x - main.x, y: titleBox.y - main.y } };
   });
 }
@@ -46,12 +46,16 @@ async function expectDrawerFocus(page) {
   return state;
 }
 
-async function expectClosed(page) {
+async function expectClosed(page, expectedFocus = "展开反推结果") {
   await page.waitForFunction(() => document.querySelector(".np-sw-drawer")?.dataset.motionPhase === "closed");
-  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "展开反推结果");
+  await page.waitForFunction(label => {
+    const active = document.activeElement;
+    return (active?.getAttribute("aria-label") || active?.textContent?.trim()) === label;
+  }, expectedFocus);
   await page.waitForTimeout(150);
   const state = await snapshot(page);
   assert.equal(state.focusInDrawer, false);
+  assert.equal(state.focusedLabel, expectedFocus);
   assert.equal(state.focusedInert, false);
   return state;
 }
@@ -66,7 +70,11 @@ try {
         await context.route("**/*", route => {
           const request = route.request(), url = new URL(request.url());
           if (url.origin !== new URL(base).origin) return route.abort();
-          if (url.pathname.endsWith("/monomer-retrosynthesis")) {
+          if (url.pathname === "/api/v1/auth/session") return route.fulfill({ json: { authenticated: true,
+            user: { id: "drawer-focus-fixture", username: "反推焦点测试", must_change_password: false },
+            session_id: "drawer-focus-session", csrf_token: "drawer-focus-csrf", capabilities: {} } });
+          if (url.pathname === "/api/v1/usage/entitlements") return route.fulfill({ json: { enabled: false } });
+          if (request.method() === "POST" && url.pathname.endsWith("/monomer-retrosynthesis")) {
             fixtureRequests++;
             return route.fulfill({ json: fixture(total) });
           }
@@ -79,7 +87,8 @@ try {
           await page.goto(`${base}/structure-workbench`);
           await page.waitForFunction(() => document.querySelector("[data-structure-editor]")?.dataset.editorStatus === "ready", null, { timeout: 45000 });
           await page.getByRole("button", { name: "功能参数", exact: true }).click();
-          await page.getByRole("button", { name: "设置单体逆合成反推参数" }).click();
+          await page.getByRole("button", { name: "打开单体逆合成反推", exact: true }).click();
+          await page.locator('[data-module-content="monomerRetrosynthesis"][data-module-phase="idle"]:not([inert])').waitFor();
           await page.getByRole("textbox", { name: "目标单体 SMILES" }).fill("CCO");
           await page.getByRole("button", { name: "运行反推", exact: true }).click();
           result.initial = await expectDrawerFocus(page);
@@ -90,7 +99,9 @@ try {
           assert.equal((await snapshot(page)).focusedLabel, "关闭单体反推结果");
           await page.screenshot({ path: resolve(output, `${name}-open.png`) });
           await page.keyboard.press("Escape");
-          result.closed = await expectClosed(page);
+          // The independent form stays visible; closing the first run restores
+          // its submit button, while subsequent opens restore the reopen handle.
+          result.closed = await expectClosed(page, "运行反推");
           await page.getByRole("button", { name: "展开反推结果", exact: true }).click();
           result.reopened = await expectDrawerFocus(page);
           await page.getByRole("button", { name: "关闭单体反推结果", exact: true }).click();
@@ -107,12 +118,10 @@ try {
           // Platform navigation must remain available while this local overlay
           // opens; the retained module must cancel any pending focus afterwards.
           if (viewport.width >= 1024) {
-            const group = page.locator('.np-sidebar-desktop [data-group-id="discover"] .np-sidebar-group__trigger');
-            if (await group.getAttribute("aria-expanded") === "false") await group.click();
             assert.equal(await page.locator(".np-sidebar-desktop").evaluate(element => element.inert), false);
             await page.evaluate(() => {
               document.querySelector('[aria-label="展开反推结果"]').click();
-              document.querySelector('.np-sidebar-desktop [data-module-id="knowledge"]').click();
+              document.querySelector('.np-sidebar-desktop [data-module-id="researchTools"]').click();
             });
           } else {
             await page.evaluate(() => {
@@ -120,11 +129,10 @@ try {
               document.querySelector('[aria-label="打开导航"]').click();
             });
             await page.waitForFunction(() => document.querySelector("#np-mobile-navigation")?.dataset.motionPhase === "open");
-            const group = page.locator('#np-mobile-navigation [data-group-id="discover"] .np-sidebar-group__trigger');
-            if (await group.getAttribute("aria-expanded") === "false") await group.click();
-            await page.locator('#np-mobile-navigation [data-module-id="knowledge"]').click();
+            await page.locator('#np-mobile-navigation [data-module-id="researchTools"]').click();
           }
-          await page.locator('[data-module-content="knowledge"][data-module-phase="idle"]:not([inert])').waitFor();
+          await page.locator('[data-module-content="researchTools"][data-module-phase="idle"]:not([inert])').waitFor();
+          await page.getByRole("heading", { name: "实验工具", exact: true }).waitFor();
           await page.waitForTimeout(250);
           result.afterNavigation = await snapshot(page);
           assert.equal(result.afterNavigation.focusInDrawer, false);

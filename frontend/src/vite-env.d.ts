@@ -6,6 +6,7 @@ interface ImportMetaEnv {
   readonly VITE_AGENT_WORKSPACE_URL?: string;
   readonly VITE_SUBSCRIPTION_ENABLED?: string;
   readonly VITE_REGISTRATION_ENABLED?: string;
+  readonly VITE_SERVER_MONITORING_ENABLED?: string;
 }
 
 interface ImportMeta {

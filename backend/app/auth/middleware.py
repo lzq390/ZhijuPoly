@@ -83,10 +83,11 @@ class AuthenticationMiddleware:
                                headers={'Cache-Control': 'private, no-store'})(scope, receive, send)
 
         trusted_origin = headers.get('origin') in self.auth.settings.allowed_origins
-        if getattr(self.auth.settings, 'production_http_enabled', False) and path != '/health':
+        if (getattr(self.auth.settings, 'production_http_enabled', False)
+                or getattr(self.auth.settings, 'development_http_enabled', False)) and path != '/health':
             # Network access remains governed by the ingress firewall. HTTP
             # forwarding can change the browser-facing host/port; bind writes
-            # to that actual entry instead of one fixed public address.
+            # to that actual entry in production and ordinary development.
             raw_headers = scope.get('headers', ())
             entry_origin = _http_entry_origin(raw_headers)
             if entry_origin is None:

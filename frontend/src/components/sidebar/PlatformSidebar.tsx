@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import {
   Archive,
   ChevronDown,
+  Database,
   Ellipsis,
   Folder,
   LoaderCircle,
@@ -26,6 +27,7 @@ import {
 
 export type AppShellModuleItem = {
   id: string;
+  placement?: "afterAssistant";
   label: string;
   description: string;
   route: string;
@@ -45,7 +47,7 @@ export type AppShellModuleGroup = {
 type PlatformSidebarProps = {
   standaloneModules: AppShellModuleItem[];
   moduleGroups: AppShellModuleGroup[];
-  onOpenHome: () => void;
+  assistantModule: AppShellModuleItem;
   onOpenUsage?: () => void;
   onOpenGuide?: () => void;
   onOpenSubscription?: () => void;
@@ -85,7 +87,7 @@ type PlatformSidebarProps = {
 export function PlatformSidebar({
   standaloneModules,
   moduleGroups,
-  onOpenHome,
+  assistantModule,
   onOpenUsage,
   onOpenGuide,
   onOpenSubscription,
@@ -135,7 +137,6 @@ export function PlatformSidebar({
     <div className="np-sidebar">
       <SidebarBrand
         actions={brandActions}
-        onOpenHome={onOpenHome}
         gpuSessionControl={gpuSessionControl}
         gpuStatusId={gpuStatusId}
         closeButtonRef={closeButtonRef}
@@ -146,6 +147,7 @@ export function PlatformSidebar({
         <SidebarModuleNavigation
           standaloneModules={standaloneModules}
           moduleGroups={moduleGroups}
+          assistantModule={assistantModule}
           expandedGroupIds={expandedGroupIds}
           onToggleGroup={onToggleGroup}
           onNavigate={onNavigate}
@@ -193,14 +195,12 @@ export function PlatformSidebar({
 
 function SidebarBrand({
   actions,
-  onOpenHome,
   gpuSessionControl,
   gpuStatusId,
   closeButtonRef,
   onClose
 }: {
   actions?: ReactNode;
-  onOpenHome: () => void;
   gpuSessionControl: DevGpuSessionControl | null;
   gpuStatusId: string;
   closeButtonRef?: RefObject<HTMLButtonElement | null>;
@@ -208,7 +208,7 @@ function SidebarBrand({
 }) {
   return (
     <div className="np-sidebar__brand">
-      <button type="button" className="np-sidebar__brand-link" onClick={onOpenHome}>
+      <div className="np-sidebar__brand-identity">
         <span className="np-sidebar__brand-mark" aria-hidden="true">
           <MessageSquare />
         </span>
@@ -216,7 +216,7 @@ function SidebarBrand({
           <span className="np-sidebar__brand-name">智聚万物</span>
           <span className="np-sidebar__brand-subtitle" aria-hidden="true">NexPoly Lab</span>
         </span>
-      </button>
+      </div>
       {gpuSessionControl || onClose || actions ? (
         <div className="np-sidebar__brand-actions">
           {actions}
@@ -243,6 +243,7 @@ function SidebarBrand({
 function SidebarModuleNavigation({
   standaloneModules,
   moduleGroups,
+  assistantModule,
   expandedGroupIds,
   onToggleGroup,
   onNavigate,
@@ -251,21 +252,23 @@ function SidebarModuleNavigation({
 }: {
   standaloneModules: AppShellModuleItem[];
   moduleGroups: AppShellModuleGroup[];
+  assistantModule: AppShellModuleItem;
   expandedGroupIds: ReadonlySet<AppShellModuleGroup["id"]>;
   onToggleGroup: (groupId: AppShellModuleGroup["id"]) => void;
   onNavigate: PlatformSidebarProps["onNavigate"];
   pendingTarget?: NavigationTarget | null;
   showPending?: boolean;
 }) {
+  const primaryModules = standaloneModules.filter(item => item.placement !== "afterAssistant");
+  const secondaryModules = standaloneModules.filter(item => item.placement === "afterAssistant");
   return (
     <nav className="np-sidebar__modules" aria-label="业务模块">
-      {standaloneModules.length > 0 ? (
+      {primaryModules.length > 0 ? (
         <div className="np-sidebar__standalone">
-          {standaloneModules.map((item) => (
+          {primaryModules.map((item) => (
             <SidebarModuleButton
               key={item.id}
               item={item}
-              primaryWorkspace={item.id === "structureWorkbench"}
               onNavigate={onNavigate}
               pending={pendingTarget?.id === item.id}
               showPending={showPending}
@@ -287,21 +290,19 @@ function SidebarModuleNavigation({
                 aria-label={accessibleLabel}
                 aria-expanded={isExpanded}
                 disabled={!hasItems}
-                className="np-sidebar-group__trigger"
+                className="np-sidebar-module np-sidebar-group__trigger"
+                title={!hasItems ? group.emptyLabel ?? "暂无模块" : undefined}
+                data-active={isExpanded ? "true" : "false"}
                 data-expanded={isExpanded ? "true" : "false"}
                 onClick={() => onToggleGroup(group.id)}
               >
-                <span className="np-sidebar-group__labels" aria-hidden="true">
-                  <span className="np-sidebar-group__label">{group.label}</span>
-                  <span className="np-sidebar-group__secondary">{group.secondaryLabel}</span>
+                <span className="np-sidebar-module__icon" aria-hidden="true">
+                  <Database />
                 </span>
+                <span className="np-sidebar-module__label" aria-hidden="true">{group.label}</span>
                 {hasItems ? (
                   <ChevronDown className="np-sidebar-group__chevron" aria-hidden="true" />
-                ) : (
-                  <span className="np-sidebar-group__empty">
-                    {group.emptyLabel ?? "暂无模块"}
-                  </span>
-                )}
+                ) : null}
               </button>
 
               {isExpanded ? (
@@ -316,19 +317,28 @@ function SidebarModuleNavigation({
           );
         })}
       </div>
+
+      <SidebarModuleButton
+        item={assistantModule}
+        onNavigate={onNavigate}
+        pending={pendingTarget?.id === assistantModule.id}
+        showPending={showPending}
+      />
+      {secondaryModules.map(item => (
+        <SidebarModuleButton key={item.id} item={item} onNavigate={onNavigate}
+          pending={pendingTarget?.id === item.id} showPending={showPending} />
+      ))}
     </nav>
   );
 }
 
 function SidebarModuleButton({
   item,
-  primaryWorkspace = false,
   onNavigate,
   pending = false,
   showPending = false
 }: {
   item: AppShellModuleItem;
-  primaryWorkspace?: boolean;
   onNavigate: PlatformSidebarProps["onNavigate"];
   pending?: boolean;
   showPending?: boolean;
@@ -340,11 +350,9 @@ function SidebarModuleButton({
       data-active={item.isActive ? "true" : "false"}
       data-pending={pending || undefined}
       aria-busy={pending || undefined}
-      data-primary-workspace={primaryWorkspace ? "true" : undefined}
       aria-current={item.isActive ? "page" : undefined}
-      aria-label={primaryWorkspace ? item.label : undefined}
       title={item.description}
-      className={`np-sidebar-module${primaryWorkspace ? " np-sidebar-module--primary-workspace" : ""}`}
+      className="np-sidebar-module"
       onClick={() => onNavigate(item.onClick, { id: item.id, label: item.label })}
     >
       <span className="np-sidebar-module__icon" aria-hidden="true">

@@ -154,7 +154,7 @@ for (const probe of [taskStatusThemes, serviceFailure]) {
                 if name == 'verify-workbench-drawer-focus.mjs':
                     tail = 'result.initial = await expectDrawerFocus(page);'
                     expected_tail = original[name][original[name].index(tail):].replace(
-                        'result.closed = await expectClosed(page);', 'result.closed = await expectClosed(page, submitTrigger);').replace(
+                        'result.closed = await expectClosed(page, "运行反推");', 'result.closed = await expectClosed(page, submitTrigger);').replace(
                         'result.error = String(error);', 'result.error = String(error);\n'
                         '          result.focusFailure = error.focusIdentity || await focusIdentity(page, submitTrigger).catch(() => null);')
                     self.assertEqual(adapted[adapted.index(tail):], expected_tail)
@@ -218,7 +218,11 @@ for (const [index, block] of blocks.entries()) {
     [base, '/monomer-retrosynthesis', 'GET', 'continue'],
     [base, '/api/v1/monomer-retrosynthesis', 'GET', 'continue'],
     [base, '/api/v1/monomer-retrosynthesis', 'PUT', 'abort'],
+    [base, '/other/monomer-retrosynthesis', 'POST', 'abort'],
     [base, '/api/v1/auth/session', 'GET', 'continue'],
+    [base, '/api/v1/auth/session', 'POST', 'abort'],
+    [base, '/api/v1/usage/entitlements', 'GET', 'continue'],
+    [base, '/api/v1/usage/entitlements', 'HEAD', 'continue'],
     ['http://localhost:19001', '/api/v1/monomer-retrosynthesis', 'POST', 'abort'],
   ];
   let fulfilled = 0;
@@ -236,6 +240,106 @@ for (const [index, block] of blocks.entries()) {
             result = subprocess.run([node, '--input-type=module', '-'], input=javascript, text=True,
                                     cwd=tmp, env={'PATH': os.defpath, 'LANG': 'C.UTF-8'}, capture_output=True, timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_workbench_adaptation_rejects_unknown_and_duplicate_source_variants(self):
+        ready = "await page.locator('[data-module-content=\"monomerRetrosynthesis\"][data-module-phase=\"idle\"]:not([inert])').waitFor();"
+        current_entry = 'await page.getByRole("button", { name: "打开单体逆合成反推", exact: true }).click();'
+        for before, after in (
+            (ready, ready.replace(':not([inert])', '')),
+            (current_entry, 'await page.getByRole("button", { name: "Unknown entry" }).click();'),
+            (current_entry, current_entry + '\n          ' + ready + '\n          ' + current_entry),
+            ('expectedFocus = "展开反推结果"', 'expectedFocus = "Unknown trigger"'),
+            ('drawer-focus-fixture', 'unreviewed-auth-fixture'),
+            ('url.pathname === "/api/v1/auth/session"', "url.pathname === '/api/v1/auth/session'"),
+            ('          if (url.pathname === "/api/v1/auth/session") return route.fulfill({ json: { authenticated: true,\n'
+             '            user: { id: "drawer-focus-fixture", username: "反推焦点测试", must_change_password: false },\n'
+             '            session_id: "drawer-focus-session", csrf_token: "drawer-focus-csrf", capabilities: {} } });\n', ''),
+            ('const request = route.request(), url = new URL(request.url());',
+             'const request = route.request(), url = new URL(request.url());\n'
+             '          if (url.pathname === "/api/v1/auth/other") return route.fulfill({ json: {} });'),
+        ):
+            with self.subTest(before=before), tempfile.TemporaryDirectory() as tmp:
+                frontend = Path(tmp) / 'frontend'
+                (frontend / 'scripts').mkdir(parents=True)
+                for name in ('verify-workbench-drawer-focus.mjs', 'verify-motion.mjs'):
+                    source = (package.ROOT / 'frontend/scripts' / name).read_text()
+                    if name == 'verify-workbench-drawer-focus.mjs':
+                        self.assertEqual(source.count(before), 1)
+                        source = source.replace(before, after, 1)
+                    (frontend / 'scripts' / name).write_text(source)
+                with self.assertRaises(package.PackagingError):
+                    package.adapt_workbench_verifiers(frontend)
+
+    def test_legacy_motion_navigation_upgrades_to_the_current_guarded_verifier(self):
+        current = (package.ROOT / 'frontend/scripts/verify-motion.mjs').read_text()
+        start, end = current.index('async function navigation('), current.index('\nasync function checkDrag(')
+        legacy = '''async function navigation(page, width, id) {
+  if (width < 1024) await page.getByRole("button", { name: "打开导航", exact: true }).click();
+  const root = page.locator(width < 1024 ? "#np-mobile-navigation" : ".np-sidebar-desktop");
+  const button = root.locator(`[data-module-id="${id}"]`);
+  if (!(await button.count())) {
+    for (const trigger of await root.locator('.np-sidebar-group__trigger[aria-expanded="false"]:not(:disabled)').all()) await trigger.click();
+  }
+  await button.click();
+  await page.locator(`[data-module-content="${id}"][data-module-phase="idle"]:not([inert])`).waitFor();
+  if (width < 1024) await page.locator(".np-sidebar-mobile-layer").waitFor({ state: "detached" });
+}'''
+        previous = current[:start] + legacy + current[end:]
+        previous = previous.replace('      await nav.evaluate((root) => {',
+                                    '      await nav.locator(\'[data-group-id="discover"] .np-sidebar-group__trigger\').click();\n'
+                                    '      await nav.evaluate((root) => {')
+        previous = previous.replace('["researchTools", "home", "structureWorkbench"]',
+                                    '["knowledge", "databaseQuery", "structureWorkbench"]')
+        with tempfile.TemporaryDirectory() as tmp:
+            motion = Path(tmp) / 'verify-motion.mjs'
+            for source in (current, previous):
+                motion.write_text(source)
+                package.adapt_motion_navigation(motion)
+                self.assertEqual(motion.read_text(), current)
+            for source in (
+                current.replace('[data-module-content="${id}"][data-module-phase="idle"]:not([inert])',
+                                '[data-module-content="${id}"]'),
+                current + current[start:end],
+                current.replace('["researchTools", "home", "structureWorkbench"]',
+                                '["researchTools", "unknown", "structureWorkbench"]'),
+            ):
+                motion.write_text(source)
+                with self.assertRaises(package.PackagingError):
+                    package.adapt_motion_navigation(motion)
+
+    def test_legacy_focus_snapshot_matches_current_identity_and_navigation_checks(self):
+        current = (package.ROOT / 'frontend/scripts/verify-workbench-drawer-focus.mjs').read_text()
+        legacy = current.replace(
+            'await page.getByRole("button", { name: "打开单体逆合成反推", exact: true }).click();\n'
+            '          await page.locator(\'[data-module-content="monomerRetrosynthesis"][data-module-phase="idle"]:not([inert])\').waitFor();',
+            'await page.getByRole("button", { name: "设置单体逆合成反推参数" }).click();')
+        legacy = legacy.replace('focusInDrawer: Boolean(drawer?.contains(active)),', 'focusInDrawer: drawer?.contains(active),')
+        start, end = legacy.index('async function expectClosed('), legacy.index('\ntry {')
+        legacy = legacy[:start] + '''async function expectClosed(page) {
+  await page.waitForFunction(() => document.querySelector(".np-sw-drawer")?.dataset.motionPhase === "closed");
+  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "展开反推结果");
+  await page.waitForTimeout(150);
+  const state = await snapshot(page);
+  assert.equal(state.focusInDrawer, false);
+  assert.equal(state.focusedInert, false);
+  return state;
+}
+''' + legacy[end:]
+        legacy = legacy.replace('result.closed = await expectClosed(page, "运行反推");',
+                                'result.closed = await expectClosed(page);')
+        start = legacy.index('          if (url.pathname === "/api/v1/auth/session")')
+        end = legacy.index('          if (request.method() === "POST"', start)
+        legacy = legacy[:start] + legacy[end:]
+        outputs = []
+        with tempfile.TemporaryDirectory() as tmp:
+            frontend = Path(tmp)
+            (frontend / 'scripts').mkdir()
+            for source in (current, legacy):
+                (frontend / 'scripts/verify-workbench-drawer-focus.mjs').write_text(source)
+                (frontend / 'scripts/verify-motion.mjs').write_text((package.ROOT / 'frontend/scripts/verify-motion.mjs').read_text())
+                package.adapt_workbench_verifiers(frontend)
+                outputs.append((frontend / 'scripts/verify-workbench-drawer-focus.mjs').read_text())
+        self.assertEqual(outputs[0], outputs[1])
 
 
     def test_drawer_focus_requires_exact_submitted_and_remounted_trigger_identity(self):
@@ -274,7 +378,8 @@ const page = {
   getByRole: (role, options) => { reopenLookups++; assert.deepEqual([role, options], ['button', { name: '展开反推结果', exact: true }]);
     return { elementHandle: async () => currentReopen }; },
 };
-async function snapshot() { return { focusInDrawer: false, focusedInert: false }; }
+async function snapshot() { return { focusInDrawer: false, focusedInert: false,
+  focusedLabel: document.activeElement.getAttribute('aria-label') || document.activeElement.textContent }; }
 assert.equal((await expectClosed(page, submit)).focusIdentity.sameElement, true);
 assert.equal(reopenLookups, 0, 'First close must use the captured submitter, never a role/label approximation');
 document.activeElement = sameNameImpostor;
@@ -314,7 +419,7 @@ const main = { getBoundingClientRect: () => ({ x: 4, y: 6 }) };
 const title = { getBoundingClientRect: () => ({ width: 100, x: 20, y: 26 }) };
 let titles = [], drawer = null;
 globalThis.document = { activeElement: active,
-  querySelectorAll: selector => { assert.equal(selector, '.np-module-page-title'); return titles; },
+  querySelectorAll: selector => { assert.equal(selector, '.np-module-page-title, .np-research-tools__intro h1'); return titles; },
   querySelector: selector => selector === '.np-sw-drawer' ? drawer : selector === '.np-app-shell__body > main' ? main : null,
 };
 const page = { evaluate: async callback => callback() };
