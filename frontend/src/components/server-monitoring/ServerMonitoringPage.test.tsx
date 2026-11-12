@@ -364,7 +364,7 @@ it("keeps the compact monitoring interface free of explanatory sampling copy", (
   render(<ServerMonitoringPage control={control()} />);
   expect(screen.queryByText(/每 30 秒记录|采样缺失处保留空缺|最近采样|快照 5 秒|本次采集起点|切换到后台时暂停|纵轴固定|切换显卡保留当前/)).toBeNull();
   expect(document.querySelector('.sm-sample-time, .sm-trend-footer, .sm-footer')).toBeNull();
-  expect(screen.getByRole("button", { name: "刷新服务器监测" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "刷新服务器节点" })).toBeTruthy();
   expect(within(screen.getByRole("region", { name: "服务器参数详情" })).getAllByRole("article")).toHaveLength(6);
   expect(screen.getByRole("group", { name: "趋势指标" })).toBeTruthy();
 });

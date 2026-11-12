@@ -88,10 +88,10 @@ export function ServerMonitoringPage({ control, renderGpuTasks }: { control: Ser
     if (trend === "gpu") return sample?.utilization_percent ?? null;
     return finite(sample?.memory_used_bytes) && finite(gpu.memory_total_bytes) && gpu.memory_total_bytes > 0 ? sample.memory_used_bytes / gpu.memory_total_bytes * 100 : null;
   } })).filter(series => gpuSelection === "all" || series.key === gpuSelection);
-  const stateText = access === "disabled" ? "当前入口未启用服务器监测" : access === "guest" ? "登录后查看服务器状态"
+  const stateText = access === "disabled" ? "当前入口未启用服务器节点" : access === "guest" ? "登录后查看服务器状态"
     : access === "denied" ? "当前账号暂无访问权限" : access === "unavailable" ? "暂时无法确认访问权限" : "正在确认访问权限";
   return <section className="np-module-page sm-page" data-testid="server-monitoring-page">
-    <ModulePageHeader actions={permitted ? <button className="sm-refresh" onClick={refresh} disabled={refreshing} aria-label="刷新服务器监测"><RefreshCw size={14} className={refreshing ? "sm-spin" : ""} />刷新</button> : undefined}>服务器监测</ModulePageHeader>
+    <ModulePageHeader actions={permitted ? <button className="sm-refresh" onClick={refresh} disabled={refreshing} aria-label="刷新服务器节点"><RefreshCw size={14} className={refreshing ? "sm-spin" : ""} />刷新</button> : undefined}>服务器节点</ModulePageHeader>
     {!permitted ? <div className="sm-access" role="status"><div className="sm-access-icon">{access === "checking" ? <LoaderCircle className="sm-spin" /> : <LockKeyhole />}</div><h2>{stateText}</h2><p>{access === "denied" ? "此页面仅向已获授权的账号开放。" : access === "guest" ? "使用已获授权的账号登录，即可查看当前服务器的资源监测。" : access === "unavailable" ? "未展示先前的监测数据，请稍后重试。" : access === "disabled" ? "请使用已启用此功能的开发入口。" : "正在验证当前登录会话。"}</p>
       {access === "guest" && control.login ? <button className="sm-button" onClick={control.login}>登录账号<ArrowUpRight size={15} /></button> : access === "unavailable" ? <button className="sm-button" onClick={refresh}>重新检查<RefreshCw size={14} /></button> : null}
     </div> : <div className="sm-scroll"><div className="sm-content">

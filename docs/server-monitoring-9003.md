@@ -1,8 +1,10 @@
-# 9003 当前服务器监测
+# 服务器节点：9003 预览与 9001 开发环境
 
 当前实现只观察本宿主机：CPU、内存、负载、运行时间、`/` 与 `/data` 文件系统，以及全部物理 NVIDIA GPU。采集器不导入科研后端，不分配 GPU，不调用 Broker、MPS、Worker 或服务恢复接口。
 
 浏览器通过 9003 同源代理访问独立监控 API；监控 API 每次向已有开发后端验证真实会话。只有 `zhiju000`、`zhiju001`、`zhiju002` 的用户名与 UUID 配对可读取指标，授权与会员等级无关。
+
+模块名称为“服务器节点”，获准账号登录后显示在侧栏“智能助手”下方。页面路径保留 `/server-monitoring`。9001 开发环境使用同一监控 API 和账号白名单，按下文的本地 socket 方式接入。
 
 ## 数据链路
 
@@ -94,6 +96,42 @@ python3 scripts/server_monitoring_9003.py preview
 新页面地址为 `http://114.214.255.154:9003/server-monitoring`（也可使用当前 SSH 转发地址）。9003 的其他 API 同时切换到真实开发后端，不再使用模拟身份。Vite 保留浏览器 Host、Origin，不修改现有开发 HTTP 认证配置。
 
 若 9001 与 9003 使用同一主机名，它们共享开发 Cookie。API 每次核对真实会话和 `X-Session-Context`；账号切换或退出后，旧页面不能继续读取监控数据。
+
+## 接入 9001 开发前端
+
+9001 前端在 Docker 网络中运行，不能直接访问宿主 `127.0.0.1:5319`。使用独立用户 socket 服务连接现有 API，无需新增 TCP 监听或更改容器网络：
+
+```text
+9001 /api/v1/server-monitoring/*
+    -> /app/server-monitoring/api.sock (read-only directory bind)
+    -> systemd-socket-proxyd
+    -> 127.0.0.1:5319
+```
+
+先确认独立监控 API 已运行，再执行：
+
+```bash
+python3 scripts/server_monitoring_dev_bridge.py prepare
+python3 scripts/server_monitoring_dev_bridge.py start
+python3 scripts/server_monitoring_dev_bridge.py status
+```
+
+这仅建立 `nexpoly-server-monitoring-dev-bridge.socket` 和同名 `.service`。socket 位于 `/run/user/<uid>/nexpoly-server-monitoring/api.sock`，目录权限 `0700`、socket 权限 `0600`，转发目标固定为本机 5319。服务由连接触发，不自动启用开机启动，不会启动或重启 API、采集器或业务后端。
+
+9001 前端的私有发布配置增加两项环境变量，并将上述 **目录** 只读挂载到 `/app/server-monitoring`：
+
+```text
+VITE_SERVER_MONITORING_ENABLED=true
+DEV_MONITORING_PROXY_SOCKET=/app/server-monitoring/api.sock
+```
+
+Vite 优先使用显式 socket，继续保留 `changeOrigin: false`；其它 API、MCP、智能助手及原有环境配置沿用现有发布。未显式启用的入口不显示服务器节点，也不安装监控代理。不要把运行目录、白名单配置或账号凭据打包到前端源码。
+
+9001 使用封存前端发布，部署时以其现有源码为基线，只叠加本模块及导航、代理变更，保留其它页面和 Ketcher 运行资源。先保存当前容器身份与私有 Compose 配置，使用独立本地候选端口验证，再仅替换 `frontend-dev`；不运行整套开发环境重建命令。回退时使用已保存的原发布 Compose，仅执行 `up -d --no-deps --pull never frontend-dev`，再按需运行 `python3 scripts/server_monitoring_dev_bridge.py stop`。9003 和原监控采集服务继续运行。
+
+9001 页面为 `http://114.214.255.154:9001/server-monitoring`。真实账号浏览器验收脚本可使用 `--base-url http://127.0.0.1:9001`；只允许登录、退出及只读请求，并校验模块名称、侧栏顺序和权限隔离。
+
+## 恢复原 9003 预览
 
 恢复原来的前端预览：
 
@@ -232,3 +270,12 @@ python3 scripts/verify_server_monitoring_live.py \
 - 仅重启独立任务读取器，`gpu-tasks-last-good.json` 已以 `0600` 权限正常写入。指标采集器、监控 API 和 9003 预览进程均未重启；资源趋势继续使用 10:02:04 开始的原采集实例。
 - 三个真实开发账号通过页面与 GPU 交互验收，桌面／手机截图已检查。对首账号仅中断一次浏览器任务 GET，请求失败后两条真实完成记录完整保留、没有普通提示或重试按钮，下一次真实鉴权请求以 200 自动恢复。验收期间实际任务来源均正常，部分失败的回退由自动化测试覆盖。
 - 最终截图与报告位于 `.runtime/server-monitoring-9003/artifacts/monitoring-last-good-final/`；服务切换记录位于 `gpu-last-good-rollout/`。
+
+### 服务器节点接入开发环境（2026-11-12）
+
+- 9001 与 9003 的模块名统一为“服务器节点”，授权侧栏入口紧接“智能助手”。原页面路径与三个开发账号白名单保持兼容。
+- 9001 以其原封存版本为基线，叠加 35 个监控相关前端文件变更；保留原账号、订阅、总览等页面行为、17 个 Ketcher 运行资源、镜像、依赖卷、已有环境变量与网络。新发布名为 `server-nodes-20261112T025600Z`，记录工作区增量哈希，不将未提交变更标记为已有提交。
+- 仅替换开发前端容器，新增私有 Unix socket 桥接。55 个其它容器的 ID、启动时间及监控采集实例在发布前后保持一致；趋势已累计完整的 120 点。
+- 工作区与候选构建通过，候选 Node 22 容器内 155 项测试、桥接脚本 36 项测试通过。首轮宿主单测误用 Node 18 导致假计时器超时，固定 Node 22 后相同 155 项全部通过，未修改业务逻辑绕过失败。
+- 9003、隔离候选及正式 9001 均通过三个真实账号的浏览器验收，包括页面标题、侧栏顺序、GPU 交互、任务回退、匿名拒绝与退出清空；已查看正式入口桌面截图。正式报告及截图位于 `.runtime/server-monitoring-9003/artifacts/server-node-9001/`。
+- 私有发布、源码差异与回退记录位于 `.runtime/server-monitoring-9003/dev-9001/server-nodes-20261112T025600Z/`。恢复原 9001 使用同目录上一级 `control.py rollback --stage <该私有发布目录>`，仅替换开发前端；原封存发布未修改。

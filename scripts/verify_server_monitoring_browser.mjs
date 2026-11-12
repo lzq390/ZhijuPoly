@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Real-login acceptance on the dedicated preview. Never records credentials or traces. */
+/** Real-login acceptance on the development entries. Never records credentials or traces. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -15,7 +15,7 @@ const { values } = parseArgs({ options: {
 } });
 assert(values["password-file"], "Supply a local password file; passwords must not be CLI arguments.");
 const base = new URL(values["base-url"]);
-assert(base.protocol === "http:" && ["localhost", "127.0.0.1"].includes(base.hostname) && base.port === "9003");
+assert(base.protocol === "http:" && ["localhost", "127.0.0.1"].includes(base.hostname) && ["9001", "9003", "29103"].includes(base.port));
 const password = (await fs.readFile(values["password-file"], "utf8")).replace(/^\uFEFF/, "").trim();
 assert(password.length, "Password file is empty.");
 const output = path.resolve(values["output-dir"]);
@@ -31,6 +31,11 @@ async function login(page, username) {
   await dialog.getByLabel("密码", { exact: true }).fill(password);
   await dialog.getByRole("button", { name: "登录", exact: true }).click();
   await page.locator(".sm-status").filter({ hasText: "在线" }).waitFor({ timeout: 30_000 });
+  assert.equal(await page.getByTestId("server-monitoring-page").locator(".np-module-page-title").innerText(), "服务器节点");
+  const modules = page.getByRole("navigation", { name: "业务模块", exact: true });
+  const entries = await modules.getByRole("button").allTextContents();
+  assert.equal(entries.indexOf("服务器节点"), entries.indexOf("智能助手") + 1, "server nodes follow the assistant in the sidebar");
+  assert.equal(await modules.getByRole("button", { name: "服务器节点", exact: true }).getAttribute("aria-current"), "page");
   assert.equal(await page.locator(".sm-gpu").count(), 4);
   assert.match(await page.locator(".sm-host-meta").innerText(), /128 逻辑 CPU/);
 }

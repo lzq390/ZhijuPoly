@@ -27,6 +27,7 @@ import {
 
 export type AppShellModuleItem = {
   id: string;
+  placement?: "afterAssistant";
   label: string;
   description: string;
   route: string;
@@ -258,11 +259,13 @@ function SidebarModuleNavigation({
   pendingTarget?: NavigationTarget | null;
   showPending?: boolean;
 }) {
+  const primaryModules = standaloneModules.filter(item => item.placement !== "afterAssistant");
+  const secondaryModules = standaloneModules.filter(item => item.placement === "afterAssistant");
   return (
     <nav className="np-sidebar__modules" aria-label="业务模块">
-      {standaloneModules.length > 0 ? (
+      {primaryModules.length > 0 ? (
         <div className="np-sidebar__standalone">
-          {standaloneModules.map((item) => (
+          {primaryModules.map((item) => (
             <SidebarModuleButton
               key={item.id}
               item={item}
@@ -321,6 +324,10 @@ function SidebarModuleNavigation({
         pending={pendingTarget?.id === assistantModule.id}
         showPending={showPending}
       />
+      {secondaryModules.map(item => (
+        <SidebarModuleButton key={item.id} item={item} onNavigate={onNavigate}
+          pending={pendingTarget?.id === item.id} showPending={showPending} />
+      ))}
     </nav>
   );
 }

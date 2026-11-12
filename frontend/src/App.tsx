@@ -588,7 +588,8 @@ function AppContent() {
   const standaloneModules: AppShellModuleItem[] = [
     ...(serverMonitoring.access === "allowed" ? [{
       id: "serverMonitoring",
-      label: "服务器监测",
+      label: "服务器节点",
+      placement: "afterAssistant" as const,
       description: "查看当前服务器的资源状态和最近一小时趋势。",
       route: "/server-monitoring",
       icon: <Server className="h-4 w-4" />,

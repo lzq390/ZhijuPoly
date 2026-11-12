@@ -23,7 +23,8 @@ export default defineConfig(({ mode, command, isPreview }) => {
   const proxy = {
     ...developmentMonitoringProxy(
       process.env.VITE_SERVER_MONITORING_ENABLED ?? monitoringEnv.VITE_SERVER_MONITORING_ENABLED,
-      process.env.DEV_MONITORING_PROXY_TARGET ?? monitoringEnv.DEV_MONITORING_PROXY_TARGET
+      process.env.DEV_MONITORING_PROXY_TARGET ?? monitoringEnv.DEV_MONITORING_PROXY_TARGET,
+      process.env.DEV_MONITORING_PROXY_SOCKET ?? monitoringEnv.DEV_MONITORING_PROXY_SOCKET
     ),
     "/api": {
       target: proxyTarget,
