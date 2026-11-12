@@ -1330,7 +1330,10 @@ def validate_lightweight_backend_tests(ci_text: str, failures: list[str]) -> Non
     gate = workflow_job_body(ci_text, "ci-gate", failures)
     if body is None or script_body is None or gate is None:
         return
-    for pattern in ("test_*_poc_*.py", "test_lightweight_*.py"):
+    for pattern in (
+        "test_*_poc_*.py", "test_lightweight_*.py",
+        "test_server_monitoring_*.py", "test_verify_server_monitoring_*.py",
+    ):
         if f"! -name '{pattern}'" not in script_body:
             failures.append(f"script-tests must exclude lightweight pytest pattern {pattern}")
         if f"-name '{pattern}'" not in body:
@@ -1340,12 +1343,20 @@ def validate_lightweight_backend_tests(ci_text: str, failures: list[str]) -> Non
         "      PYTHONPATH: backend\n",
         '          python-version: "3.11"',
         "python -m pip install --require-hashes -r backend/requirements-knowledge-poc.lock",
+        "-r server_monitoring/requirements.lock",
         "find scripts/tests -maxdepth 1 -type f",
         'if (( ${#tests[@]} == 0 )); then',
         'python -m pytest "${tests[@]}" -q',
     ):
         if marker not in body:
             failures.append(f"lightweight-backend-tests is missing: {marker}")
+    monitoring_step = (
+        "      - name: Run standalone server monitoring tests\n"
+        "        run: python -m pytest server_monitoring/tests -q"
+    )
+    if [step.rstrip() for step in workflow_step_blocks(body)
+            if step.startswith(monitoring_step.splitlines()[0] + "\n")] != [monitoring_step]:
+        failures.append("lightweight-backend-tests must run the complete standalone server monitoring suite")
     if "      - lightweight-backend-tests\n" not in gate:
         failures.append("ci-gate must require lightweight-backend-tests")
 
