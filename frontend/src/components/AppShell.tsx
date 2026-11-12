@@ -190,6 +190,7 @@ export function AppShell({
   const isPolytaoWorkbench = activeModule === "polytaoGeneration";
   const isUsagePage = activeModule === "personalUsage";
   const isUsageGuidePage = activeModule === "usageGuide";
+  const isServerMonitoringPage = activeModule === "serverMonitoring";
   const isResearchWorkbench =
     isSimilarityExplorerWorkbench ||
     isDatabaseQueryWorkbench ||
@@ -207,9 +208,9 @@ export function AppShell({
     isStructureWorkbench ||
     isReverseDesignWorkbench ||
     isConditionalGenerationWorkbench;
-  // Usage, guide, and overview own a fixed header and an inner scroll region, so their containing
+  // Usage, guide, overview, and monitoring own a fixed header and an inner scroll region, so their containing
   // block must have a bounded height just like the workbenches.
-  const hasViewportLayout = isResearchWorkbench || isUsagePage || isUsageGuidePage || isOverviewPage;
+  const hasViewportLayout = isResearchWorkbench || isUsagePage || isUsageGuidePage || isOverviewPage || isServerMonitoringPage;
 
   const activeGroupId =
     moduleGroups.find((group) => group.items.some((item) => item.isActive))?.id ?? null;
@@ -465,6 +466,7 @@ export function AppShell({
                 ? `min-h-0 flex-1 overflow-hidden ${
                     isUsagePage || isUsageGuidePage ||
                     isOverviewPage ||
+                    isServerMonitoringPage ||
                     isReverseDesignWorkbench ||
                     isConditionalGenerationWorkbench ||
                     isStructureWorkbench ||
@@ -496,7 +498,7 @@ export function AppShell({
                 ? "flex h-full min-h-0 flex-col"
                 : [
                     "relative mx-auto flex flex-col",
-                    isResearchToolsPage ? "min-h-full gap-0" : isUsagePage || isUsageGuidePage || isOverviewPage ? "h-full min-h-0 gap-0" : isResearchWorkbench ? "h-full gap-0" : "gap-8",
+                    isResearchToolsPage ? "min-h-full gap-0" : isUsagePage || isUsageGuidePage || isOverviewPage || isServerMonitoringPage ? "h-full min-h-0 gap-0" : isResearchWorkbench ? "h-full gap-0" : "gap-8",
                     fullBleed || isResearchToolsPage ? "max-w-none" : "max-w-[1480px]"
                   ].join(" ")
             }

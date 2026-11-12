@@ -20,6 +20,7 @@ import {
   Microscope,
   Route,
   Search,
+  Server,
   Sparkles
 } from "lucide-react";
 import {
@@ -33,7 +34,7 @@ import type { LabDataView } from "./components/LabDataPage";
 import type { StructureCanvasOwnerHandle } from "./components/StructureWorkbenchPage";
 import type { StructureSyncResult } from "./structure/workspace";
 import {
-  SubscriptionPage, PersonalUsagePage, UsageGuidePage, OverviewPage, ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
+  SubscriptionPage, PersonalUsagePage, UsageGuidePage, OverviewPage, ServerMonitoringPage, ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
   ExperimentWorkflowDemoPage, HighThroughputWorkflowDemoPage, HomopolymerPropertyPredictionPage,
   KnowledgeSearch, LabDataPage, PolymerMdSimulationPage, MonomerMdSimulationPage, MonomerDftPage,
   MonomerPolymerizationPage, MonomerRetrosynthesisPage, PolytaoGenerationPage, ReverseDesignPage,
@@ -48,6 +49,8 @@ import { useStructureWorkspace } from "./hooks/useStructureWorkspace";
 import { StructureWorkspaceNotice } from "./components/structure-workbench/StructureWorkspaceNotice";
 import { syncStructureForNavigation } from "./structure/navigation";
 import { useQuery } from "./hooks/useQuery";
+import { useServerMonitoring } from "./hooks/useServerMonitoring";
+import { GpuTaskHistory } from "./components/server-monitoring/GpuTaskHistory";
 import { useTgAssistant } from "./hooks/useTgAssistant";
 import { useModuleTransition, type ModuleNavigationRequest } from "./hooks/useModuleTransition";
 import { getMonomerDftJobIdFromSearch, getMonomerDftPath } from "./lib/monomerDftRouting";
@@ -119,6 +122,7 @@ function AppContent() {
   const canUseSharedWorkspace = !auth || (auth.status === "authenticated" && auth.session.capabilities["openscience.use"] === true);
   const [knowledgeLocalMode, setKnowledgeLocalMode] = useState(true);
   const [activeModule, setActiveModule] = useState<ActiveModule>(() => getInitialRoute().module);
+  const serverMonitoring = useServerMonitoring(activeModule === "serverMonitoring");
   const [expandedResearchGroupIds, setExpandedResearchGroupIds] = useState<Set<AppShellModuleGroup["id"]>>(() => new Set());
   const [collapsedResearchGroupIds, setCollapsedResearchGroupIds] = useState<Set<AppShellModuleGroup["id"]>>(() => new Set());
   const [selectedDatasetKey, setSelectedDatasetKey] = useState<DatasetKey | null>(() => getInitialRoute().datasetKey);
@@ -582,6 +586,15 @@ function AppContent() {
   }
 
   const standaloneModules: AppShellModuleItem[] = [
+    ...(serverMonitoring.access === "allowed" ? [{
+      id: "serverMonitoring",
+      label: "服务器监测",
+      description: "查看当前服务器的资源状态和最近一小时趋势。",
+      route: "/server-monitoring",
+      icon: <Server className="h-4 w-4" />,
+      isActive: activeModule === "serverMonitoring",
+      onClick: () => navigate({ module: "serverMonitoring", datasetKey: null })
+    }] : []),
     {
       id: "overview",
       label: "系统总览",
@@ -776,6 +789,7 @@ function AppContent() {
     }
   ];
   const isFullBleedModule =
+    activeModule === "serverMonitoring" ||
     activeModule === "usageGuide" ||
     activeModule === "overview" ||
     activeModule === "subscription" ||
@@ -883,6 +897,7 @@ function AppContent() {
         })}
       /> : null}
       {activeModule === "overview" ? <OverviewPage onNavigate={(module) => navigate({ module, datasetKey: null })} /> : null}
+      {activeModule === "serverMonitoring" ? <ServerMonitoringPage control={serverMonitoring} renderGpuTasks={selection => <GpuTaskHistory {...selection} />} /> : null}
 
       {activeModule === "databaseQuery" ? (
         <DatabaseQueryPage

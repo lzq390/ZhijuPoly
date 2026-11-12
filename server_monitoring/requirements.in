@@ -1,0 +1,5 @@
+# Standalone monitoring API; Python 3.11+. Versions match backend/requirements.lock.
+fastapi==0.115.0
+uvicorn==0.32.0
+httpx==0.28.1
+pydantic==2.10.6

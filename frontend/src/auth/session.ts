@@ -56,7 +56,10 @@ export async function privateFetch(input: RequestInfo | URL, init: PrivateReques
   const sourceRequest = typeof Request !== "undefined" && input instanceof Request ? input : null;
   const url = sourceRequest?.url ?? String(input);
   const path = apiPath(url);
-  if (session.account_type === "free" && path && !path.startsWith("/usage/") && !path.startsWith("/auth/") && !/^\/billing\/(?:subscription|orders(?:\/[^/]+(?:\/simulate-payment)?)?)$/.test(path) && !/^\/monomer-polymerization\/batch\/templates\/[ab]\.(csv|xlsx)$/.test(path)) throw new UsageOperationError(403, "membership_required");
+  const method = (init.method ?? sourceRequest?.method ?? "GET").toUpperCase();
+  const monitoringRead = import.meta.env.VITE_SERVER_MONITORING_ENABLED === "true" && method === "GET" &&
+    /^\/server-monitoring\/(?:access|snapshot|history|gpu-tasks)$/.test(path ?? "");
+  if (session.account_type === "free" && path && !monitoringRead && !path.startsWith("/usage/") && !path.startsWith("/auth/") && !/^\/billing\/(?:subscription|orders(?:\/[^/]+(?:\/simulate-payment)?)?)$/.test(path) && !/^\/monomer-polymerization\/batch\/templates\/[ab]\.(csv|xlsx)$/.test(path)) throw new UsageOperationError(403, "membership_required");
   const sourceSignal = init.signal ?? sourceRequest?.signal;
   const abort = () => controller.abort();
   sourceSignal?.addEventListener("abort", abort, { once: true });
@@ -72,7 +75,6 @@ export async function privateFetch(input: RequestInfo | URL, init: PrivateReques
   };
   const headers = new Headers(init.headers ?? sourceRequest?.headers);
   headers.set("X-Session-Context", session.session_id);
-  const method = (init.method ?? sourceRequest?.method ?? "GET").toUpperCase();
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-CSRF-Token", session.csrf_token ?? "");
   try {
     check();

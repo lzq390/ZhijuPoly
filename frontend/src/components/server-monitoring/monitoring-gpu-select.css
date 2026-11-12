@@ -1,0 +1,49 @@
+.sm-gpu-picker {
+  position: relative;
+  isolation: isolate;
+  z-index: 3;
+  flex: 0 0 144px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--np-theme-blue);
+}
+.sm-gpu-picker-icon { position: absolute; z-index: 41; top: calc(var(--sm-control-height) / 2); left: 11px; transform: translateY(-50%); pointer-events: none; stroke-width: 1.7; }
+.sm-gpu-picker .np-sw-select {
+  --np-select-label-size: var(--sm-font-size-body);
+  --np-select-description-size: var(--sm-font-size-caption);
+  --np-select-menu-max-height: 320px;
+  --np-select-menu-gap: 7px;
+}
+.sm-gpu-picker .np-sw-select__trigger {
+  height: var(--sm-control-height);
+  border-color: var(--np-theme-input-border);
+  border-radius: 8px;
+  padding: 0 10px 0 34px;
+  color: var(--np-theme-ink);
+  background: var(--np-theme-surface);
+  transition: border-color 160ms, box-shadow 160ms, background-color 160ms;
+}
+.sm-gpu-picker .np-sw-select__trigger strong { font-weight: var(--sm-font-weight-body); line-height: var(--sm-line-height-body); }
+.sm-gpu-picker .np-sw-select__trigger > svg { color: var(--np-theme-muted); }
+.sm-gpu-picker .np-sw-select.is-open .np-sw-select__trigger { border-color: var(--np-theme-blue); background: var(--np-theme-info-soft); box-shadow: 0 0 0 3px var(--np-theme-info-border); }
+.sm-gpu-picker .np-sw-select__menu {
+  left: 0;
+  right: auto;
+  width: min(280px, calc(100vw - 64px));
+  box-sizing: border-box;
+  border-color: var(--np-theme-border);
+  background: var(--np-theme-surface);
+  box-shadow: var(--np-theme-surface-shadow), 0 4px 14px #14304b12;
+  scrollbar-width: thin;
+  scrollbar-color: var(--np-theme-border) transparent;
+  overscroll-behavior: contain;
+}
+.sm-gpu-picker .np-sw-select__menu > button { min-height: 48px; color: var(--np-theme-ink); }
+.sm-gpu-picker .np-sw-select__menu > button strong { font-weight: var(--sm-font-weight-strong); }
+.sm-gpu-picker .np-sw-select__menu > button small { color: var(--np-theme-muted); overflow-wrap: anywhere; }
+.sm-gpu-picker .np-sw-select__menu > button.is-active,
+.sm-gpu-picker .np-sw-select__menu > button:hover:not(:disabled) { border-color: var(--np-theme-info-border); background: var(--np-theme-info-soft); color: var(--np-theme-blue-strong); }
+.sm-gpu-picker .np-sw-select__menu > button.is-selected { border-color: var(--np-theme-info-border); background: var(--np-theme-info-soft); color: var(--np-theme-blue-strong); }
+@media (max-width: 699px) { .sm-gpu-picker { flex-basis: 144px; } }
+@media (pointer: coarse) { .sm-gpu-picker .np-sw-select__menu > button { min-height: 48px; } }
+@media (prefers-reduced-motion: reduce) { .sm-gpu-picker .np-sw-select__trigger { transition: none; } }

@@ -8,6 +8,7 @@ export type ActiveModule =
   | "researchTools"
   | "usageGuide"
   | "overview"
+  | "serverMonitoring"
   | "personalUsage"
   | "subscription"
   | "structureWorkbench"
@@ -68,6 +69,7 @@ export function routeFromPath(pathname: string): AppRoute {
   if (path === "/help/usage") return { module: "usageGuide", datasetKey: null };
 
   if (path === "/overview") return { module: "overview", datasetKey: null };
+  if (path === "/server-monitoring") return { module: "serverMonitoring", datasetKey: null };
 
   if (path === "/account/subscription") return { module: isSubscriptionEnabled() ? "subscription" : "home", datasetKey: null };
 
@@ -163,6 +165,7 @@ export function pathFromRoute(route: AppRoute) {
   if (route.module === "researchTools") return "/research-tools";
   if (route.module === "usageGuide") return "/help/usage";
   if (route.module === "overview") return "/overview";
+  if (route.module === "serverMonitoring") return "/server-monitoring";
   if (route.module === "subscription") return isSubscriptionEnabled() ? "/account/subscription" : "/";
   if (route.module === "personalUsage") return "/account/usage";
   if (route.module === "structureWorkbench") {
