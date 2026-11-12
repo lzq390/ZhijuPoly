@@ -1,6 +1,7 @@
 """Synthetic scope/DBus failures; no scientific engine or real systemd operation."""
 import asyncio
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -9,10 +10,11 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
-from workers.polymer_md_worker.app import process_control
+from workers.polymer_md_worker.app import manager as manager_module, process_control
 from workers.polymer_md_worker.app.journal import read_json
 from workers.polymer_md_worker.app.manager import WorkerError, utcnow
 from workers.polymer_md_worker.app.process_control import ScopeControl, ScopeInspectionError
@@ -22,6 +24,32 @@ from test_manager import FakeScope, request, supervisor, until
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.fixture
+def supervisor_clock(monkeypatch):
+    """Control supervisor budgets without changing asyncio or subprocess clocks."""
+    class Clock:
+        wall = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        monotonic = 0.0
+
+        def advance(self, *, wall=0, monotonic=0):
+            self.wall += timedelta(seconds=wall)
+            self.monotonic += monotonic
+
+    clock = Clock()
+
+    class SupervisorDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = clock.wall.astimezone(tz)
+            return value if tz is not None else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(manager_module, "datetime", SupervisorDateTime)
+    # Patching time.monotonic on the shared module would also freeze asyncio.
+    monkeypatch.setattr(manager_module, "time", SimpleNamespace(
+        monotonic=lambda: clock.monotonic, time=lambda: clock.wall.timestamp()))
+    return clock
 
 
 class MonitoredScope(FakeScope):
@@ -71,7 +99,8 @@ class MonitoredScope(FakeScope):
         return super().terminate(unit, cgroup)
 
 
-def stage_supervisor(tmp_path, scope, *, stage_timeout=5, job_timeout=10, grace=.15, command=None):
+def stage_supervisor(tmp_path, scope, *, stage_timeout=5, job_timeout=10, grace=.15, command=None,
+                     wait_for_cleanup=False):
     manager, calls = supervisor(tmp_path, scope=scope, delay="terminal_qm")
     manager.settings = replace(manager.settings, stage_timeout_seconds=stage_timeout, job_timeout_seconds=job_timeout)
     manager.MONITOR_GRACE_SECONDS = grace
@@ -85,6 +114,12 @@ def stage_supervisor(tmp_path, scope, *, stage_timeout=5, job_timeout=10, grace=
     scope.manager, scope.record = manager, record
     if command:
         manager.command_builder = command
+    elif wait_for_cleanup:
+        def waiting_command(request_path, stage, work_dir, result_path):
+            calls.append(stage)
+            # Only supervisor cleanup ends this synthetic child; CI speed cannot.
+            return [sys.executable, "-c", "import threading; threading.Event().wait()"]
+        manager.command_builder = waiting_command
     manager._save(record)
     return manager, record, payload, calls
 
@@ -129,11 +164,17 @@ async def test_temporary_bus_loss_keeps_same_execution_and_recovers_admission(tm
 
 
 @pytest.mark.anyio
-async def test_persistent_bus_loss_stops_safely_without_scientific_retry(tmp_path):
+async def test_persistent_bus_loss_stops_safely_without_scientific_retry(tmp_path, supervisor_clock):
     scope = MonitoredScope(failures=1000)
-    manager, record, payload, calls = stage_supervisor(tmp_path, scope, grace=.12)
+    manager, record, payload, calls = stage_supervisor(tmp_path, scope, grace=1, wait_for_cleanup=True)
+    task = asyncio.create_task(manager._stage(record, "terminal_qm"))
     try:
-        assert await manager._stage(record, "terminal_qm") is False
+        await until(lambda: record["snapshot"]["stage_runs"] and record["snapshot"]["stage_runs"][0]
+                    ["results"].get("execution_diagnostics", {}).get("outage_started_at"))
+        assert manager.monitor_degraded and not task.done()
+        assert not (await manager.health())["accepting_jobs"]
+        supervisor_clock.advance(wall=1, monotonic=1)
+        assert await asyncio.wait_for(task, timeout=10) is False
         state = manager.get(payload.job_id)
         assert state["status"] == "failed" and state["cleanup_confirmed"]
         assert len(state["stage_runs"]) == 1 and calls == ["terminal_qm"]
@@ -143,11 +184,30 @@ async def test_persistent_bus_loss_stops_safely_without_scientific_retry(tmp_pat
         diag = state["stage_runs"][0]["results"]["execution_diagnostics"]
         assert diag["process_returncode_before_cleanup"] is None
         assert diag["process_returncode_after_cleanup"] != 0
-        assert diag["failure_count"] > manager.MONITOR_HISTORY_LIMIT
-        assert len(diag["recent_failures"]) == manager.MONITOR_HISTORY_LIMIT
+        assert diag["local_workload_confirmed"]
+        assert diag["failure_count"] > 0
+        assert len(diag["recent_failures"]) == min(diag["failure_count"], manager.MONITOR_HISTORY_LIMIT)
         assert all(process.poll() is not None for process in scope.processes.values())
     finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         close_synthetic(manager, scope)
+
+
+def test_execution_diagnostics_keep_only_the_latest_failures(tmp_path):
+    manager, _ = supervisor(tmp_path)
+    run = {"results": {}}
+    count = manager.MONITOR_HISTORY_LIMIT + 3
+    try:
+        for index in range(count):
+            manager._execution_diagnostic(run, f"failure_{index}", RuntimeError("PRIVATE-CREDENTIAL"))
+        diagnostics = run["results"]["execution_diagnostics"]
+        assert diagnostics["failure_count"] == count
+        assert [item["category"] for item in diagnostics["recent_failures"]] == [
+            f"failure_{index}" for index in range(count - manager.MONITOR_HISTORY_LIMIT, count)]
+        assert "PRIVATE-CREDENTIAL" not in json.dumps(diagnostics)
+    finally:
+        manager.analysis_executor.shutdown(wait=True)
 
 
 @pytest.mark.anyio
@@ -166,28 +226,50 @@ async def test_no_monitor_grace_before_gate_or_without_local_budget_evidence(tmp
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("reason", ["cancelled", "stage_timeout", "job_timeout", "storage_quota_exceeded"])
-async def test_monitor_grace_preserves_cancellation_and_original_budgets(tmp_path, reason):
+async def test_monitor_grace_preserves_cancellation_and_original_budgets(tmp_path, reason, supervisor_clock, monkeypatch):
     scope = MonitoredScope(failures=1000)
     manager, record, payload, _ = stage_supervisor(tmp_path, scope,
-        stage_timeout=.06 if reason == "stage_timeout" else 5,
-        job_timeout=.06 if reason == "job_timeout" else 10, grace=1)
+        stage_timeout=5, job_timeout=10, grace=30, wait_for_cleanup=True)
+    original_bounded = scope.workload_is_bounded
+    consumed_budget = False
+
+    def bounded_after_elapsed_work(identity):
+        nonlocal consumed_budget
+        if not consumed_budget:
+            # Spend part of both original budgets before the monitor grace starts.
+            supervisor_clock.advance(wall=2, monotonic=2)
+            consumed_budget = True
+        return original_bounded(identity)
+
+    monkeypatch.setattr(scope, "workload_is_bounded", bounded_after_elapsed_work)
     task = asyncio.create_task(manager._stage(record, "terminal_qm"))
     try:
-        await until(lambda: manager.monitor_degraded)
+        await until(lambda: record["snapshot"]["stage_runs"] and record["snapshot"]["stage_runs"][0]
+                    ["results"].get("execution_diagnostics", {}).get("outage_started_at"))
+        assert manager.monitor_degraded and not task.done()
         if reason == "cancelled":
             await manager.cancel(payload.job_id, payload)
         elif reason == "storage_quota_exceeded":
             manager.settings = replace(manager.settings, max_job_bytes=1)
-        assert await task is False
+        elif reason == "stage_timeout":
+            supervisor_clock.advance(monotonic=3)
+        elif reason == "job_timeout":
+            supervisor_clock.advance(wall=8)
+        assert await asyncio.wait_for(task, timeout=10) is False
         state = manager.get(payload.job_id)
         assert state["cleanup_confirmed"] and len(state["stage_runs"]) == 1
+        diagnostics = state["stage_runs"][0]["results"]["execution_diagnostics"]
+        assert diagnostics["local_workload_confirmed"] and diagnostics["grace_seconds"] == 30
+        assert diagnostics["process_returncode_before_cleanup"] is None
+        assert diagnostics["process_returncode_after_cleanup"] != 0
         if reason == "cancelled":
             assert state["status"] == "cancelled"
         else:
             expected = "storage_quota_exceeded" if reason == "storage_quota_exceeded" else "timeout"
             assert state["status"] == "failed" and state["errors"][-1]["code"] == expected
     finally:
-        await task
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         close_synthetic(manager, scope)
 
 
