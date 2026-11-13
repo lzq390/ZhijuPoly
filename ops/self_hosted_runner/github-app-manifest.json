@@ -1,0 +1,10 @@
+{
+  "name": "nexpoly-local-ci-runner",
+  "url": "https://github.com/lzq390/ZhijuPoly",
+  "description": "Manage ephemeral local CI runners for lzq390/ZhijuPoly. Install on this repository only; keep the App private key on the host.",
+  "public": false,
+  "hook_attributes": {"url": "https://github.com/lzq390/ZhijuPoly", "active": false},
+  "request_oauth_on_install": false,
+  "default_permissions": {"administration": "write", "actions": "read", "metadata": "read"},
+  "default_events": []
+}

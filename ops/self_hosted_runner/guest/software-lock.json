@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "smoke_image": {
+    "reference": "hello-world@sha256:5e22040d441e5fb3aed38368acbe8486b575d7018df38dbdfbc7311fbb2ef3a9",
+    "source": "https://hub.docker.com/_/hello-world"
+  },
+  "cloud_image": {
+    "version": "24.04-20261017",
+    "url": "https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-amd64.img",
+    "sha256": "04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94",
+    "signing_fingerprint": "D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81"
+  },
+  "runner": {
+    "version": "2.338.2",
+    "url": "https://github.com/actions/runner/releases/download/v2.338.2/actions-runner-linux-x64-2.338.2.tar.gz",
+    "sha256": "baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40"
+  },
+  "buildx": {
+    "version": "0.31.1",
+    "url": "https://github.com/docker/buildx/releases/download/v0.31.1/buildx-v0.31.1.linux-amd64",
+    "sha256": "dc8eaffbf29138123b4874d852522b12303c61246a5073fa0f025e4220317b1e"
+  },
+  "docker_apt": {
+    "signing_fingerprint": "9DC858229FC7DD38854AE2D88D81803C0EBFCD88",
+    "packages": [
+      {
+        "package": "docker-ce",
+        "version": "5:29.9.3-1~ubuntu.24.04~noble",
+        "url": "https://download.docker.com/linux/ubuntu/dists/noble/pool/stable/amd64/docker-ce_29.9.3-1~ubuntu.24.04~noble_amd64.deb",
+        "sha256": "c546181f0bc5f1d19085d764a3219aa86069468dbee4743fae420ee8a31809a4"
+      },
+      {
+        "package": "docker-ce-cli",
+        "version": "5:29.9.3-1~ubuntu.24.04~noble",
+        "url": "https://download.docker.com/linux/ubuntu/dists/noble/pool/stable/amd64/docker-ce-cli_29.9.3-1~ubuntu.24.04~noble_amd64.deb",
+        "sha256": "24f78a893cece8d345c4e90b5163907c047b996b747265f873743e8b0b0546d4"
+      },
+      {
+        "package": "containerd.io",
+        "version": "2.4.2-3~ubuntu.24.04~noble",
+        "url": "https://download.docker.com/linux/ubuntu/dists/noble/pool/stable/amd64/containerd.io_2.4.2-3~ubuntu.24.04~noble_amd64.deb",
+        "sha256": "f811ab57d1f4bb0cce19df7d526da8c711d8ebea0447cc83da1999188e664122"
+      }
+    ]
+  }
+}

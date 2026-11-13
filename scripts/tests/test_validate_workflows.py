@@ -43,6 +43,131 @@ PULL_DEPLOY_CONTROLLER_TEXT = (
 ).read_text(encoding="utf-8")
 
 
+class RunnerRoutingPolicyTests(unittest.TestCase):
+    def replace_job(self, name: str, before: str, after: str) -> str:
+        body = policy.workflow_job_body(CI_TEXT, name, [])
+        self.assertIsNotNone(body)
+        self.assertIn(before, body)
+        return CI_TEXT.replace(body, body.replace(before, after, 1), 1)
+
+    def test_reviewed_routes_permissions_and_local_controls_are_valid(self) -> None:
+        failures: list[str] = []
+        policy.validate_runner_routing(CI_TEXT, failures)
+        policy.validate_local_runner_controls(CI_TEXT, failures)
+        policy.validate_actionlint_config(policy.ACTIONLINT_PATH.read_text(), failures)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(policy.LOCAL_RUNNER_JOBS), 14)
+        self.assertEqual(len(policy.HOSTED_RUNNER_JOBS), 4)
+
+    def test_every_local_job_requires_the_dedicated_ephemeral_route(self) -> None:
+        for job in policy.LOCAL_RUNNER_JOBS:
+            for replacement in (
+                policy.HOSTED_RUNNER_LINE,
+                "    runs-on: self-hosted",
+                "    runs-on: [self-hosted, linux, x64]",
+                "    runs-on: [self-hosted, linux, x64, nexpoly-ci-persistent]",
+                "    runs-on: ${{ vars.RUNNER }}",
+                policy.LOCAL_RUNNER_LINE + "\n" + policy.LOCAL_RUNNER_LINE,
+            ):
+                with self.subTest(job=job, replacement=replacement):
+                    changed = self.replace_job(job, policy.LOCAL_RUNNER_LINE, replacement)
+                    failures: list[str] = []
+                    policy.validate_runner_routing(changed, failures)
+                    self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_control_and_publishing_jobs_cannot_move_to_local_runners(self) -> None:
+        for job in policy.HOSTED_RUNNER_JOBS:
+            with self.subTest(job=job):
+                changed = self.replace_job(job, policy.HOSTED_RUNNER_LINE, policy.LOCAL_RUNNER_LINE)
+                failures: list[str] = []
+                policy.validate_runner_routing(changed, failures)
+                self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_added_missing_and_duplicate_jobs_are_rejected(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "frontend", [])
+        for changed in (
+            CI_TEXT + "\n  future-job:\n    runs-on: ubuntu-24.04\n    steps: []\n",
+            CI_TEXT.replace("  frontend:\n" + body, "", 1),
+            CI_TEXT + "\n  frontend:\n" + body,
+        ):
+            with self.subTest(changed=changed[-100:]):
+                failures: list[str] = []
+                policy.validate_runner_routing(changed, failures)
+                self.assertTrue(failures)
+
+    def test_default_and_local_job_token_permissions_cannot_be_elevated(self) -> None:
+        cases = [CI_TEXT.replace("permissions:\n  contents: read\n  packages: read",
+                                 "permissions: write-all", 1)]
+        for job in policy.LOCAL_RUNNER_JOBS:
+            for value in ("write-all", "{contents: read, packages: write}", "{id-token: write}"):
+                cases.append(self.replace_job(job, policy.LOCAL_RUNNER_LINE,
+                    policy.LOCAL_RUNNER_LINE + "\n    permissions: " + value))
+        for changed in cases:
+            with self.subTest(changed=changed[:80]):
+                failures: list[str] = []
+                policy.validate_runner_routing(changed, failures)
+                self.assertTrue(any("permissions" in failure for failure in failures), failures)
+        for job in policy.PUBLISHING_JOBS:
+            changed = self.replace_job(job, "      contents: read", "      contents: write")
+            failures = []
+            policy.validate_runner_routing(changed, failures)
+            self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_local_builders_require_all_proxy_options_without_extra_overrides(self) -> None:
+        step = "\n".join(policy.LOCAL_BUILDX_SETUP_LINES)
+        for job in ("image-build", "openscience-overlay"):
+            for replacement in (
+                "\n".join(policy.BUILDX_SETUP_LINES),
+                step.replace("            env.http_proxy=http://10.0.2.2:27892\n", ""),
+                step.replace("            env.https_proxy=http://10.0.2.2:27892\n", ""),
+                step.replace("env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres", "env.no_proxy=*"),
+                step.replace("10.0.2.2:27892", "127.0.0.1:27891"),
+                step + "\n            network=host",
+                step + "\n        continue-on-error: true",
+            ):
+                with self.subTest(job=job, replacement=replacement):
+                    changed = self.replace_job(job, step, replacement)
+                    failures: list[str] = []
+                    policy.validate_local_runner_controls(changed, failures)
+                    self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_hosted_jobs_and_global_environment_cannot_receive_local_proxy(self) -> None:
+        for job in policy.PUBLISHING_JOBS:
+            changed = self.replace_job(job, "\n".join(policy.BUILDX_SETUP_LINES),
+                                       "\n".join(policy.LOCAL_BUILDX_SETUP_LINES))
+            failures: list[str] = []
+            policy.validate_runner_routing(changed, failures)
+            policy.validate_local_runner_controls(changed, failures)
+            self.assertTrue(any(job in failure for failure in failures), failures)
+        changed = CI_TEXT.replace("env:\n", "env:\n  http_proxy: http://10.0.2.2:27892\n", 1)
+        failures = []
+        policy.validate_runner_routing(changed, failures)
+        self.assertTrue(any("proxy" in failure for failure in failures), failures)
+
+    def test_frontend_worker_limit_cannot_be_removed_or_skip_tests(self) -> None:
+        for replacement in (
+            "npm test", "npm test -- --maxWorkers=8",
+            "npm test -- --maxWorkers=4 --passWithNoTests",
+            "npm test -- --maxWorkers=4 || true",
+        ):
+            with self.subTest(replacement=replacement):
+                changed = self.replace_job("frontend", "npm test -- --maxWorkers=4", replacement)
+                failures: list[str] = []
+                policy.validate_local_runner_controls(changed, failures)
+                self.assertTrue(any("frontend" in failure for failure in failures), failures)
+
+    def test_actionlint_cannot_accept_wildcard_labels_or_ignore_checks(self) -> None:
+        for changed in (
+            "", policy.ACTIONLINT_CONFIG.replace("nexpoly-ci-ephemeral", "'*'"),
+            policy.ACTIONLINT_CONFIG + "    - another-runner\n",
+            policy.ACTIONLINT_CONFIG + "paths:\n  '**':\n    ignore: ['runner-label']\n",
+        ):
+            with self.subTest(changed=changed):
+                failures: list[str] = []
+                policy.validate_actionlint_config(changed, failures)
+                self.assertTrue(failures)
+
+
 class StructuredWorkflowPolicyTests(unittest.TestCase):
     def test_candidate_and_published_images_require_isolation_smoke(self) -> None:
         failures: list[str] = []

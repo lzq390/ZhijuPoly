@@ -1,0 +1,20 @@
+[Unit]
+Description=NexPoly CI UID egress firewall
+After=network-pre.target
+Before=nexpoly-runner-proxy.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 -I -B /usr/local/libexec/nexpoly-runner/host.py firewall-apply --config /etc/nexpoly-runner/config.toml
+ExecReload=/usr/bin/python3 -I -B /usr/local/libexec/nexpoly-runner/host.py firewall-apply --config /etc/nexpoly-runner/config.toml
+# Deliberately retain deny rules when stopped: removing the service must never
+# give a live QEMU or proxy unrestricted access.
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
