@@ -149,7 +149,15 @@ sudo nexpoly-runnerctl drain
 sudo nexpoly-runnerctl update-template
 ```
 
-若控制器已经运行，先 drain 并等 `status` 中 `state.instance` 为 null，再停止控制器以释放全局锁，然后安装最新交付包和执行 update-template。2026-11-13 的 guest 启动顺序修复需要此流程重建；仅重装宿主代码不会修改已有封存镜像。构建成功后 resume，再启动控制器。
+若控制器已经运行，可用交付包中的维护脚本完成整个更新流程：
+
+```bash
+sudo bash /data/lzq/github-runner/control/maintain-template.sh
+```
+
+脚本先 drain，再轮询 `status`，直到 paused=true 且 state.instance 为 null；最多等待 110 分钟，每 30 秒显示进度，保留当前 VM/job。确认回收后依次停止控制器、运行交付包安装器、重建模板、请求 resume 并启动控制器。等待超时或状态异常不会停止活动 VM；安装或构建失败不会恢复接单。此脚本需要管理员执行，且每次使用当前已审查的交付包，不读取或复制 App 私钥。
+
+手工维护时使用相同步骤：先 drain 并等实例为 null，再停止控制器以释放全局锁，然后安装最新交付包和执行 update-template。2026-11-13 的 guest 启动顺序、job umask 与 Compose 修复均需要重建；仅重装宿主代码不会修改已有封存镜像。构建成功后 resume，再启动控制器。
 
 首次构建先下载官方 Ubuntu 镜像，再在唯一构建 VM 中安装软件；VM 内构建最多一小时，下载阶段的期限另计。`guest/software-lock.json` 锁定 Ubuntu dated image、GitHub runner、Buildx 和 Docker deb 的版本与 SHA256；Ubuntu 镜像校验发行签名，Docker deb 校验签名的 APT 元数据。Ubuntu APT 的系统依赖按签名发行库安装，最终模板以完整内容哈希封存；这部分不声称按历史仓库逐字节可重现。
 
@@ -205,7 +213,7 @@ doctor 不申请/打印 token，App 实际授权与注册是否正确由启动�
 本地复验：
 
 ```bash
-python3 -m unittest scripts.tests.test_local_runner_controller scripts.tests.test_local_runner_host scripts.tests.test_local_runner_template scripts.tests.test_local_runner_guest_build scripts.tests.test_local_runner_guest_ordering scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows
+python3 -m unittest scripts.tests.test_local_runner_controller scripts.tests.test_local_runner_host scripts.tests.test_local_runner_template scripts.tests.test_local_runner_guest_build scripts.tests.test_local_runner_guest_ordering scripts.tests.test_local_runner_maintenance scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows
 python3 scripts/ci/validate_workflows.py
 actionlint -config-file .github/actionlint.yaml .github/workflows/ci.yml
 ```

@@ -157,14 +157,20 @@ PR https://github.com/lzq390/ZhijuPoly/pull/111 已创建为 draft 并附到当�
 
 两项兼容修复后完整相关测试 **270 项通过**，workflow policy 与 diff 检查通过。前端执行中采样 MemoryPeak=10561359872 bytes（约 9.84 GiB）、CPUUsageNSec=1320879487000、IOWriteBytes=5406766080，仅为截至采样时的下界，任务尚未结束。修复需要 drain 保留当前任务到完成，再安装并重建模板；当前 run 未因推送更新而取消，修复暂未推送，避免中断首个执行/回收验证。完整 CI、job 回收与最终资源数据仍待确认。
 
+## 2026-11-13 模板维护流程
+
+用户已执行 drain，当前前端任务继续运行，后续任务留在队列。新增 `maintain-template.sh`，管理员可用一条命令等待当前 VM 回收、停止控制器、安装交付包、重建模板并恢复接单。最长等待 6,600 秒，状态异常或超时不会停止活动 VM；安装/构建失败不会执行 resume/start。
+
+7 项离线 fake-command 测试覆盖活动实例保留、暂停与空实例两条件、初始无 journal、安装/构建失败、错误状态、status 命令失败、等待期限及非 root 拒绝；不会操作宿主服务。完整相关测试现为 **277 项通过**，workflow policy、ShellCheck、bash 语法和 diff 检查通过。维护流程尚未在宿主执行，新模板和完整 CI 仍待验收。
+
 ## 复验命令
 
 在仓库根目录：
 
 ```bash
-python3 -m unittest scripts.tests.test_local_runner_controller scripts.tests.test_local_runner_host scripts.tests.test_local_runner_template scripts.tests.test_local_runner_guest_build scripts.tests.test_local_runner_guest_ordering scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows -q
+python3 -m unittest scripts.tests.test_local_runner_controller scripts.tests.test_local_runner_host scripts.tests.test_local_runner_template scripts.tests.test_local_runner_guest_build scripts.tests.test_local_runner_guest_ordering scripts.tests.test_local_runner_maintenance scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows -q
 python3 scripts/ci/validate_workflows.py
 actionlint -config-file .github/actionlint.yaml .github/workflows/ci.yml
-shellcheck scripts/ci/prepare_image_build_disk.sh ops/self_hosted_runner/install.sh ops/self_hosted_runner/guest/job-started.sh ops/self_hosted_runner/guest/job-completed.sh
+shellcheck scripts/ci/prepare_image_build_disk.sh ops/self_hosted_runner/install.sh ops/self_hosted_runner/maintain-template.sh ops/self_hosted_runner/guest/job-started.sh ops/self_hosted_runner/guest/job-completed.sh
 git diff --check
 ```
