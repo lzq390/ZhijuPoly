@@ -49,12 +49,13 @@ def main() -> None:
         response.read(1024)
     denied_direct("10.0.2.2", 27891)  # SSH's upstream proxy must remain host-only.
     denied_direct("1.1.1.1", 443)  # All public HTTPS must go through the proxy.
+    subprocess.run(["docker", "compose", "version"], check=True, timeout=30)
     lock = json.loads((config / "software-lock.json").read_text())
     image = lock["smoke_image"]["reference"]
     subprocess.run(["docker", "run", "--rm", "--network", "none", image],
                    check=True, timeout=180)
     subprocess.run(["docker", "image", "rm", image], check=True, timeout=30)
-    print(json.dumps({"guest_smoke": "passed", "checks": ["dns", "https_proxy", "private_proxy_denied", "direct_egress_denied", "docker_run"]}))
+    print(json.dumps({"guest_smoke": "passed", "checks": ["dns", "https_proxy", "private_proxy_denied", "direct_egress_denied", "docker_compose", "docker_run"]}))
 
 
 if __name__ == "__main__":

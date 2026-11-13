@@ -6,9 +6,11 @@
 
 已实现控制器、宿主安装工具、受限网络配置、VM 模板制作、guest 启动程序、版本锁和 CI 迁移代码。源码位于仓库 `ops/self_hosted_runner/`，部署副本位于 `/data/lzq/github-runner/control/`。本文件同时保存为 `/data/lzq/github-runner/PLAN.md`。
 
-**专用 runner 已上线，完整 CI 迁移验收待进行。** 2026-11-13 16:50（北京时间）GitHub API 确认目标仓库恰有一台 runner：ID 21，`nexpoly-ci-a0398f54c8a643a4aa30f79b8809b10f`，status=online、busy=false，标签为 self-hosted/Linux/X64/nexpoly-ci-ephemeral。控制器 active、NRestarts=0，唯一执行 VM active，8 CPU 配额、MemoryMax 34 GiB、MemorySwapMax=0。
+**专用 runner 已上线，CI 迁移 PR 正在验收。** 2026-11-13 16:50（北京时间）GitHub API 确认目标仓库恰有一台 runner：ID 21，`nexpoly-ci-a0398f54c8a643a4aa30f79b8809b10f`，status=online、busy=false，标签为 self-hosted/Linux/X64/nexpoly-ci-ephemeral。控制器 active、NRestarts=0，唯一执行 VM active，8 CPU 配额、MemoryMax 34 GiB、MemorySwapMax=0。[迁移 PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 已创建为 draft，CI run 43397323016 的首个本地前端 job 已接单，依赖安装、Vitest 和两个 SDK/Worker 检查已通过。
 
 管理员已完成 guest 启动顺序修复后的模板重建，新镜像为 `base-d3bd857a91806acc549ed09a8ed404c06dc63a2a210f017d886276ae607b93da.qcow2`，上一版本 053aef 仍保留。bootstrap 使用 Type=exec、WantedBy=cloud-init.target、Requires=cloud-final.service，新执行 VM 已完成注册。首次完整 PR、每 job 身份变化/回收、BuildKit/cache/浏览器依赖与 CI 资源峰值仍待验证，暂不将 Online 视为完整 CI 已通过。
+
+首轮验收复查补齐两项 guest 差异：仅在实际 job 子进程降权后设置 umask 0022，使 checkout 保持原 policy 要求的 0755/0644；注册与宿主私有文件继续使用 0077。显式锁定第四个 Docker APT 包 docker-compose-plugin 5.7.1，并在 smoke 中检查 `docker compose version`；此前 --no-install-recommends 不会安装 CLI 的 Compose 推荐包。两项修复已在源码/交付包准备，当前 d3bd 模板与执行中 VM 尚未包含，需 drain 等当前 job 完成后停止控制器并重建模板，一次应用两项修复；不放宽既有 workflow 权限校验。
 
 专用 GitHub App 已创建并安装：`ZhijuPolyrunner`（slug `zhijupolyrunner`），App ID `5740902`、Installation ID `181516914`，所有者 `lzq390`。用户提供的 PEM 已通过格式与实际 JWT 认证校验，App 权限精确为 Administration write、Actions read、Metadata read，events 为空。用户将安装范围从 all 改为 selected 后，GitHub 再次核实仅含 `lzq390/ZhijuPoly` 一个仓库、未暂停；短期 installation token 及目标仓库 runner API 验证通过，现有 runner 数为 0。验证用短期 token 已撤销。
 
@@ -157,7 +159,7 @@ VM 启动前显示串口日志完整路径；guest 会通过事件通道显示 `
 
 安装器与控制器/模板更新共享全局锁，下载中也拒绝重装，避免安装重启代理而中断传输。需要更新程序时，先等当前命令结束或在其终端正常 Ctrl+C，再重新安装；控制器的 runtime directory 保留到重启，防止退出时移除其他操作仍在使用的锁。
 
-模板预装系统 Python、Git、ShellCheck、PostgreSQL 16 客户端、Docker/Buildx 和必要系统依赖。Python 3.11、Node 22、Go 1.24 仍由 workflow setup actions 安装。guest 无应用依赖、注册身份或跨 job 可写缓存。模板构建先执行不含注册材料的 smoke 检查，失败不封存。源码更新后要重新执行安装器快照再更新模板；修改 `control/` 不会悄悄改变 root 服务。
+模板预装系统 Python、Git、ShellCheck、PostgreSQL 16 客户端、Docker/Buildx/Compose 和必要系统依赖。Compose 与三个 Docker 基础包同由官方签名 APT 元数据和 SHA256 锁定，安装后 hold；smoke 检查 Compose CLI、网络隔离和 hello-world 拉取运行。Python 3.11、Node 22、Go 1.24 仍由 workflow setup actions 安装。guest 无应用依赖、注册身份或跨 job 可写缓存。模板构建先执行不含注册材料的 smoke 检查，失败不封存。源码更新后要重新执行安装器快照再更新模板；修改 `control/` 不会悄悄改变 root 服务。
 
 ### 4. 配置 App 后启用控制器
 
@@ -190,7 +192,7 @@ doctor 不申请/打印 token，App 实际授权与注册是否正确由启动�
 | actionlint、workflow policy、磁盘脚本、控制器/host/template 测试 | 见交付 `VALIDATION.md` |
 | 唯一 VM / runner 与 cgroup 资源限制 | 唯一 Online/idle runner、唯一 VM，8 CPU/34 GiB/swap 0 已实测；任务运行峰值待验收 |
 | 无注册 VM smoke（DNS、代理 HTTPS、Docker、部分隔离检查） | 模板构建已完成并封存；更完整目标矩阵及 CI 容量检查待验收 |
-| 完整 PR 20 个不同身份、main 18 个、本地 ci-gate | runner 已上线，待迁移 PR 和完整 CI |
+| 完整 PR 20 个不同身份、main 18 个、本地 ci-gate | PR #111 已运行首个本地 job；完整 20 job 与 gate 待验收 |
 | Docker pull、BuildKit remote Git、GHA cache、apt/pip/npm | 模板构建完成 apt 与固定 hello-world pull/run；其余待真实 CI |
 | 禁止宿主业务端口、27891、Docker 网段、元数据、IPv6、非白名单 | 已执行 27891、公共直接出口与私网代理拒绝 smoke；其余目标矩阵待完整验收 |
 | 成功、失败、取消、超时、重启均回收；无前任务残留 | 状态机负测已覆盖；真实 VM 仍待实测 |

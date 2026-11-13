@@ -114,6 +114,12 @@ def drop_privileges() -> None:
     os.setuid(account.pw_uid)
 
 
+def prepare_job_process() -> None:
+    """Use normal checkout permissions only in the unprivileged job child."""
+    drop_privileges()
+    os.umask(0o022)
+
+
 def register() -> None:
     """Only the short-lived registration child ever receives the host token."""
     payload = read_payload()
@@ -168,7 +174,7 @@ def main() -> int:
         env = runner_environment()
         emit("registered")
         result = subprocess.run([str(RUNNER / "run.sh")], cwd=RUNNER, env=env,
-                                preexec_fn=drop_privileges, check=False)
+                                preexec_fn=prepare_job_process, check=False)
         emit("runner_exit", exit_code=result.returncode)
         return result.returncode
     except Exception:

@@ -40,6 +40,12 @@
         "version": "2.4.2-3~ubuntu.24.04~noble",
         "url": "https://download.docker.com/linux/ubuntu/dists/noble/pool/stable/amd64/containerd.io_2.4.2-3~ubuntu.24.04~noble_amd64.deb",
         "sha256": "f811ab57d1f4bb0cce19df7d526da8c711d8ebea0447cc83da1999188e664122"
+      },
+      {
+        "package": "docker-compose-plugin",
+        "version": "5.7.1-1~ubuntu.24.04~noble",
+        "url": "https://download.docker.com/linux/ubuntu/dists/noble/pool/stable/amd64/docker-compose-plugin_5.7.1-1~ubuntu.24.04~noble_amd64.deb",
+        "sha256": "c2f6549958ca64466da9e31a6d488e19f5a1bf475a4425df9e4c3a010d5950ac"
       }
     ]
   }

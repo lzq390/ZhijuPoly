@@ -7,9 +7,11 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import stat
 import socket
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -40,7 +42,27 @@ class RunnerTemplateTests(unittest.TestCase):
         self.assertEqual(lock["buildx"]["version"], "0.31.1")
         self.assertEqual(lock["runner"]["version"], "2.338.2")
         self.assertIn("release-20261017/", lock["cloud_image"]["url"])
-        self.assertEqual(len(lock["docker_apt"]["packages"]), 3)
+        self.assertEqual(len(lock["docker_apt"]["packages"]), 4)
+        compose = next(item for item in lock["docker_apt"]["packages"] if item["package"] == "docker-compose-plugin")
+        self.assertEqual(compose["version"], "5.7.1-1~ubuntu.24.04~noble")
+
+    def test_lock_rejects_missing_duplicate_and_unreviewed_docker_packages(self):
+        lock = template.read_lock(template.DEFAULT_LOCK)
+        packages = lock["docker_apt"]["packages"]
+        candidates = [("missing " + item["package"], packages[:index] + packages[index + 1:])
+                      for index, item in enumerate(packages)]
+        candidates.extend([
+            ("duplicate", packages + [packages[-1]]),
+            ("unreviewed", packages[:-1] + [{**packages[-1], "package": "other-plugin"}]),
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "lock.json"
+            for name, candidate in candidates:
+                with self.subTest(name=name):
+                    lock["docker_apt"]["packages"] = candidate
+                    path.write_text(json.dumps(lock))
+                    with self.assertRaisesRegex(template.TemplateError, "four reviewed packages"):
+                        template.read_lock(path)
 
     def test_lock_rejects_credentials_or_mutable_cloud_release(self):
         lock = template.read_lock(template.DEFAULT_LOCK)
@@ -569,20 +591,78 @@ class GuestBootstrapTests(unittest.TestCase):
         commands = []
 
         def run(args, **kwargs):
-            commands.append((args, dict(kwargs.get("env", {}))))
+            commands.append((args, dict(kwargs.get("env", {})), kwargs.get("preexec_fn")))
             return subprocess.CompletedProcess(args, 0)
 
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(bootstrap, "RUNTIME", Path(directory)), mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), mock.patch.object(bootstrap, "read_payload", return_value=payload), mock.patch.object(bootstrap.subprocess, "run", side_effect=run), mock.patch.object(bootstrap, "emit") as emit, mock.patch.object(bootstrap, "isolated_registration"), mock.patch("shutil.rmtree"):
             bootstrap.register()
             self.assertEqual(bootstrap.main(), 0)
-        config_args, config_env = commands[0]
+        config_args, config_env, config_preexec = commands[0]
         self.assertIn("--ephemeral", config_args)
         self.assertNotIn("--token", config_args)
         self.assertEqual(config_env["ACTIONS_RUNNER_INPUT_TOKEN"], "SECRETBOOTSTRAPVALUE12345")
+        self.assertIs(config_preexec, bootstrap.drop_privileges)
+        self.assertIs(commands[1][2], bootstrap.prepare_job_process)
         self.assertNotIn("ACTIONS_RUNNER_INPUT_TOKEN", commands[1][1])
         self.assertEqual(commands[-1][0], ["systemctl", "poweroff", "--no-block"])
         self.assertEqual(payload, {})
         self.assertNotIn("SECRETBOOTSTRAPVALUE12345", str(emit.call_args_list))
+
+    def test_job_child_drops_privileges_before_changing_its_umask(self):
+        events = []
+        with mock.patch.object(bootstrap, "drop_privileges", side_effect=lambda: events.append("drop")), \
+                mock.patch.object(bootstrap.os, "umask", side_effect=lambda mask: events.append(mask)):
+            bootstrap.prepare_job_process()
+        self.assertEqual(events, ["drop", 0o022])
+
+    @unittest.skipUnless(shutil.which("git"), "git is required for the real checkout permissions test")
+    def test_job_git_checkout_has_normal_modes_while_registration_and_parent_stay_private(self):
+        with tempfile.TemporaryDirectory(prefix="nexpoly-job-umask-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            environment = {**os.environ, "HOME": str(root), "GIT_CONFIG_NOSYSTEM": "1",
+                           "GIT_CONFIG_GLOBAL": os.devnull}
+
+            def git(*arguments, **kwargs):
+                return subprocess.run(
+                    ["git", "-c", "core.hooksPath=" + os.devnull, *arguments],
+                    capture_output=True, text=True, check=True, env=environment, **kwargs)
+
+            git("init", "--quiet", str(source))
+            (source / "script.sh").write_text("#!/bin/sh\nexit 0\n")
+            (source / "script.sh").chmod(0o755)
+            (source / "data.json").write_text("{}\n")
+            (source / "data.json").chmod(0o644)
+            git("-C", str(source), "add", "script.sh", "data.json")
+            git("-C", str(source), "-c", "user.name=Runner test",
+                "-c", "user.email=runner-test@example.invalid", "-c", "commit.gpgsign=false",
+                "commit", "--quiet", "-m", "Disposable checkout modes fixture")
+            previous_umask = os.umask(0o077)
+            try:
+                # Never switch the host test's UID or supplementary groups.
+                # The real child still executes the production umask setup.
+                with mock.patch.object(bootstrap, "drop_privileges"):
+                    checkout = root / "checkout"
+                    git("clone", "--quiet", "--no-hardlinks", str(source), str(checkout),
+                        preexec_fn=bootstrap.prepare_job_process)
+                    private_registration = root / "registration-private"
+                    subprocess.run(
+                        [sys.executable, "-c",
+                         "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('private')",
+                         str(private_registration)],
+                        preexec_fn=bootstrap.drop_privileges, check=True,
+                    )
+                private_parent = root / "parent-private"
+                private_parent.write_text("private")
+                self.assertEqual(os.umask(0o077), 0o077)
+                self.assertEqual(stat.S_IMODE(checkout.stat().st_mode), 0o755)
+                self.assertEqual(stat.S_IMODE((checkout / "script.sh").stat().st_mode), 0o755)
+                self.assertEqual(stat.S_IMODE((checkout / "data.json").stat().st_mode), 0o644)
+                self.assertEqual(stat.S_IMODE(private_registration.stat().st_mode), 0o600)
+                self.assertEqual(stat.S_IMODE(private_parent.stat().st_mode), 0o600)
+            finally:
+                os.umask(previous_umask)
 
     def test_failure_event_never_includes_exception_or_token(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(bootstrap, "RUNTIME", Path(directory)), mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), mock.patch.object(bootstrap, "isolated_registration", side_effect=ValueError("SECRET-IN-ERROR")), mock.patch.object(bootstrap.subprocess, "run") as run, mock.patch.object(bootstrap, "emit") as emit:
@@ -651,7 +731,25 @@ class GuestSmokeHealthTests(unittest.TestCase):
         self.assertEqual(build.call_args.args[0].proxies, {"https": "http://10.0.2.2:27892"})
         opener.open.assert_called_once()
         opener.open.return_value.__enter__.return_value.read.assert_called_once_with(1024)
-        self.assertEqual(docker.call_count, 2)
+        docker.assert_has_calls([
+            mock.call(["docker", "compose", "version"], check=True, timeout=30),
+            mock.call(["docker", "run", "--rm", "--network", "none", "hello-world@sha256:" + "a" * 64], check=True, timeout=180),
+            mock.call(["docker", "image", "rm", "hello-world@sha256:" + "a" * 64], check=True, timeout=30),
+        ])
+        self.assertEqual(docker.call_count, 3)
+
+    def test_missing_or_unresponsive_compose_prevents_template_smoke_success(self):
+        failures = [subprocess.CalledProcessError(1, ["docker", "compose", "version"]),
+                    subprocess.TimeoutExpired(["docker", "compose", "version"], 30)]
+        for failure in failures:
+            with self.subTest(error=type(failure).__name__), ExitStack() as stack:
+                _, _, docker = self.prepare_smoke(stack)
+                docker.side_effect = failure
+                output = stack.enter_context(mock.patch("sys.stdout", new_callable=io.StringIO))
+                with self.assertRaises(type(failure)):
+                    smoke.main()
+                docker.assert_called_once_with(["docker", "compose", "version"], check=True, timeout=30)
+                self.assertNotIn('"guest_smoke": "passed"', output.getvalue())
 
     def test_guest_denied_web_probe_is_not_accepted_or_retried_elsewhere(self):
         with ExitStack() as stack:

@@ -200,8 +200,8 @@ def read_lock(path: Path) -> dict:
     artifacts = [(value["cloud_image"], "cloud-images.ubuntu.com"),
                  (value["runner"], "github.com"), (value["buildx"], "github.com")]
     packages = value["docker_apt"]["packages"]
-    if {p["package"] for p in packages} != {"docker-ce", "docker-ce-cli", "containerd.io"} or len(packages) != 3:
-        raise TemplateError("Docker lock must include the three reviewed packages")
+    if {p["package"] for p in packages} != {"docker-ce", "docker-ce-cli", "containerd.io", "docker-compose-plugin"} or len(packages) != 4:
+        raise TemplateError("Docker lock must include the four reviewed packages")
     artifacts.extend((p, "download.docker.com") for p in packages)
     for item, hostname in artifacts:
         parsed = urllib.parse.urlsplit(item["url"])

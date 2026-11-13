@@ -147,6 +147,16 @@ runner 四组测试合计 **149 项通过**：控制器 61、宿主 42、模板/
 
 首次本地校验发现新工作树受默认 umask 影响将受保护文件检出为 0664/0775；按已有 policy 恢复 0644/0755，仅修改本地权限、不改内容或放宽校验。随后完整相关测试 **266 项通过**，`validate_workflows.py`、actionlint v1.7.7（显式自定义标签配置）、ShellCheck v0.10.0（本任务修改/新增的全部 shell 文件）、git diff --check 均通过。暂存 39 个文件，检查未包含 .pem/.key 或 PRIVATE KEY 内容。实际 runner 已 Online，完整 PR CI 与每 job 回收仍待运行。
 
+## 2026-11-13 PR #111 首轮执行与模板兼容修复
+
+PR https://github.com/lzq390/ZhijuPoly/pull/111 已创建为 draft 并附到当前任务，base=main 7dc8581、head 初始 4dc8c2d，仅一个迁移提交。CI run 43397323016 已通过 hosted resolve-sha；首个本地 job 131791367723（Frontend Vitest and build）使用 runner ID21 / VM a0398f54c8a643a4aa30f79b8809b10f，于北京时间 16:57:45 开始。checkout/SHA 断言/Node 安装/npm 依赖/Vitest/Worker 与 SDK 检查已通过，前端 build 及后续检查尚在执行。其余本地任务排队，保持单并发。
+
+实际任务启动后发现服务 UMask=0077 会被 run.sh 子进程继承；官方 runner v2.338.2 的 run.sh/run-helper 未重置 umask。真实临时 Git clone 复现 tracked 100755/100644 被检出为 0700/0600，会违背原有 exact-mode policy。修复只在 unprivileged job 子进程降权后设置 0022；注册子进程与父进程仍保持私有 umask。新回归真实创建/克隆 Git 仓库，证明工作目录 0755、脚本 0755、普通文件 0644，同时注册和父进程私有文件均 0600。未放宽校验器，也未修改已运行 guest。
+
+另复核 Docker 29.9.3 官方签名 metadata 和准确 CLI deb：Compose 只在 Recommends，包内无插件，--no-install-recommends 会跳过，现有 policy 的 `docker compose config` 因此缺少前置条件。交付包锁定 docker-compose-plugin 5.7.1-1~ubuntu.24.04~noble，官方 URL/SHA256 c2f6549958ca64466da9e31a6d488e19f5a1bf475a4425df9e4c3a010d5950ac；8,483,736-byte deb 实查 SHA 匹配且含可执行 Compose 插件。四个包均重新通过 Docker 签名 metadata 校验。新增缺失/重复/未知包拒绝、Compose smoke 失败与超时阻止模板封存测试，保留 umask 回归。
+
+两项兼容修复后完整相关测试 **270 项通过**，workflow policy 与 diff 检查通过。前端执行中采样 MemoryPeak=10561359872 bytes（约 9.84 GiB）、CPUUsageNSec=1320879487000、IOWriteBytes=5406766080，仅为截至采样时的下界，任务尚未结束。修复需要 drain 保留当前任务到完成，再安装并重建模板；当前 run 未因推送更新而取消，修复暂未推送，避免中断首个执行/回收验证。完整 CI、job 回收与最终资源数据仍待确认。
+
 ## 复验命令
 
 在仓库根目录：

@@ -118,7 +118,7 @@ def main() -> None:
             download(artifact, path)
             packages.append(str(path))
         run("apt-get", "install", "-y", "--no-install-recommends", *packages)
-        run("apt-mark", "hold", "docker-ce", "docker-ce-cli", "containerd.io")
+        run("apt-mark", "hold", "docker-ce", "docker-ce-cli", "containerd.io", "docker-compose-plugin")
         stage("buildx_download")
         buildx = Path("/usr/local/lib/docker/cli-plugins/docker-buildx")
         buildx.parent.mkdir(parents=True, exist_ok=True)
