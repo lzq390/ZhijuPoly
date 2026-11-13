@@ -1,0 +1,34 @@
+# Host configuration contains no credentials. Install the GitHub App key separately,
+# root-owned, mode 0600; never copy it to the guest or the staging package.
+[paths]
+root = "/data/lzq/github-runner"
+state = "/data/lzq/github-runner/state"
+
+[github]
+repository = "lzq390/ZhijuPoly"
+app_id = 0
+installation_id = 0
+private_key_file = "/etc/nexpoly-runner/app.pem"
+
+[runner]
+label = "nexpoly-ci-ephemeral"
+name_prefix = "nexpoly-ci-"
+vcpus = 8
+memory_mib = 32768
+disk_gib = 160
+
+[network]
+upstream_host = "127.0.0.1"
+upstream_port = 27891
+proxy_port = 27892
+dns = "202.38.64.7"
+no_proxy = "localhost,127.0.0.1,::1,postgres,backend,lab-postgres"
+
+[policy]
+state_min_free_gib = 40
+host_min_free_gib = 100
+poll_seconds = 30
+boot_timeout_seconds = 600
+job_timeout_seconds = 6300
+shutdown_timeout_seconds = 120
+failure_limit = 3

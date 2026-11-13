@@ -14,6 +14,35 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_ROOT = REPOSITORY_ROOT / ".github" / "workflows"
 CI_PATH = WORKFLOW_ROOT / "ci.yml"
+ACTIONLINT_PATH = REPOSITORY_ROOT / ".github" / "actionlint.yaml"
+ACTIONLINT_CONFIG = "self-hosted-runner:\n  labels:\n    - nexpoly-ci-ephemeral\n"
+LOCAL_RUNNER_LINE = "    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]"
+HOSTED_RUNNER_LINE = "    runs-on: ubuntu-24.04"
+LOCAL_RUNNER_JOBS = frozenset({
+    "policy", "script-tests", "lightweight-backend-tests", "property-filter-mcp-tests",
+    "production-alias-integration", "postgres-media-integration", "backend-tests",
+    "frontend", "worker-tests", "dft-worker-tests", "image-build", "bridge-validation",
+    "exact-b-bridge", "openscience-overlay",
+})
+HOSTED_RUNNER_JOBS = frozenset({"resolve-sha", "ci-gate", "release", "openscience-release"})
+PUBLISHING_JOBS = frozenset({"release", "openscience-release"})
+BUILDX_SETUP_LINES = (
+    "      - name: Set up Buildx",
+    "        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3",
+)
+LOCAL_BUILDX_SETUP_LINES = (*BUILDX_SETUP_LINES,
+    "        with:",
+    "          driver: docker-container",
+    "          driver-opts: |",
+    "            env.http_proxy=http://10.0.2.2:27892",
+    "            env.https_proxy=http://10.0.2.2:27892",
+    "            env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres",
+)
+FRONTEND_VITEST_STEP = '''      - name: Run Vitest
+        working-directory: frontend
+        env:
+          VITE_AGENT_WORKSPACE_URL: https://workspace.ci.invalid/
+        run: npm test -- --maxWorkers=4'''
 RELEASE_INPUT_PATH = REPOSITORY_ROOT / "release-input.json"
 DEPLOYMENT_DOC_PATH = REPOSITORY_ROOT / "docs" / "deployment.md"
 RELEASE_CONTROLLER_DOC_PATH = (
@@ -41,7 +70,7 @@ IMAGE_DISK_PREPARATION_PATH = (
     REPOSITORY_ROOT / "scripts" / "ci" / "prepare_image_build_disk.sh"
 )
 EXPECTED_IMAGE_DISK_PREPARATION_SHA256 = (
-    "9799fca641100c90e8b41688efecb5002dccf1280ab40c863bdad2d3cff903d7"
+    "8d894a353898aee0143314e99591472b135301a31880e43d54b288f95bcdc204"
 )
 OPENSCIENCE_DOCKERFILE_PATH = (
     REPOSITORY_ROOT / "ops" / "openscience-ui-overlay" / "Dockerfile"
@@ -372,7 +401,7 @@ IMAGE_BUILD_JOB_PREFIX_LINES = (
     "    name: Build ${{ matrix.name }} image without publishing",
     "    if: github.event_name == 'pull_request'",
     "    needs: resolve-sha",
-    "    runs-on: ubuntu-24.04",
+    LOCAL_RUNNER_LINE,
     "    timeout-minutes: 90",
     "    strategy:",
     "      fail-fast: false",
@@ -767,6 +796,69 @@ def workflow_step_blocks(job_body: str) -> list[str]:
     ]
 
 
+def validate_runner_routing(ci_text: str, failures: list[str]) -> None:
+    """Keep disposable test runners separate from hosted image publishers."""
+    if ci_text.count("\njobs:\n") != 1:
+        failures.append("CI must have one explicit jobs mapping for runner routing")
+        return
+    preamble, jobs_text = ci_text.split("\njobs:\n", 1)
+    job_names = [match.group("name") for match in WORKFLOW_JOB_HEADER.finditer(jobs_text)]
+    expected_jobs = LOCAL_RUNNER_JOBS | HOSTED_RUNNER_JOBS
+    if set(job_names) != expected_jobs or len(job_names) != len(expected_jobs):
+        failures.append("CI runner routing must retain exactly the reviewed 14 local and 4 hosted jobs")
+    default_permissions = re.findall(r"(?m)^permissions:[^\n]*(?:\n  [^\n]*)*", preamble)
+    if default_permissions != ["permissions:\n  contents: read\n  packages: read"]:
+        failures.append("CI default token permissions must remain contents: read and packages: read")
+    proxy_marker = re.compile(r"(?i)(?:https?_proxy|no_proxy|https?Proxy|noProxy|10\.0\.2\.2:27892)")
+    if proxy_marker.search(preamble):
+        failures.append("Local runner proxy configuration must not be inherited by hosted jobs")
+    for job_name in sorted(expected_jobs):
+        body = workflow_job_body(ci_text, job_name, failures)
+        if body is None:
+            continue
+        expected_runner = LOCAL_RUNNER_LINE if job_name in LOCAL_RUNNER_JOBS else HOSTED_RUNNER_LINE
+        runners = re.findall(r"(?m)^    runs-on:[^\n]*", body)
+        if runners != [expected_runner]:
+            failures.append(f"{job_name} must use its exact reviewed runner route: {expected_runner.strip()}")
+        permissions = re.findall(r"(?m)^    permissions:[^\n]*(?:\n      [^\n]*)*", body)
+        expected_permissions = []
+        if job_name in PUBLISHING_JOBS:
+            expected_permissions = ["    permissions:\n      contents: read\n      packages: write"]
+        elif job_name == "exact-b-bridge":
+            expected_permissions = ["    permissions:\n      contents: read\n      packages: read"]
+        if permissions != expected_permissions:
+            failures.append(f"{job_name} must retain its reviewed token permissions; only hosted releases may write packages")
+        if job_name in HOSTED_RUNNER_JOBS and proxy_marker.search(body):
+            failures.append(f"{job_name} must not inherit the local runner proxy")
+
+
+def validate_local_runner_controls(ci_text: str, failures: list[str]) -> None:
+    """Require builder proxy settings and bounded frontend worker parallelism."""
+    build_jobs = {"image-build", "openscience-overlay", *PUBLISHING_JOBS}
+    if ci_text.count("uses: docker/setup-buildx-action@") != len(build_jobs):
+        failures.append("CI must retain exactly four reviewed Buildx setup steps")
+    for job_name in sorted(build_jobs):
+        body = workflow_job_body(ci_text, job_name, failures)
+        if body is None:
+            continue
+        selected = [step for step in workflow_step_blocks(body)
+                    if "uses: docker/setup-buildx-action@" in step]
+        expected = LOCAL_BUILDX_SETUP_LINES if job_name in LOCAL_RUNNER_JOBS else BUILDX_SETUP_LINES
+        if len(selected) != 1 or selected[0].rstrip().splitlines() != list(expected):
+            failures.append(f"{job_name} must retain its exact reviewed Buildx proxy configuration")
+    frontend = workflow_job_body(ci_text, "frontend", failures)
+    if frontend is not None:
+        selected = [step for step in workflow_step_blocks(frontend)
+                    if step.startswith("      - name: Run Vitest\n")]
+        if len(selected) != 1 or selected[0].rstrip() != FRONTEND_VITEST_STEP:
+            failures.append("frontend must run the complete Vitest suite with at most four workers")
+
+
+def validate_actionlint_config(text: str, failures: list[str]) -> None:
+    if text != ACTIONLINT_CONFIG:
+        failures.append("actionlint must allow only the reviewed nexpoly-ci-ephemeral custom label without ignored checks")
+
+
 def validate_remote_git_context_auth(ci_text: str, failures: list[str]) -> None:
     builds = []
     for job in ("image-build", "release", "openscience-overlay", "openscience-release"):
@@ -801,7 +893,7 @@ def validate_image_disk_preparation(ci_text: str, failures: list[str]) -> None:
         expected.extend(("        timeout-minutes: 5", f"        run: {helper}"))
         selected = [step for step in steps if helper in step]
         if len(selected) != 1 or selected[0].rstrip().splitlines() != expected:
-            failures.append(f"{job} must retain the bounded hosted-runner disk preparation")
+            failures.append(f"{job} must retain the bounded runner disk preparation")
         elif steps.index(selected[0]) != 2:
             failures.append(f"{job} must prepare image storage immediately after its checkout assertion")
     if ci_text.count(helper) != 3:
@@ -813,7 +905,7 @@ def validate_image_disk_preparation(ci_text: str, failures: list[str]) -> None:
         or stat.S_IMODE(path.stat().st_mode) != 0o755
         or hashlib.sha256(path.read_bytes()).hexdigest() != EXPECTED_IMAGE_DISK_PREPARATION_SHA256
     ):
-        failures.append("Image disk preparation must match the reviewed hosted-runner-only implementation")
+        failures.append("Image disk preparation must match the reviewed hosted cleanup and ephemeral VM capacity checks")
 
 
 def validate_backend_image_identity_policy(
@@ -1374,7 +1466,7 @@ def validate_independent_mcp_tests(ci_text: str, failures: list[str]) -> None:
     if gate.count("      - property-filter-mcp-tests\n") != 1:
         failures.append("ci-gate must require property-filter-mcp-tests")
     for marker in (
-        "    needs: resolve-sha\n", "    runs-on: ubuntu-24.04\n",
+        "    needs: resolve-sha\n", LOCAL_RUNNER_LINE + "\n",
         "    timeout-minutes: 20\n", "        image: " + EXPECTED_POSTGRES_IMAGE,
         "          POSTGRES_USER: mcp_test_admin\n",
         "          POSTGRES_PASSWORD: mcp-ci-disposable-password\n",
@@ -2977,14 +3069,14 @@ def main() -> int:
             "  bridge-validation:\n"
             "    name: bridge-validation\n"
             "    needs: resolve-sha\n"
-            "    runs-on: ubuntu-24.04",
+            "    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]",
             "Validate exact bridge policy and schema compatibility states",
             "python3 scripts/validate_production_bridge_policy.py",
             "scripts/tests/test_production_bridge_policy.py",
             "  exact-b-bridge:\n"
             "    name: exact-B bridge compatibility\n"
             "    needs: resolve-sha\n"
-            "    runs-on: ubuntu-24.04",
+            "    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]",
             "Run real B-schema through F/0013 and F/0014 through F/0016 transition smoke",
             "scripts/ci/test_exact_b_bridge.sh",
             "name: ci-gate",
@@ -3017,7 +3109,7 @@ def main() -> int:
             "python scripts/prepare_dev_worker_venv.py verify",
             '"$worker_python" -m pytest -p no:cacheprovider',
             "working-directory: frontend",
-            "run: npm test",
+            "run: npm test -- --maxWorkers=4",
             "scripts/ci/test_frontend_image_permissions.sh",
             "python3 -m unittest -v \"${unittest_files[@]}\"",
             "name: Production 0005 alias PostgreSQL 16 isolation integration",
@@ -3028,7 +3120,7 @@ def main() -> int:
             "    name: PostgreSQL media matching-major integration "
             "(${{ matrix.major }})\n"
             "    needs: resolve-sha\n"
-            "    runs-on: ubuntu-24.04",
+            "    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]",
             'NEXPOLY_RUN_POSTGRES_MEDIA_INTEGRATION: "1"',
             'NEXPOLY_RUN_MUTABLE_HELPER_INTEGRATION: "1"',
             "NEXPOLY_POSTGRES_MEDIA_TEST_ACK: ephemeral-localhost-only",
@@ -3068,6 +3160,12 @@ def main() -> int:
         ),
         failures,
     )
+    validate_runner_routing(ci_text, failures)
+    validate_local_runner_controls(ci_text, failures)
+    if ACTIONLINT_PATH.is_symlink() or not ACTIONLINT_PATH.is_file():
+        failures.append("Reviewed .github/actionlint.yaml must be a regular file")
+    else:
+        validate_actionlint_config(ACTIONLINT_PATH.read_text(encoding="utf-8"), failures)
     validate_complete_history_checkouts(ci_text, failures)
     validate_script_tests_budget(ci_text, failures)
     validate_lightweight_backend_tests(ci_text, failures)
