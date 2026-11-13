@@ -6,11 +6,13 @@
 
 已实现控制器、宿主安装工具、受限网络配置、VM 模板制作、guest 启动程序、版本锁和 CI 迁移代码。源码位于仓库 `ops/self_hosted_runner/`，部署副本位于 `/data/lzq/github-runner/control/`。本文件同时保存为 `/data/lzq/github-runner/PLAN.md`。
 
-**专用 runner 已上线，CI 迁移 PR 正在验收。** 2026-11-13 16:50（北京时间）GitHub API 确认目标仓库恰有一台 runner：ID 21，`nexpoly-ci-a0398f54c8a643a4aa30f79b8809b10f`，status=online、busy=false，标签为 self-hosted/Linux/X64/nexpoly-ci-ephemeral。控制器 active、NRestarts=0，唯一执行 VM active，8 CPU 配额、MemoryMax 34 GiB、MemorySwapMax=0。[迁移 PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 已创建为 draft，CI run 43397323016 的首个本地前端 job 已接单，依赖安装、Vitest 和两个 SDK/Worker 检查已通过。
+**专用 runner 已完成首次接单，CI 迁移 PR 正在验收。** 2026-11-13 16:50（北京时间）GitHub API 确认目标仓库恰有一台 runner：ID 21，`nexpoly-ci-a0398f54c8a643a4aa30f79b8809b10f`，标签为 self-hosted/Linux/X64/nexpoly-ci-ephemeral。该 VM 的 8 CPU 配额、MemoryMax 34 GiB、MemorySwapMax=0 已核验。[迁移 PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 为 draft，首个本地前端 job 已通过依赖安装、Vitest、前端构建和 Chromium 双编辑器检查，但在 nginx 镜像检查期间触发原有 25 分钟超时。17:24 左右对应 VM 已 inactive/dead、GitHub runner 数为 0；用户已 drain，控制器保持 active，等待模板维护。
 
 管理员已完成 guest 启动顺序修复后的模板重建，新镜像为 `base-d3bd857a91806acc549ed09a8ed404c06dc63a2a210f017d886276ae607b93da.qcow2`，上一版本 053aef 仍保留。bootstrap 使用 Type=exec、WantedBy=cloud-init.target、Requires=cloud-final.service，新执行 VM 已完成注册。首次完整 PR、每 job 身份变化/回收、BuildKit/cache/浏览器依赖与 CI 资源峰值仍待验证，暂不将 Online 视为完整 CI 已通过。
 
 首轮验收复查补齐两项 guest 差异：仅在实际 job 子进程降权后设置 umask 0022，使 checkout 保持原 policy 要求的 0755/0644；注册与宿主私有文件继续使用 0077。显式锁定第四个 Docker APT 包 docker-compose-plugin 5.7.1，并在 smoke 中检查 `docker compose version`；此前 --no-install-recommends 不会安装 CLI 的 Compose 推荐包。两项修复已在源码/交付包准备，当前 d3bd 模板与执行中 VM 尚未包含，需 drain 等当前 job 完成后停止控制器并重建模板，一次应用两项修复；不放宽既有 workflow 权限校验。
+
+首个前端 job 的浏览器依赖安装耗时 6 分 31 秒，Chromium 检查耗时 8 分 59 秒，最终超时。源码进一步将仓库锁定的 Playwright 1.62.1/1.63.0 官方一致的 Ubuntu 24.04 Chromium 系统库、字体与工具预装到模板，并保留签名 APT 索引供每台新 VM 独立重新校验；继续清理 deb 下载包。首轮系统包安装新增约 299 MB，索引额外空间和新执行耗时待实测。浏览器二进制和项目依赖仍按 job 安装，不共享可写缓存；保留 25 分钟超时和全部检查。此源码修复尚需同步交付并重建模板。
 
 专用 GitHub App 已创建并安装：`ZhijuPolyrunner`（slug `zhijupolyrunner`），App ID `5740902`、Installation ID `181516914`，所有者 `lzq390`。用户提供的 PEM 已通过格式与实际 JWT 认证校验，App 权限精确为 Administration write、Actions read、Metadata read，events 为空。用户将安装范围从 all 改为 selected 后，GitHub 再次核实仅含 `lzq390/ZhijuPoly` 一个仓库、未暂停；短期 installation token 及目标仓库 runner API 验证通过，现有 runner 数为 0。验证用短期 token 已撤销。
 
@@ -167,7 +169,7 @@ VM 启动前显示串口日志完整路径；guest 会通过事件通道显示 `
 
 安装器与控制器/模板更新共享全局锁，下载中也拒绝重装，避免安装重启代理而中断传输。需要更新程序时，先等当前命令结束或在其终端正常 Ctrl+C，再重新安装；控制器的 runtime directory 保留到重启，防止退出时移除其他操作仍在使用的锁。
 
-模板预装系统 Python、Git、ShellCheck、PostgreSQL 16 客户端、Docker/Buildx/Compose 和必要系统依赖。Compose 与三个 Docker 基础包同由官方签名 APT 元数据和 SHA256 锁定，安装后 hold；smoke 检查 Compose CLI、网络隔离和 hello-world 拉取运行。Python 3.11、Node 22、Go 1.24 仍由 workflow setup actions 安装。guest 无应用依赖、注册身份或跨 job 可写缓存。模板构建先执行不含注册材料的 smoke 检查，失败不封存。源码更新后要重新执行安装器快照再更新模板；修改 `control/` 不会悄悄改变 root 服务。
+模板预装系统 Python、Git、ShellCheck、PostgreSQL 16 客户端、Docker/Buildx/Compose 及官方 Chromium 系统库、字体与工具。保留签名 APT 索引，每台 VM 的 apt update 仍重新校验发行信息；不预装浏览器二进制。Compose 与三个 Docker 基础包同由官方签名 APT 元数据和 SHA256 锁定，安装后 hold；smoke 检查 Compose CLI、网络隔离和 hello-world 拉取运行。Python 3.11、Node 22、Go 1.24 仍由 workflow setup actions 安装。guest 无应用依赖、注册身份或跨 job 可写缓存。模板构建先执行不含注册材料的 smoke 检查，失败不封存。源码更新后要重新执行安装器快照再更新模板；修改 `control/` 不会悄悄改变 root 服务。
 
 ### 4. 配置 App 后启用控制器
 

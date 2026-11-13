@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -106,7 +107,7 @@ class GuestBuildDiagnosticsTests(unittest.TestCase):
         emit.assert_not_called()
         run.assert_called_once_with(["systemctl", "poweroff", "--no-block"], check=False)
 
-    def test_real_preparation_flow_emits_all_phases_in_order(self):
+    def test_real_preparation_flow_preinstalls_os_browser_dependencies_and_preserves_apt_indexes(self):
         # Redirect every guest path into a temporary tree. All subprocesses,
         # downloads, extraction and cleanup remain mocked; no host is prepared.
         with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
@@ -119,6 +120,10 @@ class GuestBuildDiagnosticsTests(unittest.TestCase):
                 "docker_apt": {"packages": [{"package": "docker-ce"}]},
                 "buildx": {}, "runner": {"version": "2.338.2"},
             }))
+            apt_lists = root / "var/lib/apt/lists"
+            apt_lists.mkdir(parents=True)
+            (apt_lists / "ubuntu_InRelease").write_text("release metadata fixture")
+            (apt_lists / "ubuntu_Packages").write_text("package index fixture")
 
             def guest_path(value):
                 path = Path(value)
@@ -130,14 +135,19 @@ class GuestBuildDiagnosticsTests(unittest.TestCase):
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(b"mock artifact")
 
+            def remove_guest_tree(path, **kwargs):
+                mapped = guest_path(path)
+                self.assertTrue(mapped.is_relative_to(root))
+                shutil.rmtree(mapped, **kwargs)
+
             stack.enter_context(mock.patch.object(build, "CONFIG", config))
             stack.enter_context(mock.patch.object(build, "Path", side_effect=guest_path))
             stack.enter_context(mock.patch.object(build.os, "geteuid", return_value=0))
             stack.enter_context(mock.patch.dict(os.environ))
-            stack.enter_context(mock.patch.object(build, "run"))
+            run = stack.enter_context(mock.patch.object(build, "run"))
             stack.enter_context(mock.patch.object(build, "download", side_effect=downloaded))
             stack.enter_context(mock.patch.object(build.tarfile, "open"))
-            stack.enter_context(mock.patch.object(build, "shutil", SimpleNamespace(rmtree=mock.Mock())))
+            stack.enter_context(mock.patch.object(build, "shutil", SimpleNamespace(rmtree=remove_guest_tree)))
             emit = stack.enter_context(mock.patch.object(build, "emit"))
             build.main()
             self.assertEqual(
@@ -148,6 +158,25 @@ class GuestBuildDiagnosticsTests(unittest.TestCase):
             self.assertEqual(emit.call_args, mock.call(
                 "template_ready", profile="nexpoly-ci-ephemeral-v1",
                 runner_version="2.338.2", smoke_passed=True))
+            # Independent reviewed set: omitting a font/library must not silently
+            # put the package download back into the limited per-job CI budget.
+            expected_browser_packages = {
+                "xvfb", "fonts-noto-color-emoji", "fonts-unifont", "libfontconfig1",
+                "libfreetype6", "xfonts-cyrillic", "xfonts-scalable", "fonts-liberation",
+                "fonts-ipafont-gothic", "fonts-wqy-zenhei", "fonts-tlwg-loma-otf",
+                "fonts-freefont-ttf", "libasound2t64", "libatk-bridge2.0-0t64",
+                "libatk1.0-0t64", "libatspi2.0-0t64", "libcairo2", "libcups2t64",
+                "libdbus-1-3", "libdrm2", "libgbm1", "libglib2.0-0t64", "libnspr4",
+                "libnss3", "libpango-1.0-0", "libx11-6", "libxcb1", "libxcomposite1",
+                "libxdamage1", "libxext6", "libxfixes3", "libxkbcommon0", "libxrandr2",
+            }
+            system_install = next(call.args for call in run.call_args_list
+                                  if call.args[:4] == ("apt-get", "install", "-y", "--no-install-recommends"))
+            self.assertTrue(expected_browser_packages.issubset(system_install[4:]))
+            self.assertEqual(set(build.CHROMIUM_SYSTEM_PACKAGES), expected_browser_packages)
+            run.assert_any_call("apt-get", "clean")
+            self.assertEqual((apt_lists / "ubuntu_InRelease").read_text(), "release metadata fixture")
+            self.assertEqual((apt_lists / "ubuntu_Packages").read_text(), "package index fixture")
 
 
 if __name__ == "__main__":

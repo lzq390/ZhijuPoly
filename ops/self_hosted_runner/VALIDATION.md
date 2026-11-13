@@ -157,6 +157,16 @@ PR https://github.com/lzq390/ZhijuPoly/pull/111 已创建为 draft 并附到当�
 
 两项兼容修复后完整相关测试 **270 项通过**，workflow policy 与 diff 检查通过。前端执行中采样 MemoryPeak=10561359872 bytes（约 9.84 GiB）、CPUUsageNSec=1320879487000、IOWriteBytes=5406766080，仅为截至采样时的下界，任务尚未结束。修复需要 drain 保留当前任务到完成，再安装并重建模板；当前 run 未因推送更新而取消，修复暂未推送，避免中断首个执行/回收验证。完整 CI、job 回收与最终资源数据仍待确认。
 
+## 2026-11-13 首个 job 超时与回收观察
+
+首个前端 job 131791367723 于 17:23:13（北京时间）结束，conclusion=cancelled。GitHub check-run annotation 明确为 `The job has exceeded the maximum execution time of 25m0s`，并非推送取消或内存不足。Vitest、两次前端构建、浏览器安装及 Chromium 双编辑器检查均通过；首个 nginx 镜像已构建并通过 nginx -t，随后触发总时限，第二个镜像检查未执行。
+
+主要阶段：Vitest 3 分 15 秒、Playwright install --with-deps 6 分 31 秒（APT 更新约 1 分 25 秒、包下载安装约 2 分 48 秒、浏览器下载约 2 分 14 秒）、Chromium 检查 8 分 59 秒。日志显示浏览器系统依赖新增约 299 MB。后续修复优先将官方 Ubuntu 24.04 Chromium 系统依赖纳入基础模板，保留原有检查和 25 分钟超时；不得将此次 cancelled 记为 CI 成功。
+
+17:24 左右只读核查对应 VM unit 为 inactive/dead、GitHub runner total_count=0，控制器仍 active/drained，后续本地 job 排队。未读取受保护的最终实例日志，因此增量盘删除与最终资源峰值仍需后续状态/日志确认。此前最后采样 MemoryPeak=15498309632 bytes（约 14.43 GiB）、CPUUsageNSec=2864973644000、IOReadBytes=958629376、IOWriteBytes=13645642752，均为退出前采样下界，不作为完整 CI 的峰值。
+
+源码已预装 [Playwright 1.63.0 官方 Ubuntu 24.04 Chromium 依赖表](https://github.com/microsoft/playwright/blob/v1.63.0/packages/playwright-core/src/server/registry/nativeDeps.ts) 的 33 项系统库、字体与工具；另核实仓库使用的 1.62.1 对应集合相同。保留签名 APT 索引，apt-get clean 仍执行，只清理 deb 下载包；索引之后由各 VM 的 apt update 重新校验，写入独立增量盘。强化原有离线构建测试，以真实临时索引文件验证清理后仍存在、完整依赖集合传给 apt、deb 清理仍执行；guest build/template 相关 50 项测试通过。实际模板空间、执行耗时与完整 CI 仍待验证，尚未同步此项交付包以避免与管理员可能已启动的维护过程并发。
+
 ## 2026-11-13 模板维护流程
 
 用户已执行 drain，当前前端任务继续运行，后续任务留在队列。新增 `maintain-template.sh`，管理员可用一条命令等待当前 VM 回收、停止控制器、安装交付包、重建模板并恢复接单。最长等待 6,600 秒，状态异常或超时不会停止活动 VM；安装/构建失败不会执行 resume/start。

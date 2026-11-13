@@ -19,6 +19,19 @@ HERE = Path("/usr/local/lib/nexpoly-ci-runner")
 CONFIG = Path("/etc/nexpoly-ci-runner")
 PROXY = "http://10.0.2.2:27892"
 NO_PROXY = "localhost,127.0.0.1,::1,postgres,backend,lab-postgres"
+# Ubuntu 24.04 x64 tools + Chromium requirements are identical in the locked
+# Playwright 1.62.1 and 1.63.0 releases. Preinstall OS libraries and fonts only:
+# https://github.com/microsoft/playwright/blob/v1.63.0/packages/playwright-core/src/server/registry/nativeDeps.ts
+CHROMIUM_SYSTEM_PACKAGES = (
+    "xvfb", "fonts-noto-color-emoji", "fonts-unifont", "libfontconfig1",
+    "libfreetype6", "xfonts-cyrillic", "xfonts-scalable", "fonts-liberation",
+    "fonts-ipafont-gothic", "fonts-wqy-zenhei", "fonts-tlwg-loma-otf",
+    "fonts-freefont-ttf", "libasound2t64", "libatk-bridge2.0-0t64",
+    "libatk1.0-0t64", "libatspi2.0-0t64", "libcairo2", "libcups2t64",
+    "libdbus-1-3", "libdrm2", "libgbm1", "libglib2.0-0t64", "libnspr4",
+    "libnss3", "libpango-1.0-0", "libx11-6", "libxcb1", "libxcomposite1",
+    "libxdamage1", "libxext6", "libxfixes3", "libxkbcommon0", "libxrandr2",
+)
 STAGES = frozenset({"preflight", "apt_update", "apt_dependencies", "docker_packages",
                     "buildx_download", "runner_download", "runner_dependencies",
                     "guest_configuration", "docker_start", "smoke", "seal"})
@@ -108,7 +121,8 @@ def main() -> None:
     stage("apt_update")
     run("apt-get", "update")
     stage("apt_dependencies")
-    run("apt-get", "install", "-y", "--no-install-recommends", "ca-certificates", "curl", "git", "jq", "sudo", "python3-venv", "build-essential", "unzip", "zip", "rsync", "zstd", "xz-utils", "iptables", "nftables", "shellcheck", "postgresql-client-16", "libpq-dev")
+    run("apt-get", "install", "-y", "--no-install-recommends", "ca-certificates", "curl", "git", "jq", "sudo", "python3-venv", "build-essential", "unzip", "zip", "rsync", "zstd", "xz-utils", "iptables", "nftables", "shellcheck", "postgresql-client-16", "libpq-dev",
+        *CHROMIUM_SYSTEM_PACKAGES)
     with tempfile.TemporaryDirectory(prefix="nexpoly-template-") as directory:
         temp = Path(directory)
         packages = []
@@ -157,7 +171,9 @@ def main() -> None:
         if (Path("/opt/actions-runner") / filename).exists():
             raise RuntimeError("template contains an already registered runner")
     run("apt-get", "clean")
-    shutil.rmtree("/var/lib/apt/lists", ignore_errors=True)
+    # Keep signed APT indexes so each fresh VM revalidates existing metadata
+    # instead of downloading every index again. apt-get clean removes .debs;
+    # all job writes still live only in that VM's disposable overlay.
     shutil.rmtree("/opt/actions-runner/_diag", ignore_errors=True)
     for key in Path("/etc/ssh").glob("ssh_host_*"):
         key.unlink()
