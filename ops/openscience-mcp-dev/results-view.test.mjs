@@ -71,6 +71,16 @@ function fullMessages() {
     tool("get_property_histogram", histogram())])
 }
 
+function throughGateway(session) {
+  const result = copy(session)
+  for (const message of result) for (const part of message.parts ?? []) {
+    if (part.type === "tool" && part.tool.startsWith(PREFIX)) {
+      part.tool = "capability_gateway_" + part.tool.slice(PREFIX.length)
+    }
+  }
+  return result
+}
+
 function assertUnavailable(parts) {
   const models = extractFilterTurns(messages(parts))
   assert.equal(models.length, 1)
@@ -106,6 +116,42 @@ test("binds by user ID and assistant parentID, preserving turn and revision boun
   assert.deepEqual(models.map(model => [model.turnId, model.datasetRevision, Boolean(model.search), model.histograms.length]),
     [["user-a", "revision-a", true, 0], ["user-a", "revision-b", false, 1], ["user-b", "revision-a", true, 0]])
   assert.equal(models[2].catalog.length, 0, "a catalog from another turn must not leak")
+})
+
+test("gateway filter calls retain the same validated results as persisted direct-MCP calls", () => {
+  assert.deepEqual(extractFilterTurns(throughGateway(fullMessages())), extractFilterTurns(fullMessages()))
+  const invalid = searchInput()
+  invalid.dataset_revision = "wrong-revision"
+  const session = throughGateway(messages([tool("search_polymers", search(), invalid)]))
+  const model = extractFilterTurns(session)[0]
+  assert.equal(model.status, "unavailable")
+  assert.equal(model.search, null)
+  assert.match(model.issues[0], /重新查询/)
+})
+
+test("mixed legacy and gateway history stays bound to each turn and ignores other gateway capabilities", () => {
+  const legacy = fullMessages()
+  const gateway = throughGateway(messages([tool("list_filter_properties", catalog("revision-b")),
+    tool("search_polymers", search("revision-b")), tool("get_property_histogram", histogram("revision-b"))], "user-b"))
+  for (const name of ["capability_gateway_predict_property", "capability_gateway_submit_dft_job",
+    "capability_gateway_search_polymers_extra", "other_capability_gateway_search_polymers"]) {
+    gateway[1].parts.push(tool("search_polymers", search("revision-b"), undefined, { tool: name }))
+  }
+  const unrelated = messages([tool("search_polymers", search(), undefined,
+    { tool: "capability_gateway_predict_property" })], "user-prediction")
+  const session = [...legacy, ...gateway, ...unrelated]
+  const before = copy(session)
+  const models = extractFilterTurns(session)
+  assert.equal(models.length, 2)
+  assert.deepEqual(models.map(model => [model.turnId, model.datasetRevision, model.sourceCalls.length]),
+    [["user-a", "revision-a", 3], ["user-b", "revision-b", 3]])
+  for (const model of models) {
+    assert.equal(model.status, "ready")
+    assert.equal(model.search.dataset_revision, model.datasetRevision)
+    assert.equal(model.histograms[0].dataset_revision, model.datasetRevision)
+    assert.deepEqual(model.issues, [])
+  }
+  assert.deepEqual(session, before)
 })
 
 test("supports search-only, histogram-only, zero matches, and empty distributions", () => {
@@ -234,13 +280,13 @@ test("browser renders safe complete evidence and accessible interactive bars at 
   try {
     browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] })
     const page = await browser.newPage({ viewport: { width: 1000, height: 950 } })
-    const hostile = fullMessages()
+    const hostile = throughGateway(fullMessages())
     const raw = search()
     const longSmiles = "*" + "C(=O)N".repeat(180) + "*"
     raw.results[0].canonical_smiles = longSmiles
     raw.results[0].polymer_name = '<img src=x onerror="window.injected=true">'
     raw.results[0].evidence[0].measurements[0].property_value = '<script>window.injected=true</script>'
-    hostile[1].parts[1] = tool("search_polymers", raw)
+    hostile[1].parts[1] = tool("search_polymers", raw, undefined, { tool: "capability_gateway_search_polymers" })
     await page.goto(`http://127.0.0.1:${server.address().port}/`)
     await page.evaluate(async session => {
       const { extractFilterTurns, renderFilterResult } = await import("/results-view.mjs")

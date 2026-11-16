@@ -1,6 +1,6 @@
 # Both local tags are checked against immutable image IDs by the development
 # launcher before Compose builds. No registry access or application rebuild.
-ARG OPENSCIENCE_UI_BASE_IMAGE=openscience-ui-poc:4522be0-production-dual
+ARG OPENSCIENCE_UI_BASE_IMAGE=openscience-ui-poc:9e342b5-production-dual
 ARG OPENSCIENCE_UI_PATCH_IMAGE=node:22-bookworm-slim
 FROM ${OPENSCIENCE_UI_BASE_IMAGE} AS source
 
@@ -14,11 +14,13 @@ RUN node /work/ui-patch.mjs /work/index.html /work/assets /work/overlay
 
 FROM ${OPENSCIENCE_UI_BASE_IMAGE}
 LABEL org.nexpoly.purpose="openscience-mcp-ui-development" \
-      org.nexpoly.expected-base-image="sha256:7dfa854a2a934cd8a6f7f62ec6bda97c6d9ab6faaa6a67c12c24cebf95d6809a" \
-      org.nexpoly.expected-base-index-sha256="5647ece9a54520ad8df4b04b2424293a54f3537f21293649729522144ddd3157" \
+      org.nexpoly.expected-base-image="sha256:fea8a3c294bb324a98041f8f8354448e6ca5c6502dedc565c4b884994c567bb0" \
+      org.nexpoly.expected-base-index-sha256="98d73cc0ab6b6504ec0ee2f9bba49f5a98f78486f2ca16fa37aa97ce6eb5fe71" \
       org.nexpoly.ui-overlay-format="1"
 # Copy only the guarded index and the new content-addressed assets. Keep the
-# upstream bundle, nginx configuration, entrypoint and healthcheck intact.
+# complete production bundle (including cache compatibility assets), nginx
+# configuration, entrypoint and healthcheck intact. The private development
+# network resolves openscience-backend to the independent development service.
 USER root
 COPY --from=patch /work/overlay/ /usr/share/nginx/html/
 USER 1001:1001
