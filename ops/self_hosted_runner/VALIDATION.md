@@ -173,6 +173,12 @@ PR https://github.com/lzq390/ZhijuPoly/pull/111 已创建为 draft 并附到当�
 
 7 项离线 fake-command 测试覆盖活动实例保留、暂停与空实例两条件、初始无 journal、安装/构建失败、错误状态、status 命令失败、等待期限及非 root 拒绝；不会操作宿主服务。完整相关测试现为 **277 项通过**，workflow policy、ShellCheck、bash 语法和 diff 检查通过。维护流程尚未在宿主执行，新模板和完整 CI 仍待验收。
 
+## 2026-11-16 维护前交付同步
+
+用户确认 maintain-template.sh 尚未执行。只读复核：控制器及专用代理 active、NRestarts=0，没有 VM unit 或安装/模板构建进程；专用代理访问 GitHub HTTPS 返回 200。`/data` 可用约 184 GiB、专用文件系统可用约 190 GiB、宿主 MemAvailable 约 192 GiB，均高于准入门槛。当前工具仍不能免密 sudo。
+
+将 c192967 中的 Chromium 系统依赖与 APT 索引保留修复同步到 `/data/lzq/github-runner/control/guest/build.py`，同步 PLAN/VALIDATION 并重新生成 SHA256SUMS；交付源文件逐项核对，Python 源码静态解析通过。源码未新增功能变更，沿用此前已通过的 277 项相关测试。受保护的安装快照与封存镜像尚未更新，下一步由管理员执行交付包 maintain-template.sh，完成后再核验 runner 注册和完整 CI。
+
 ## 复验命令
 
 在仓库根目录：

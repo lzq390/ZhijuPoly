@@ -1,6 +1,6 @@
 # 本地 GitHub Actions Runner 实施与运维方案
 
-版本：2026-11-13。目标仓库：`lzq390/ZhijuPoly`。
+版本：2026-11-16。目标仓库：`lzq390/ZhijuPoly`。
 
 ## 当前交付状态
 
@@ -10,9 +10,9 @@
 
 管理员已完成 guest 启动顺序修复后的模板重建，新镜像为 `base-d3bd857a91806acc549ed09a8ed404c06dc63a2a210f017d886276ae607b93da.qcow2`，上一版本 053aef 仍保留。bootstrap 使用 Type=exec、WantedBy=cloud-init.target、Requires=cloud-final.service，新执行 VM 已完成注册。首次完整 PR、每 job 身份变化/回收、BuildKit/cache/浏览器依赖与 CI 资源峰值仍待验证，暂不将 Online 视为完整 CI 已通过。
 
-首轮验收复查补齐两项 guest 差异：仅在实际 job 子进程降权后设置 umask 0022，使 checkout 保持原 policy 要求的 0755/0644；注册与宿主私有文件继续使用 0077。显式锁定第四个 Docker APT 包 docker-compose-plugin 5.7.1，并在 smoke 中检查 `docker compose version`；此前 --no-install-recommends 不会安装 CLI 的 Compose 推荐包。两项修复已在源码/交付包准备，当前 d3bd 模板与执行中 VM 尚未包含，需 drain 等当前 job 完成后停止控制器并重建模板，一次应用两项修复；不放宽既有 workflow 权限校验。
+首轮验收复查补齐两项 guest 差异：仅在实际 job 子进程降权后设置 umask 0022，使 checkout 保持原 policy 要求的 0755/0644；注册与宿主私有文件继续使用 0077。显式锁定第四个 Docker APT 包 docker-compose-plugin 5.7.1，并在 smoke 中检查 `docker compose version`；此前 --no-install-recommends 不会安装 CLI 的 Compose 推荐包。两项修复已在源码/交付包准备，当前 d3bd 模板尚未包含，需停止空闲控制器并重建模板；不放宽既有 workflow 权限校验。
 
-首个前端 job 的浏览器依赖安装耗时 6 分 31 秒，Chromium 检查耗时 8 分 59 秒，最终超时。源码进一步将仓库锁定的 Playwright 1.62.1/1.63.0 官方一致的 Ubuntu 24.04 Chromium 系统库、字体与工具预装到模板，并保留签名 APT 索引供每台新 VM 独立重新校验；继续清理 deb 下载包。首轮系统包安装新增约 299 MB，索引额外空间和新执行耗时待实测。浏览器二进制和项目依赖仍按 job 安装，不共享可写缓存；保留 25 分钟超时和全部检查。此源码修复尚需同步交付并重建模板。
+首个前端 job 的浏览器依赖安装耗时 6 分 31 秒，Chromium 检查耗时 8 分 59 秒，最终超时。源码进一步将仓库锁定的 Playwright 1.62.1/1.63.0 官方一致的 Ubuntu 24.04 Chromium 系统库、字体与工具预装到模板，并保留签名 APT 索引供每台新 VM 独立重新校验；继续清理 deb 下载包。首轮系统包安装新增约 299 MB，索引额外空间和新执行耗时待实测。浏览器二进制和项目依赖仍按 job 安装，不共享可写缓存；保留 25 分钟超时和全部检查。2026-11-16 用户确认维护脚本尚未执行，最后一项修复现已同步到 control 交付包；宿主安装快照与封存模板仍需管理员通过 maintain-template.sh 更新。
 
 专用 GitHub App 已创建并安装：`ZhijuPolyrunner`（slug `zhijupolyrunner`），App ID `5740902`、Installation ID `181516914`，所有者 `lzq390`。用户提供的 PEM 已通过格式与实际 JWT 认证校验，App 权限精确为 Administration write、Actions read、Metadata read，events 为空。用户将安装范围从 all 改为 selected 后，GitHub 再次核实仅含 `lzq390/ZhijuPoly` 一个仓库、未暂停；短期 installation token 及目标仓库 runner API 验证通过，现有 runner 数为 0。验证用短期 token 已撤销。
 
