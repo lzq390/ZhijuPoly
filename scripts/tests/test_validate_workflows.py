@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import csv
+import io
 import json
 import os
 from pathlib import Path
@@ -121,6 +123,10 @@ class RunnerRoutingPolicyTests(unittest.TestCase):
                 step.replace("            env.http_proxy=http://10.0.2.2:27892\n", ""),
                 step.replace("            env.https_proxy=http://10.0.2.2:27892\n", ""),
                 step.replace("env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres", "env.no_proxy=*"),
+                step.replace('"env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres"',
+                             "env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres"),
+                step.replace('"env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres"',
+                             'env.no_proxy="localhost,127.0.0.1,::1,postgres,backend,lab-postgres"'),
                 step.replace("10.0.2.2:27892", "127.0.0.1:27891"),
                 step + "\n            network=host",
                 step + "\n        continue-on-error: true",
@@ -130,6 +136,67 @@ class RunnerRoutingPolicyTests(unittest.TestCase):
                     failures: list[str] = []
                     policy.validate_local_runner_controls(changed, failures)
                     self.assertTrue(any(job in failure for failure in failures), failures)
+
+    @staticmethod
+    def action_driver_opts(value: str) -> list[str]:
+        # Pinned setup-buildx-action context.ts uses toolkit 0.63.0 getInputList
+        # with ignoreComma:true, quote:false. That CSV pass treats quote bytes
+        # literally and rejoins each record, preserving them for Buildx.
+        records = csv.reader(io.StringIO(value), quoting=csv.QUOTE_NONE)
+        return [item.strip() for row in records if (item := ",".join(row)).strip()]
+
+    @staticmethod
+    def buildx_driver_map(arguments: list[str]) -> dict[str, str]:
+        # Buildx 0.31.1 builder.csvToMap calls go-csvvalue.Fields, then SplitN
+        # on '='. For these single-line fields its strict double-quoted CSV
+        # syntax matches csv.reader; commas inside values need whole-field quotes.
+        options = {}
+        for argument in arguments:
+            for field in next(csv.reader([argument], strict=True)):
+                key, separator, value = field.partition("=")
+                if not separator:
+                    raise ValueError(f"invalid value {field!r}, expecting k=v")
+                options[key] = value
+        return options
+
+    def test_local_buildx_proxy_values_survive_both_csv_parsing_layers(self) -> None:
+        expected = {
+            "env.http_proxy": "http://10.0.2.2:27892",
+            "env.https_proxy": "http://10.0.2.2:27892",
+            "env.no_proxy": "localhost,127.0.0.1,::1,postgres,backend,lab-postgres",
+        }
+        for job in ("image-build", "openscience-overlay"):
+            with self.subTest(job=job):
+                body = policy.workflow_job_body(CI_TEXT, job, [])
+                step = next(item for item in policy.workflow_step_blocks(body)
+                            if "uses: docker/setup-buildx-action@" in item)
+                value = "\n".join(line.removeprefix("            ") for line in
+                                  step.split("          driver-opts: |\n", 1)[1].splitlines())
+                arguments = self.action_driver_opts(value)
+                self.assertEqual(len(arguments), 3)
+                self.assertEqual(arguments[-1], '"env.no_proxy=' + expected["env.no_proxy"] + '"')
+                self.assertEqual(self.buildx_driver_map(arguments), expected)
+
+    def test_buildx_csv_rejects_unquoted_and_inner_quoted_no_proxy_lists(self) -> None:
+        value = "localhost,127.0.0.1,::1,postgres,backend,lab-postgres"
+        for option in (
+            "env.no_proxy=" + value,
+            'env.no_proxy="' + value + '"',
+            "'env.no_proxy=" + value + "'",
+        ):
+            with self.subTest(option=option):
+                arguments = self.action_driver_opts(option)
+                self.assertEqual(arguments, [option])
+                with self.assertRaises((ValueError, csv.Error)):
+                    self.buildx_driver_map(arguments)
+
+    def test_removing_whole_field_quotes_before_buildx_reproduces_the_failure(self) -> None:
+        quoted = '"env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres"'
+        self.assertIn("env.no_proxy", self.buildx_driver_map(self.action_driver_opts(quoted)))
+        # A CSV pass with its default quote handling would strip these bytes.
+        stripped = [",".join(row) for row in csv.reader([quoted])]
+        with self.assertRaisesRegex(ValueError, "127.0.0.1.*expecting k=v"):
+            self.buildx_driver_map(stripped)
 
     def test_hosted_jobs_and_global_environment_cannot_receive_local_proxy(self) -> None:
         for job in policy.PUBLISHING_JOBS:

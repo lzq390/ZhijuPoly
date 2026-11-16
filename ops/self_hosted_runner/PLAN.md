@@ -6,13 +6,15 @@
 
 已实现控制器、宿主安装工具、受限网络配置、VM 模板制作、guest 启动程序、版本锁和 CI 迁移代码。源码位于仓库 `ops/self_hosted_runner/`，部署副本位于 `/data/lzq/github-runner/control/`。本文件同时保存为 `/data/lzq/github-runner/PLAN.md`。
 
-**模板维护完成，CI 迁移 PR 正在验收。** 2026-11-16 管理员执行 maintain-template.sh，安装、模板制作、smoke、seal 和控制器恢复均成功。当前模板为 `base-8508969b544f2c8ed77bb2c4820205718fb59c776b4522f659ea9fb0b37d6226.qcow2`，于北京时间 09:29:44 封存，实际分配约 3.484 GiB，较上一模板增加约 532.82 MiB，低于 25 GiB 上限。
+**模板维护完成，CI 迁移 PR 正在验收。** 2026-11-16 管理员再次执行 maintain-template.sh，安装、模板制作、smoke、seal 和控制器恢复均成功。当前模板为 `base-9b1799eafd90bb18a3ae9653b0599b8f91a0c1979bccf86a15f59f18511769d1.qcow2`，于北京时间 10:43:30 封存，实际分配约 3.504 GiB，低于 25 GiB 上限。
 
-该模板已实际注册 runner ID22（UUID 9c81588cc087418b8d57f729ebbc3080），执行 script-tests 后自动回收；控制器随后创建不同 UUID 1299502b4885458da2a2ec9fab1b560e / runner ID23，并执行 Monomer-MD Worker tests。两台 VM 均已退出，对应 GitHub runner 记录已消失；用户已再次 drain，目前没有活动 VM。8 CPU、34 GiB 宿主内存、swap 0、读写各 100 MiB/s 和 AppArmor/NoNewPrivileges 已核验。[迁移 PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 保持 draft；[CI run 43784833577](https://github.com/lzq390/ZhijuPoly/actions/runs/43784833577) 的两个本地 job 均失败，完整验收尚未通过。
+该模板已实际注册 runner ID24（UUID b5eaa889d3dd4dabb88255f607d33e40），在 [CI run 43791813121](https://github.com/lzq390/ZhijuPoly/actions/runs/43791813121) 执行镜像任务；随后另一个 UUID 88bae1dde6e144e8ae2e6972dd1d389f 的 PostgreSQL 16 集成 job 133051795491 于北京时间 10:54:27 全部通过，包括真实 matching-major 外部媒体和 mutable-audit 事务 CAS 检查。8 CPU、34 GiB 宿主内存、swap 0、读写各 100 MiB/s 和 AppArmor/NoNewPrivileges 已核验。[迁移 PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 保持 draft，完整验收尚未通过。
 
-受保护安装快照和当前 8508969b 模板已经包含启动顺序修复、job umask 0022、锁定的 docker-compose-plugin 5.7.1，以及 Playwright 官方 Ubuntu 24.04 Chromium 系统依赖。注册与私有文件继续使用 umask 0077；APT 索引保留供每个 VM 独立重新校验，deb 下载包仍清理。浏览器二进制和项目依赖仍按 job 安装，不共享可写缓存。
+受保护安装快照和当前 9b1799ea 模板已经包含启动顺序修复、job umask 0022、锁定的 docker-compose-plugin 5.7.1，以及 Playwright 官方 Ubuntu 24.04 Chromium 系统依赖。注册与私有文件继续使用 umask 0077；APT 索引保留供每个 VM 独立重新校验，deb 下载包仍清理。浏览器二进制和项目依赖仍按 job 安装，不共享可写缓存。
 
-本轮 CI 定位到 guest 身份和工具前置条件遗漏：自动分配的 runner 为 1000:1000，而现有身份协议及测试要求 1001:1001；无交互式登录导致用户 systemd bus 缺失，系统 Python 也没有 pip 元数据。另外 DFT 发布契约校验器仍要求所有 job 使用 hosted。新修复固定 guest runner UID/GID 1001，安装 python3-pip/dbus-user-session，启用该用户的 linger/user manager，并在注册前验证真实用户 bus。模板 smoke 增加账号、bus 和 pip 检查，失败不封存。DFT 校验器复用既有精确路由/权限校验，保持 14 local / 4 hosted、固定 SHA 和发布控制；测试夹具显式创建 0700 私有目录，生产权限检查不变。这批修复已准备到交付包，需管理员再次运行 maintain-template.sh 后才会进入封存模板。
+上一轮 CI 定位到 guest 身份和工具前置条件遗漏：自动分配的 runner 为 1000:1000，而现有身份协议及测试要求 1001:1001；无交互式登录导致用户 systemd bus 缺失，系统 Python 也没有 pip 元数据。另外 DFT 发布契约校验器仍要求所有 job 使用 hosted。当前模板已固定 guest runner UID/GID 1001，安装 python3-pip/dbus-user-session，启用该用户的 linger/user manager，并在注册前验证真实用户 bus。模板 smoke 的账号、bus 和 pip 检查已通过；新 VM 的真实注册还验证了每次启动的用户 bus 前置检查。DFT 校验器复用既有精确路由/权限校验，保持 14 local / 4 hosted、固定 SHA 和发布控制；测试夹具显式创建 0700 私有目录，生产权限检查不变。
+
+新一轮首个镜像 job 133051795519 在 Buildx 初始化时失败，原因是逗号分隔的 env.no_proxy 被 Buildx 当成多项 CSV 字段。两个本地 Buildx 步骤现为整条字段加双引号，并同步精确 policy 和语义回归测试；固定 Action 会保留这层引号供 Buildx 解析。该项仅涉及 workflow，更新 PR 后重跑，无需安装或重建模板；云端发布步骤不变。
 
 11 月 13 日首轮前端 job 已通过 Vitest、前端构建和 Chromium 检查，但在 nginx 镜像检查期间触发原有 25 分钟超时。当前模板预装浏览器系统依赖以降低冷启动开销；保留原超时和全部检查，效果仍以真实 CI 为准。完整 20 个本地 job、ci-gate、最终资源数据与剩余故障场景仍待验收。
 
@@ -20,7 +22,7 @@
 
 系统已配置 App ID 5740902、Installation ID 181516914，私钥为 `/etc/nexpoly-runner/app.pem`、root:root 0600；安装和真实 App/runner API 认证已核验。部署专用 config.app.toml 已安装，源码 example 保留通用默认值。此次 guest 修复通过重装及重建模板应用，不需要重新配置 App 或私钥。
 
-执行 VM 的 qcow2 backing image AppArmor 只读锁权限 `rk` 已加载，执行 VM 已成功启动；未赋予基础镜像写权限。新的 guest unit 改挂 cloud-init.target、明确依赖 cloud-final.service，并使用 Type=exec，避免循环及长任务阻塞 boot target。回归测试实际复现旧版 systemd 事务循环、验证新版没有循环且保留启动任务；构建期间仍因 build-mode 跳过注册。此修复已包含在当前重新构建的 8508969b 模板中。
+执行 VM 的 qcow2 backing image AppArmor 只读锁权限 `rk` 已加载，执行 VM 已成功启动；未赋予基础镜像写权限。新的 guest unit 改挂 cloud-init.target、明确依赖 cloud-final.service，并使用 Type=exec，避免循环及长任务阻塞 boot target。回归测试实际复现旧版 systemd 事务循环、验证新版没有循环且保留启动任务；构建期间仍因 build-mode 跳过注册。此修复已包含在当前重新构建的模板中。
 
 以下为部署期间的问题记录；最新状态以上述段落为准。
 
@@ -205,10 +207,10 @@ doctor 不申请/打印 token，App 实际授权与注册是否正确由启动�
 | actionlint、workflow policy、磁盘脚本、控制器/host/template 测试 | 见交付 `VALIDATION.md` |
 | 唯一 VM / runner 与 cgroup 资源限制 | 当前唯一 Online/busy runner、唯一 VM，8 CPU/34 GiB/swap 0 已实测；最终任务峰值待验收 |
 | 无注册 VM smoke（DNS、代理 HTTPS、Docker、部分隔离检查） | 模板构建已完成并封存；更完整目标矩阵及 CI 容量检查待验收 |
-| 完整 PR 20 个不同身份、main 18 个、本地 ci-gate | 新模板已在 PR #111 / run 43784833577 接单；完整 20 job 与 gate 待验收 |
+| 完整 PR 20 个不同身份、main 18 个、本地 ci-gate | 新模板已在 PR #111 / run 43791813121 接单；首个镜像任务定位 workflow 参数问题，修复后重跑；完整 20 job 与 gate 待验收 |
 | Docker pull、BuildKit remote Git、GHA cache、apt/pip/npm | 模板构建完成 apt 与固定 hello-world pull/run；其余待真实 CI |
 | 禁止宿主业务端口、27891、Docker 网段、元数据、IPv6、非白名单 | 已执行 27891、公共直接出口与私网代理拒绝 smoke；其余目标矩阵待完整验收 |
-| 成功、失败、取消、超时、重启均回收；无前任务残留 | 状态机负测已覆盖；真实 VM 仍待实测 |
+| 成功、失败、取消、超时、重启均回收；无前任务残留 | 已观察失败后旧 VM/runner 退出、新 UUID 接单；磁盘删除、成功/取消/重启等其余场景待完整实测 |
 | 上游断开后无直连、恢复后补机 | 待维护窗口针对专用路径测试；不要随意停共享代理 |
 | CPU/RAM/磁盘/流量/总耗时 | 读取每实例 `state/logs/instance-<uuid>.json` 并汇总 |
 | 现有业务容器、网络与生产目录 | 上线前后对照只读基线；安装不调用宿主 Docker |

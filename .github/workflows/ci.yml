@@ -632,7 +632,7 @@ jobs:
           driver-opts: |
             env.http_proxy=http://10.0.2.2:27892
             env.https_proxy=http://10.0.2.2:27892
-            env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres
+            "env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres"
       - id: backend-identity
         name: Resolve Backend image identity
         shell: bash
@@ -808,7 +808,7 @@ jobs:
           driver-opts: |
             env.http_proxy=http://10.0.2.2:27892
             env.https_proxy=http://10.0.2.2:27892
-            env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres
+            "env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres"
       - name: Build the governed overlay without publishing
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:

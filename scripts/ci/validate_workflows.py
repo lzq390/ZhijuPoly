@@ -36,7 +36,8 @@ LOCAL_BUILDX_SETUP_LINES = (*BUILDX_SETUP_LINES,
     "          driver-opts: |",
     "            env.http_proxy=http://10.0.2.2:27892",
     "            env.https_proxy=http://10.0.2.2:27892",
-    "            env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres",
+    # setup-buildx preserves quotes; Buildx needs one complete quoted CSV field.
+    '            "env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres"',
 )
 FRONTEND_VITEST_STEP = '''      - name: Run Vitest
         working-directory: frontend

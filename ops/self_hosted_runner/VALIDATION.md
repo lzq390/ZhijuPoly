@@ -203,6 +203,16 @@ Monomer-MD Worker job 133030078008 成功安装 Python、从空重建生产 Work
 
 本地先恢复 managed worktree 的标准 Git 文件权限与目录写权限，再按 job 的 umask 0022 复验。发现已有 MPS fixture 的中间 slot 目录依赖环境 umask，现显式创建为 0700，并增加独立 umask 0022 回归；生产 MPS 权限和固定身份检查不变。完整 runner/CI/DFT 相关 **312 项测试通过**，MPS 模块与 PG16/DFT crash/pip 既有回归 **24 项通过**；workflow/DFT policy、ShellCheck、diff 检查通过。受保护安装快照与当前基础镜像尚未包含这批修复，需要一次维护重建后重新运行完整 CI。
 
+## 2026-11-16 身份模板维护完成与 Buildx CSV 修复
+
+管理员已完成第二次维护，日志为 `/home/devuser/nexpoly-runner-maintenance-identity.log`。全部阶段（含新的账号、真实用户 bus 和系统 pip metadata smoke）通过，模板于北京时间 10:43:30 封存为 `base-9b1799eafd90bb18a3ae9653b0599b8f91a0c1979bccf86a15f59f18511769d1.qcow2`。只读 stat 得实际分配 3,762,876,416 bytes（3.504 GiB）；protected template.py、guest bootstrap/build/smoke/unit 与 254cf29 源码一致。控制器 10:43:34 恢复，NRestarts=0；新 VM 的真实注册还验证了全新启动时注册材料读取前的用户 bus 检查。
+
+run 43791813121 的首台 runner ID24 / UUID b5eaa889d3dd4dabb88255f607d33e40 已 Online/busy，执行 web 镜像 job 133051795519；之后不同 UUID 88bae1dde6e144e8ae2e6972dd1d389f 执行 PostgreSQL 16 job 133051795491。该 PG16 job 于 10:54:27 成功，setup、checkout SHA、精确匹配镜像拉取、真实 matching-major 外部媒体集成及 mutable-audit 事务 CAS 检查全部通过。QEMU/cgroup 再次核验为 8 CPU、32 GiB guest、34 GiB host、swap 0、读写各 100 MiB/s，AppArmor/NoNewPrivileges 生效。完整 20 job 和 ci-gate 仍未通过。
+
+web 镜像 job 在 Set up Buildx 失败，日志精确报 `invalid value "127.0.0.1", expecting k=v`：driver-opt 内未引用的逗号分隔 NO_PROXY 被当作多个 CSV 字段。仅修改两个本地 Buildx 步骤，将整个 `env.no_proxy=...` CSV 字段加双引号，并同步精确 policy 与三项语义回归。代理地址和 NO_PROXY 内容不变，四个 hosted job 块与修改前逐字节一致；该修复不涉及宿主配置或模板，无需再次安装/重建。
+
+固定 [setup-buildx-action 源码](https://github.com/docker/setup-buildx-action/blob/8d2750c68a42422c14e847fe6c8ac0403b4cbd6f/src/context.ts#L34) 使用 `getInputList` 的 `ignoreComma:true, quote:false`，其锁定的 [actions-toolkit 0.63.0](https://github.com/docker/actions-toolkit/blob/v0.63.0/src/util.ts#L38) 保留整项引号，再由 [Buildx 0.31.1 的 CSV 解析](https://github.com/docker/buildx/blob/v0.31.1/builder/builder.go#L567) 处理。使用实际 csv-parse 5.6.0 和 Buildx 锁定的 go-csvvalue 030d3b2625d0 分别验证：新写法保留完整六个 NO_PROXY 主机，旧写法精确复现错误，仅引用等号后的值也失败。验证不调用宿主 Docker daemon。相关 workflow/DFT **128 项测试通过**，workflow policy、actionlint 1.7.7（含 ShellCheck）与 diff 检查通过；完整 CI 将随修复推送重新执行。
+
 ## 复验命令
 
 在仓库根目录：
