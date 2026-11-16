@@ -48,6 +48,16 @@ class GuestBootOrderingTests(unittest.TestCase):
                     "ExecStart=/usr/bin/python3\nRemainAfterExit=yes\n"
                 ),
                 "docker.service": "[Service]\nType=exec\nExecStart=/usr/bin/python3\n",
+                "dbus.service": "[Service]\nType=exec\nExecStart=/usr/bin/python3\n",
+                "user-runtime-dir@1001.service": (
+                    "[Unit]\nAfter=dbus.service\n[Service]\nType=oneshot\n"
+                    "ExecStart=/usr/bin/python3\nRemainAfterExit=yes\n"
+                ),
+                "user@1001.service": (
+                    "[Unit]\nAfter=user-runtime-dir@1001.service dbus.service\n"
+                    "Requires=user-runtime-dir@1001.service\n[Service]\n"
+                    "Type=exec\nExecStart=/usr/bin/python3\n"
+                ),
                 "network-online.target": "[Unit]\nDescription=Network ready\n",
                 "sysinit.target": "[Unit]\nDefaultDependencies=no\n",
                 "basic.target": "[Unit]\nDefaultDependencies=no\n",
@@ -93,6 +103,8 @@ class GuestBootOrderingTests(unittest.TestCase):
             diagnostics,
         )
         self.assertIn("Type: exec", diagnostics)
+        self.assertIn("user@1001.service: Installed new job user@1001.service/start", diagnostics)
+        self.assertIn("user-runtime-dir@1001.service: Installed new job user-runtime-dir@1001.service/start", diagnostics)
 
     def test_long_running_runner_does_not_hold_cloud_init_target_until_job_exit(self):
         unit = parse_unit(GUEST_UNIT.read_text())
@@ -102,6 +114,8 @@ class GuestBootOrderingTests(unittest.TestCase):
         self.assertEqual(unit["Service"]["Type"], "exec")
         self.assertIn("cloud-final.service", unit["Unit"]["After"].split())
         self.assertIn("cloud-final.service", unit["Unit"]["Requires"].split())
+        self.assertIn("user@1001.service", unit["Unit"]["After"].split())
+        self.assertIn("user@1001.service", unit["Unit"]["Requires"].split())
         # A template build still skips registration while its marker is present.
         self.assertEqual(unit["Unit"]["ConditionPathExists"],
                          "!/etc/nexpoly-ci-runner/build-mode")

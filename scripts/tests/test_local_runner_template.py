@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import importlib.util
 import io
 import json
@@ -84,6 +84,9 @@ class RunnerTemplateTests(unittest.TestCase):
             data = json.loads(user.read_text().split("\n", 1)[1])
             self.assertEqual(json.loads(meta.read_text())["instance-id"], "abc123")
             self.assertFalse(data["ssh_pwauth"])
+            self.assertEqual(data["bootcmd"], [["cloud-init-per", "once", "nexpoly-runner-group", "groupadd", "--gid", "1001", "runner"]])
+            self.assertEqual(data["users"], [{"name": "runner", "uid": 1001, "primary_group": "runner",
+                                              "no_user_group": True, "shell": "/bin/bash", "lock_passwd": True}])
             self.assertEqual(data["runcmd"], [["python3", "/usr/local/lib/nexpoly-ci-runner/build.py"]])
             files = {item["path"]: item for item in data["write_files"]}
             self.assertIn("/etc/nexpoly-ci-runner/build-mode", files)
@@ -191,6 +194,7 @@ class RunnerTemplateTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(instance.stat().st_mode), 0o750)
             data = json.loads((instance / "user-data").read_text().split("\n", 1)[1])
             self.assertNotIn("runcmd", data)
+            self.assertNotIn("bootcmd", data)
             self.assertNotIn("write_files", data)
             self.assertIn("-b", execute.call_args_list[0].args[0])
             self.assertEqual(execute.call_args_list[0].args[0][-1], "160G")
@@ -594,7 +598,7 @@ class GuestBootstrapTests(unittest.TestCase):
             commands.append((args, dict(kwargs.get("env", {})), kwargs.get("preexec_fn")))
             return subprocess.CompletedProcess(args, 0)
 
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(bootstrap, "RUNTIME", Path(directory)), mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), mock.patch.object(bootstrap, "read_payload", return_value=payload), mock.patch.object(bootstrap.subprocess, "run", side_effect=run), mock.patch.object(bootstrap, "emit") as emit, mock.patch.object(bootstrap, "isolated_registration"), mock.patch("shutil.rmtree"):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(bootstrap, "RUNTIME", Path(directory)), mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), mock.patch.object(bootstrap, "read_payload", return_value=payload), mock.patch.object(bootstrap.subprocess, "run", side_effect=run), mock.patch.object(bootstrap, "emit") as emit, mock.patch.object(bootstrap, "ensure_user_session"), mock.patch.object(bootstrap, "isolated_registration"), mock.patch("shutil.rmtree"):
             bootstrap.register()
             self.assertEqual(bootstrap.main(), 0)
         config_args, config_env, config_preexec = commands[0]
@@ -665,7 +669,7 @@ class GuestBootstrapTests(unittest.TestCase):
                 os.umask(previous_umask)
 
     def test_failure_event_never_includes_exception_or_token(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(bootstrap, "RUNTIME", Path(directory)), mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), mock.patch.object(bootstrap, "isolated_registration", side_effect=ValueError("SECRET-IN-ERROR")), mock.patch.object(bootstrap.subprocess, "run") as run, mock.patch.object(bootstrap, "emit") as emit:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(bootstrap, "RUNTIME", Path(directory)), mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), mock.patch.object(bootstrap, "ensure_user_session"), mock.patch.object(bootstrap, "isolated_registration", side_effect=ValueError("SECRET-IN-ERROR")), mock.patch.object(bootstrap.subprocess, "run") as run, mock.patch.object(bootstrap, "emit") as emit:
             self.assertEqual(bootstrap.main(), 1)
             self.assertNotIn("SECRET-IN-ERROR", str(emit.call_args_list))
             run.assert_called_once_with(["systemctl", "poweroff", "--no-block"], check=False)
@@ -685,6 +689,55 @@ class GuestBootstrapTests(unittest.TestCase):
             self.assertEqual(env[key], "http://10.0.2.2:27892")
         self.assertEqual(env["NO_PROXY"], "localhost,127.0.0.1,::1,postgres,backend,lab-postgres")
         self.assertTrue(env["ACTIONS_RUNNER_HOOK_JOB_STARTED"].endswith("job-started.sh"))
+        self.assertEqual(env["XDG_RUNTIME_DIR"], "/run/user/1001")
+        self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1001/bus")
+
+    def test_guest_rejects_wrong_uid_gid_or_home_before_dropping_privileges(self):
+        for uid, gid, home in ((1000, 1001, "/home/runner"), (1001, 1000, "/home/runner"),
+                               (1001, 1001, "/root")):
+            with self.subTest(uid=uid, gid=gid, home=home), \
+                    mock.patch.object(bootstrap.pwd, "getpwnam", return_value=SimpleNamespace(pw_uid=uid, pw_gid=gid, pw_dir=home)), \
+                    mock.patch.object(bootstrap.os, "initgroups") as groups:
+                with self.assertRaisesRegex(RuntimeError, "guest profile"):
+                    bootstrap.drop_privileges()
+                groups.assert_not_called()
+
+    def test_guest_drops_supplementary_groups_gid_and_uid_to_fixed_runner_identity(self):
+        account = SimpleNamespace(pw_uid=1001, pw_gid=1001, pw_dir="/home/runner")
+        calls = []
+        with mock.patch.object(bootstrap.pwd, "getpwnam", return_value=account), \
+                mock.patch.object(bootstrap.os, "initgroups", side_effect=lambda name, gid: calls.append((name, gid))), \
+                mock.patch.object(bootstrap.os, "setgid", side_effect=lambda gid: calls.append(("gid", gid))), \
+                mock.patch.object(bootstrap.os, "setuid", side_effect=lambda uid: calls.append(("uid", uid))):
+            bootstrap.drop_privileges()
+        self.assertEqual(calls, [("runner", 1001), ("gid", 1001), ("uid", 1001)])
+
+    def test_unavailable_user_session_prevents_receiving_registration_credential(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(bootstrap, "RUNTIME", Path(directory)), \
+                mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), \
+                mock.patch.object(bootstrap, "ensure_user_session", side_effect=TimeoutError), \
+                mock.patch.object(bootstrap, "isolated_registration") as register, \
+                mock.patch.object(bootstrap.subprocess, "run") as run, \
+                mock.patch.object(bootstrap, "emit"):
+            self.assertEqual(bootstrap.main(), 1)
+        register.assert_not_called()
+        run.assert_called_once_with(["systemctl", "poweroff", "--no-block"], check=False)
+
+    def test_ready_user_session_precedes_registration_and_job(self):
+        order = []
+        def run(command, **kwargs):
+            order.append(command[0])
+            return subprocess.CompletedProcess(command, 0)
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(bootstrap, "RUNTIME", Path(directory)), \
+                mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), \
+                mock.patch.object(bootstrap, "ensure_user_session", side_effect=lambda: order.append("session")), \
+                mock.patch.object(bootstrap, "isolated_registration", side_effect=lambda: order.append("registration")), \
+                mock.patch.object(bootstrap.subprocess, "run", side_effect=run), \
+                mock.patch.object(bootstrap, "emit"):
+            self.assertEqual(bootstrap.main(), 0)
+        self.assertEqual(order, ["session", "registration", "/opt/actions-runner/run.sh", "systemctl"])
 
     def test_guest_ready_is_emitted_after_opening_receive_port(self):
         order = []
@@ -702,12 +755,87 @@ class GuestBootstrapTests(unittest.TestCase):
             connect.return_value.close.assert_called_once()
 
 
+class GuestUserSessionTests(unittest.TestCase):
+    @contextmanager
+    def session(self):
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            runtime = Path(directory) / "runtime"
+            runtime.mkdir(mode=0o700)
+            bus = stack.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM))
+            bus.bind(str(runtime / "bus"))
+            stack.enter_context(mock.patch.object(bootstrap, "USER_RUNTIME", runtime))
+            stack.enter_context(mock.patch.object(bootstrap, "RUNNER_UID", os.getuid()))
+            stack.enter_context(mock.patch.object(bootstrap, "RUNNER_GID", os.getgid()))
+            stack.enter_context(mock.patch.object(bootstrap.pwd, "getpwnam", return_value=SimpleNamespace(
+                pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir="/home/runner")))
+            run = stack.enter_context(mock.patch.object(bootstrap.subprocess, "run"))
+            yield runtime, run
+
+    def test_real_owned_runtime_socket_is_checked_with_unprivileged_bus_request(self):
+        with self.session() as (runtime, run):
+            bootstrap.ensure_user_session()
+            self.assertEqual(run.call_args.args[0], ["busctl", "--user", "--no-pager", "list"])
+            kwargs = run.call_args.kwargs
+            self.assertIs(kwargs["preexec_fn"], bootstrap.drop_privileges)
+            self.assertEqual(kwargs["env"]["XDG_RUNTIME_DIR"], str(runtime))
+            self.assertEqual(kwargs["env"]["DBUS_SESSION_BUS_ADDRESS"], f"unix:path={runtime}/bus")
+            self.assertTrue(kwargs["check"])
+            self.assertGreater(kwargs["timeout"], 0)
+            self.assertLessEqual(kwargs["timeout"], 30)
+
+    def test_unsafe_runtime_and_non_socket_bus_are_rejected_before_connection(self):
+        for condition in ("writable-runtime", "symlink-runtime", "regular-bus", "symlink-bus"):
+            with self.subTest(condition=condition), self.session() as (runtime, run):
+                if condition == "writable-runtime":
+                    runtime.chmod(0o722)
+                elif condition == "symlink-runtime":
+                    target = runtime.with_name("target")
+                    runtime.rename(target)
+                    runtime.symlink_to(target)
+                elif condition == "regular-bus":
+                    (runtime / "bus").unlink()
+                    (runtime / "bus").write_text("not a bus")
+                else:
+                    (runtime / "bus").rename(runtime / "other-bus")
+                    (runtime / "bus").symlink_to(runtime / "other-bus")
+                with self.assertRaisesRegex(RuntimeError, "unsafe runner"):
+                    bootstrap.ensure_user_session()
+                run.assert_not_called()
+
+    def test_foreign_runtime_or_bus_owner_is_rejected(self):
+        original_lstat = Path.lstat
+        for target in ("runtime", "bus"):
+            with self.subTest(target=target), self.session() as (runtime, run):
+                changed = runtime if target == "runtime" else runtime / "bus"
+                def lstat(path):
+                    details = original_lstat(path)
+                    if path == changed:
+                        return SimpleNamespace(st_mode=details.st_mode, st_uid=os.getuid() + 1)
+                    return details
+                with mock.patch.object(bootstrap.Path, "lstat", autospec=True, side_effect=lstat):
+                    with self.assertRaisesRegex(RuntimeError, "unsafe runner"):
+                        bootstrap.ensure_user_session()
+                run.assert_not_called()
+
+    def test_missing_bus_has_bounded_wait_and_unresponsive_bus_fails(self):
+        with self.session() as (runtime, run):
+            (runtime / "bus").unlink()
+            with self.assertRaises(TimeoutError):
+                bootstrap.ensure_user_session(timeout=0)
+            run.assert_not_called()
+        with self.session() as (_, run):
+            run.side_effect = subprocess.TimeoutExpired(["busctl"], 30)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                bootstrap.ensure_user_session()
+
+
 class GuestSmokeHealthTests(unittest.TestCase):
     def prepare_smoke(self, stack):
         opener = mock.MagicMock()
         opener.open.return_value.__enter__.return_value.status = 200
         build = stack.enter_context(mock.patch.object(smoke.urllib.request, "build_opener", return_value=opener))
         stack.enter_context(mock.patch.object(smoke.Path, "is_file", return_value=True))
+        stack.enter_context(mock.patch.object(smoke, "check_runtime_tools"))
         stack.enter_context(mock.patch.object(smoke.Path, "read_text", return_value=json.dumps({
             "smoke_image": {"reference": "hello-world@sha256:" + "a" * 64}})))
         stack.enter_context(mock.patch.object(smoke.socket, "getaddrinfo", return_value=[
@@ -761,6 +889,18 @@ class GuestSmokeHealthTests(unittest.TestCase):
         opener.open.assert_called_once()
         build.assert_called_once()
         docker.assert_not_called()
+
+    def test_smoke_checks_user_bus_and_system_python_pip_as_runner(self):
+        with mock.patch.dict(sys.modules, {"bootstrap": bootstrap}), \
+                mock.patch.object(bootstrap, "ensure_user_session") as session, \
+                mock.patch.object(smoke.subprocess, "run") as run:
+            smoke.check_runtime_tools()
+        session.assert_called_once_with()
+        self.assertEqual(run.call_args.args[0], ["/usr/bin/python3", "-c", "import importlib.metadata; importlib.metadata.distribution('pip')"])
+        self.assertIs(run.call_args.kwargs["preexec_fn"], bootstrap.drop_privileges)
+        self.assertEqual(run.call_args.kwargs["env"]["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1001/bus")
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
+        self.assertTrue(run.call_args.kwargs["check"])
 
 
 if __name__ == "__main__":

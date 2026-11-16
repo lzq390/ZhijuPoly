@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -44,9 +45,10 @@ class DescriptorAuthorityFixture:
         self.gpu_root = root / "gpu-resource"
         self.gpu_root.mkdir(mode=0o700)
         self.slot = self.gpu_root / "mps-1"
+        self.slot.mkdir(mode=0o700)
         self.pipe = self.slot / "pipe"
         self.log = self.slot / "log"
-        self.pipe.mkdir(parents=True, mode=0o700)
+        self.pipe.mkdir(mode=0o700)
         self.log.mkdir(mode=0o700)
         os.mkfifo(self.pipe / "control", mode=0o600)
         self.reservations = self.gpu_root / "external-reservations.json"
@@ -126,6 +128,20 @@ class DescriptorAuthorityFixture:
 
 
 class FormalGpuAuthorityTests(unittest.TestCase):
+    def test_fixture_private_directories_do_not_depend_on_job_umask(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            previous = os.umask(0o022)
+            try:
+                fixture = DescriptorAuthorityFixture(Path(temporary))
+            finally:
+                os.umask(previous)
+            try:
+                for path in (fixture.gpu_root, fixture.slot, fixture.pipe, fixture.log):
+                    with self.subTest(path=path.name):
+                        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+            finally:
+                fixture.close()
+
     def test_normal_gpu_device_is_not_mistaken_for_authority(self) -> None:
         with mock.patch.dict(
             os.environ,

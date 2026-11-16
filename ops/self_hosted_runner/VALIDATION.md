@@ -191,13 +191,26 @@ GitHub API 返回 total_count=1：runner ID22、name=nexpoly-ci-9c81588cc087418b
 
 执行中采样 MemoryPeak=2,716,450,816 bytes（约 2.53 GiB）、CPUUsageNSec=865454996000、IOReadBytes=565125632、IOWriteBytes=1974495232，仅为采样时下界；最终 job 结果、回收及完整 CI 仍待验收。
 
+## 2026-11-16 两个实际 job 的失败分类与下一批修复
+
+script-tests job 133030077936 于北京时间 09:59:14 结束，运行 2363 tests / 1594.034 秒，9 failures、190 errors、31 skipped；总 job 耗时 27 分 59 秒，没有触发 40 分钟超时。189 errors 为 `/run/user/1000` 缺失导致 clean_control_environment 提前拒绝，另 1 error 为系统 Python 缺少 pip metadata。9 failures 中 4 个为实际 UID/GID 1000 与固定 1001 身份不符，3 个 PG16 清理断言和 1 个 DFT crash 检查均被缺少 user bus 提前阻断，1 个为遗漏的 DFT all-hosted 路由校验。
+
+Monomer-MD Worker job 133030078008 成功安装 Python、从空重建生产 Worker 依赖锁并准备精确开发测试环境；测试于 10:08:39 结束，152 failed、945 passed、3 skipped，测试耗时 47.76 秒。全部失败集中在 broker（42）、systemd inventory 协议（4）、dev GPU session（106），日志及源码均可由实际 1000:1000 与固定 1001:1001 的文件所有权、真实 socket peer credentials、进程 UID 和 scope/lease 检查解释。未发现额外缺包、网络或真实 GPU 依赖；身份修复效果仍需新模板实测。
+
+生命周期已实测：旧 runner22 从 API 消失、旧 VM MainPID=0/inactive/dead，下一台 runner23 使用不同 UUID 在线接单；Worker 结束后 runner23 亦消失，当前 total_count=0、无 VM unit，用户已 drain。实例目录为 root 私有，当前工具未读取或挂载 guest 磁盘；不能独立将目录删除记为已检查。宿主 Docker 自 11 月 3 日保持 active，现有 42 个容器均在运行；当前健康快照为 33 healthy、2 unhealthy、7 未配置健康状态，缺少部署前健康快照，不据此断言全部业务健康或将既有容器状态归因于 runner。
+
+源码修复固定 cloud-init 用户 UID=1001、主组 GID=1001，组创建使用 cloud-init-per once。模板安装 python3-pip/dbus-user-session，启用 runner linger 并启动 user@1001.service；bootstrap 显式依赖该 user manager，并在读取注册材料前检查账户、runtime 归属/权限、真实 socket 类型/归属及普通用户 busctl 响应。smoke 验证用户 bus 和系统 pip metadata，失败不封存。隔离 systemd 事务与独立复核确认保留 cloud-final 顺序且无循环；cloud-init schema 通过。DFT 校验器改用共享精确路由/权限规则，保留 checkout SHA、DFT control markers 和 --require-committed。
+
+本地先恢复 managed worktree 的标准 Git 文件权限与目录写权限，再按 job 的 umask 0022 复验。发现已有 MPS fixture 的中间 slot 目录依赖环境 umask，现显式创建为 0700，并增加独立 umask 0022 回归；生产 MPS 权限和固定身份检查不变。完整 runner/CI/DFT 相关 **312 项测试通过**，MPS 模块与 PG16/DFT crash/pip 既有回归 **24 项通过**；workflow/DFT policy、ShellCheck、diff 检查通过。受保护安装快照与当前基础镜像尚未包含这批修复，需要一次维护重建后重新运行完整 CI。
+
 ## 复验命令
 
 在仓库根目录：
 
 ```bash
-python3 -m unittest scripts.tests.test_local_runner_controller scripts.tests.test_local_runner_host scripts.tests.test_local_runner_template scripts.tests.test_local_runner_guest_build scripts.tests.test_local_runner_guest_ordering scripts.tests.test_local_runner_maintenance scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows -q
+python3 -m unittest scripts.tests.test_local_runner_controller scripts.tests.test_local_runner_host scripts.tests.test_local_runner_template scripts.tests.test_local_runner_guest_build scripts.tests.test_local_runner_guest_ordering scripts.tests.test_local_runner_maintenance scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows scripts.tests.test_validate_monomer_dft_release_contract -q
 python3 scripts/ci/validate_workflows.py
+python3 scripts/validate_monomer_dft_release_contract.py --require-committed
 actionlint -config-file .github/actionlint.yaml .github/workflows/ci.yml
 shellcheck scripts/ci/prepare_image_build_disk.sh ops/self_hosted_runner/install.sh ops/self_hosted_runner/maintain-template.sh ops/self_hosted_runner/guest/job-started.sh ops/self_hosted_runner/guest/job-completed.sh
 git diff --check

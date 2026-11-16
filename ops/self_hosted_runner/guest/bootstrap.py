@@ -9,6 +9,7 @@ from pathlib import Path
 import pwd
 import re
 import select
+import stat
 import subprocess
 import time
 
@@ -20,6 +21,9 @@ PROFILE = "nexpoly-ci-ephemeral-v1"
 PROXY = "http://10.0.2.2:27892"
 NO_PROXY = "localhost,127.0.0.1,::1,postgres,backend,lab-postgres"
 MAX_PAYLOAD = 8192
+RUNNER_UID = 1001
+RUNNER_GID = 1001
+USER_RUNTIME = Path("/run/user/1001")
 
 
 def emit(event: str, **fields: object) -> None:
@@ -102,13 +106,50 @@ def runner_environment() -> dict[str, str]:
         "HTTP_PROXY": PROXY, "HTTPS_PROXY": PROXY,
         "no_proxy": NO_PROXY, "NO_PROXY": NO_PROXY,
         "AGENT_TOOLSDIRECTORY": "/opt/hostedtoolcache",
+        "XDG_RUNTIME_DIR": str(USER_RUNTIME),
+        "DBUS_SESSION_BUS_ADDRESS": f"unix:path={USER_RUNTIME}/bus",
         "ACTIONS_RUNNER_HOOK_JOB_STARTED": "/usr/local/lib/nexpoly-ci-runner/job-started.sh",
         "ACTIONS_RUNNER_HOOK_JOB_COMPLETED": "/usr/local/lib/nexpoly-ci-runner/job-completed.sh",
     }
 
 
-def drop_privileges() -> None:
+def runner_account():
     account = pwd.getpwnam("runner")
+    if (account.pw_uid, account.pw_gid, account.pw_dir) != (RUNNER_UID, RUNNER_GID, "/home/runner"):
+        raise RuntimeError("runner account does not match the guest profile")
+    return account
+
+
+def ensure_user_session(timeout: float = 30) -> None:
+    """Verify the real per-user manager and bus before receiving credentials."""
+    account = runner_account()
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            runtime = USER_RUNTIME.lstat()
+            if not stat.S_ISDIR(runtime.st_mode) or runtime.st_uid != account.pw_uid or runtime.st_mode & 0o022:
+                raise RuntimeError("unsafe runner user runtime directory")
+            bus = (USER_RUNTIME / "bus").lstat()
+            if not stat.S_ISSOCK(bus.st_mode) or bus.st_uid != account.pw_uid:
+                raise RuntimeError("unsafe runner user bus")
+            break
+        except FileNotFoundError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("runner user bus did not become ready") from None
+            time.sleep(0.1)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("runner user bus did not become ready")
+    # A socket alone does not prove D-Bus answers. Use the ordinary runner UID
+    # and its fixed bus address; never connect jobs to root's session manager.
+    subprocess.run(["busctl", "--user", "--no-pager", "list"],
+                   env=runner_environment(), preexec_fn=drop_privileges,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   timeout=remaining, check=True)
+
+
+def drop_privileges() -> None:
+    account = runner_account()
     os.initgroups("runner", account.pw_gid)
     os.setgid(account.pw_gid)
     os.setuid(account.pw_uid)
@@ -170,6 +211,7 @@ def main() -> int:
         if Path("/etc/nexpoly-ci-runner/profile").read_text().strip() != PROFILE:
             raise ValueError("unrecognized runner profile")
         RUNTIME.mkdir(mode=0o700, exist_ok=True)
+        ensure_user_session()
         isolated_registration()
         env = runner_environment()
         emit("registered")

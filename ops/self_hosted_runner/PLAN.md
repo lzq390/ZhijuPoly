@@ -8,11 +8,13 @@
 
 **模板维护完成，CI 迁移 PR 正在验收。** 2026-11-16 管理员执行 maintain-template.sh，安装、模板制作、smoke、seal 和控制器恢复均成功。当前模板为 `base-8508969b544f2c8ed77bb2c4820205718fb59c776b4522f659ea9fb0b37d6226.qcow2`，于北京时间 09:29:44 封存，实际分配约 3.484 GiB，较上一模板增加约 532.82 MiB，低于 25 GiB 上限。
 
-GitHub API 核验当前恰有一台 runner：ID 22，`nexpoly-ci-9c81588cc087418b8d57f729ebbc3080`，online/busy，标签 self-hosted/Linux/X64/nexpoly-ci-ephemeral。控制器自 09:29:49 起 active、NRestarts=0，唯一 VM 自 09:30:35 起 active；8 CPU、34 GiB 宿主内存、swap 0、读写各 100 MiB/s 和 AppArmor/NoNewPrivileges 已核验。[迁移 PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 保持 draft，[CI run 43784833577](https://github.com/lzq390/ZhijuPoly/actions/runs/43784833577) 正在该 runner 上运行 Release and deployment script tests。完整 20 个本地 job、每 job 回收/新身份、ci-gate 及最终资源数据仍待验收。
+该模板已实际注册 runner ID22（UUID 9c81588cc087418b8d57f729ebbc3080），执行 script-tests 后自动回收；控制器随后创建不同 UUID 1299502b4885458da2a2ec9fab1b560e / runner ID23，并执行 Monomer-MD Worker tests。两台 VM 均已退出，对应 GitHub runner 记录已消失；用户已再次 drain，目前没有活动 VM。8 CPU、34 GiB 宿主内存、swap 0、读写各 100 MiB/s 和 AppArmor/NoNewPrivileges 已核验。[迁移 PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 保持 draft；[CI run 43784833577](https://github.com/lzq390/ZhijuPoly/actions/runs/43784833577) 的两个本地 job 均失败，完整验收尚未通过。
 
-受保护的安装快照与源码哈希一致，封存模板已经包含启动顺序修复、job umask 0022、锁定的 docker-compose-plugin 5.7.1，以及 Playwright 1.62.1/1.63.0 官方一致的 Ubuntu 24.04 Chromium 系统库、字体和工具。注册与私有文件继续采用 umask 0077。模板保留签名 APT 索引供每台新 VM 独立重新校验，并清理 deb 下载包；浏览器二进制和项目依赖仍按 job 安装，不共享可写缓存。
+受保护安装快照和当前 8508969b 模板已经包含启动顺序修复、job umask 0022、锁定的 docker-compose-plugin 5.7.1，以及 Playwright 官方 Ubuntu 24.04 Chromium 系统依赖。注册与私有文件继续使用 umask 0077；APT 索引保留供每个 VM 独立重新校验，deb 下载包仍清理。浏览器二进制和项目依赖仍按 job 安装，不共享可写缓存。
 
-11 月 13 日首轮前端 job 已通过 Vitest、前端构建和 Chromium 检查，但在 nginx 镜像检查期间触发原有 25 分钟超时；浏览器依赖安装占 6 分 31 秒。上述预装旨在降低冷启动开销，保留原超时和全部检查，效果仍以本轮真实 CI 为准，不能将模板 smoke 或 runner Online 视为完整 CI 成功。
+本轮 CI 定位到 guest 身份和工具前置条件遗漏：自动分配的 runner 为 1000:1000，而现有身份协议及测试要求 1001:1001；无交互式登录导致用户 systemd bus 缺失，系统 Python 也没有 pip 元数据。另外 DFT 发布契约校验器仍要求所有 job 使用 hosted。新修复固定 guest runner UID/GID 1001，安装 python3-pip/dbus-user-session，启用该用户的 linger/user manager，并在注册前验证真实用户 bus。模板 smoke 增加账号、bus 和 pip 检查，失败不封存。DFT 校验器复用既有精确路由/权限校验，保持 14 local / 4 hosted、固定 SHA 和发布控制；测试夹具显式创建 0700 私有目录，生产权限检查不变。这批修复已准备到交付包，需管理员再次运行 maintain-template.sh 后才会进入封存模板。
+
+11 月 13 日首轮前端 job 已通过 Vitest、前端构建和 Chromium 检查，但在 nginx 镜像检查期间触发原有 25 分钟超时。当前模板预装浏览器系统依赖以降低冷启动开销；保留原超时和全部检查，效果仍以真实 CI 为准。完整 20 个本地 job、ci-gate、最终资源数据与剩余故障场景仍待验收。
 
 专用 GitHub App 已创建并安装：`ZhijuPolyrunner`（slug `zhijupolyrunner`），App ID `5740902`、Installation ID `181516914`，所有者 `lzq390`。用户提供的 PEM 已通过格式与实际 JWT 认证校验，App 权限精确为 Administration write、Actions read、Metadata read，events 为空。用户将安装范围从 all 改为 selected 后，GitHub 再次核实仅含 `lzq390/ZhijuPoly` 一个仓库、未暂停；短期 installation token 及目标仓库 runner API 验证通过；首次认证时 runner 数为 0，随后已完成真实注册。验证用短期 token 已撤销。
 
@@ -46,6 +48,7 @@ GitHub API 核验当前恰有一台 runner：ID 22，`nexpoly-ci-9c81588cc087418
 | 虚拟化 | QEMU/KVM，Ubuntu 24.04 amd64；无 GPU |
 | 并发 | 最多一个活跃 VM；每个 runner 只执行一个 job |
 | VM | 8 vCPU、32 GiB 内存；宿主 QEMU cgroup 上限 34 GiB、swap 0 |
+| guest 身份 | 普通 runner 用户，UID/GID 1001；自己的 systemd user manager 与 D-Bus |
 | 磁盘 | 实际预分配 200 GiB 文件、独立 ext4；guest 虚拟盘 160 GiB |
 | I/O | QEMU 虚拟盘读、写分别最多 100 MiB/s |
 | admission 门槛 | 专用存储空闲至少 40 GiB，`/data` 空闲至少 100 GiB；启动前宿主 MemAvailable 至少 64 GiB |

@@ -16,6 +16,14 @@ PROXY_PORT = 27892
 PROXY_HEALTH_URL = "https://github.com/robots.txt"
 
 
+def check_runtime_tools() -> None:
+    from bootstrap import ensure_user_session, drop_privileges, runner_environment
+    ensure_user_session()
+    subprocess.run(["/usr/bin/python3", "-c", "import importlib.metadata; importlib.metadata.distribution('pip')"],
+                   env=runner_environment(), preexec_fn=drop_privileges,
+                   check=True, timeout=30)
+
+
 def denied_direct(address: str, port: int) -> None:
     try:
         connection = socket.create_connection((address, port), timeout=3)
@@ -29,6 +37,7 @@ def main() -> None:
     config = Path("/etc/nexpoly-ci-runner")
     if not (config / "build-mode").is_file():
         raise RuntimeError("Smoke checks require the trusted template build profile")
+    check_runtime_tools()
     addresses = socket.getaddrinfo("api.github.com", 443, type=socket.SOCK_STREAM)
     if not addresses or not all(ipaddress.ip_address(item[4][0]).is_global for item in addresses):
         raise RuntimeError("Guest DNS did not resolve a public GitHub address")
@@ -55,7 +64,7 @@ def main() -> None:
     subprocess.run(["docker", "run", "--rm", "--network", "none", image],
                    check=True, timeout=180)
     subprocess.run(["docker", "image", "rm", image], check=True, timeout=30)
-    print(json.dumps({"guest_smoke": "passed", "checks": ["dns", "https_proxy", "private_proxy_denied", "direct_egress_denied", "docker_compose", "docker_run"]}))
+    print(json.dumps({"guest_smoke": "passed", "checks": ["runner_identity", "user_bus", "system_python_pip", "dns", "https_proxy", "private_proxy_denied", "direct_egress_denied", "docker_compose", "docker_run"]}))
 
 
 if __name__ == "__main__":

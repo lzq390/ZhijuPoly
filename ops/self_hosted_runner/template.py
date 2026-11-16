@@ -395,7 +395,11 @@ def render_seed(lock: dict, output_dir: Path, instance_id: str = "nexpoly-templa
         {"path": "/etc/nexpoly-ci-runner/build-mode", "content": "trusted-template-build\n"},
         {"path": "/etc/nexpoly-ci-runner/software-lock.json", "permissions": "0644", "content": json.dumps(lock)},
     ])
-    data = {"users": [{"name": "runner", "shell": "/bin/bash", "lock_passwd": True}],
+    # bootcmd precedes users_groups. Pin the primary group as well as the UID;
+    # useradd's next free GID need not match an explicitly selected UID.
+    data = {"bootcmd": [["cloud-init-per", "once", "nexpoly-runner-group", "groupadd", "--gid", "1001", "runner"]],
+            "users": [{"name": "runner", "uid": 1001, "primary_group": "runner",
+                       "no_user_group": True, "shell": "/bin/bash", "lock_passwd": True}],
             "ssh_pwauth": False, "disable_root": True,
             "write_files": files,
             "runcmd": [["python3", "/usr/local/lib/nexpoly-ci-runner/build.py"]]}

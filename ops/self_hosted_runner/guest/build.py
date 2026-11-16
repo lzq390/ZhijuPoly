@@ -106,6 +106,8 @@ def main() -> None:
         raise RuntimeError("this command requires the trusted guest build profile")
     if 'VERSION_ID="24.04"' not in Path("/etc/os-release").read_text():
         raise RuntimeError("Ubuntu 24.04 is required")
+    from bootstrap import runner_account
+    runner_account()
     CONFIG.chmod(0o755)
     lock = json.loads((CONFIG / "software-lock.json").read_text())
     env_lines = []
@@ -121,7 +123,7 @@ def main() -> None:
     stage("apt_update")
     run("apt-get", "update")
     stage("apt_dependencies")
-    run("apt-get", "install", "-y", "--no-install-recommends", "ca-certificates", "curl", "git", "jq", "sudo", "python3-venv", "build-essential", "unzip", "zip", "rsync", "zstd", "xz-utils", "iptables", "nftables", "shellcheck", "postgresql-client-16", "libpq-dev",
+    run("apt-get", "install", "-y", "--no-install-recommends", "ca-certificates", "curl", "git", "jq", "sudo", "python3-venv", "python3-pip", "dbus-user-session", "build-essential", "unzip", "zip", "rsync", "zstd", "xz-utils", "iptables", "nftables", "shellcheck", "postgresql-client-16", "libpq-dev",
         *CHROMIUM_SYSTEM_PACKAGES)
     with tempfile.TemporaryDirectory(prefix="nexpoly-template-") as directory:
         temp = Path(directory)
@@ -158,6 +160,10 @@ def main() -> None:
     write("/etc/udev/rules.d/90-nexpoly-runner.rules", 'SUBSYSTEM=="virtio-ports", ATTR{name}=="org.nexpoly.runner.events", GROUP="docker", MODE="0660"\n')
     Path("/opt/hostedtoolcache").mkdir(exist_ok=True)
     run("chown", "-R", "runner:runner", "/home/runner", "/opt/actions-runner", "/opt/hostedtoolcache")
+    # The service uses setuid rather than an interactive PAM login. Persist the
+    # ordinary user's manager and let systemd create /run/user/1001 and its bus.
+    run("loginctl", "enable-linger", "runner")
+    run("systemctl", "start", "user@1001.service")
     stage("docker_start")
     run("systemctl", "daemon-reload")
     run("systemctl", "restart", "docker")

@@ -1,8 +1,8 @@
 [Unit]
 Description=Single-job Nexpoly GitHub Actions guest
-After=network-online.target docker.service cloud-final.service
+After=network-online.target docker.service cloud-final.service user@1001.service
 Wants=network-online.target
-Requires=docker.service cloud-final.service
+Requires=docker.service cloud-final.service user@1001.service
 ConditionPathExists=!/etc/nexpoly-ci-runner/build-mode
 
 [Service]

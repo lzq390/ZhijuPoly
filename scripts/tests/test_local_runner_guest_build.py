@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 from types import SimpleNamespace
@@ -141,6 +142,7 @@ class GuestBuildDiagnosticsTests(unittest.TestCase):
                 shutil.rmtree(mapped, **kwargs)
 
             stack.enter_context(mock.patch.object(build, "CONFIG", config))
+            stack.enter_context(mock.patch.dict(sys.modules, {"bootstrap": SimpleNamespace(runner_account=mock.Mock())}))
             stack.enter_context(mock.patch.object(build, "Path", side_effect=guest_path))
             stack.enter_context(mock.patch.object(build.os, "geteuid", return_value=0))
             stack.enter_context(mock.patch.dict(os.environ))
@@ -173,8 +175,15 @@ class GuestBuildDiagnosticsTests(unittest.TestCase):
             system_install = next(call.args for call in run.call_args_list
                                   if call.args[:4] == ("apt-get", "install", "-y", "--no-install-recommends"))
             self.assertTrue(expected_browser_packages.issubset(system_install[4:]))
+            self.assertIn("python3-pip", system_install[4:])
+            self.assertIn("dbus-user-session", system_install[4:])
             self.assertEqual(set(build.CHROMIUM_SYSTEM_PACKAGES), expected_browser_packages)
             run.assert_any_call("apt-get", "clean")
+            linger = mock.call("loginctl", "enable-linger", "runner")
+            user_manager = mock.call("systemctl", "start", "user@1001.service")
+            smoke = mock.call("python3", str(build.HERE / "smoke.py"))
+            self.assertLess(run.call_args_list.index(linger), run.call_args_list.index(user_manager))
+            self.assertLess(run.call_args_list.index(user_manager), run.call_args_list.index(smoke))
             self.assertEqual((apt_lists / "ubuntu_InRelease").read_text(), "release metadata fixture")
             self.assertEqual((apt_lists / "ubuntu_Packages").read_text(), "package index fixture")
 
