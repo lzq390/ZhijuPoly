@@ -8,13 +8,17 @@
 
 **模板维护完成，CI 迁移 PR 正在验收。** 2026-11-16 管理员再次执行 maintain-template.sh，安装、模板制作、smoke、seal 和控制器恢复均成功。当前模板为 `base-9b1799eafd90bb18a3ae9653b0599b8f91a0c1979bccf86a15f59f18511769d1.qcow2`，于北京时间 10:43:30 封存，实际分配约 3.504 GiB，低于 25 GiB 上限。
 
-该模板已实际注册 runner ID24（UUID b5eaa889d3dd4dabb88255f607d33e40），在 [CI run 43791813121](https://github.com/lzq390/ZhijuPoly/actions/runs/43791813121) 执行镜像任务；随后另一个 UUID 88bae1dde6e144e8ae2e6972dd1d389f 的 PostgreSQL 16 集成 job 133051795491 于北京时间 10:54:27 全部通过，包括真实 matching-major 外部媒体和 mutable-audit 事务 CAS 检查。8 CPU、34 GiB 宿主内存、swap 0、读写各 100 MiB/s 和 AppArmor/NoNewPrivileges 已核验。[迁移 PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 保持 draft，完整验收尚未通过。
+该模板已通过真实注册并连续执行不同 UUID 的 job。在 [CI run 43795108192](https://github.com/lzq390/ZhijuPoly/actions/runs/43795108192) 中，截至北京时间 14:15，20 个本地 job 已有 11 个成功、2 个失败、1 个超时、1 个执行中、5 个排队；成功项包含三个后端分片、全部脚本测试、policy、DFT Worker、MCP、PG14/15/18 与生产别名集成。此前 PG16 job 133051795491 也已通过真实 matching-major 外部媒体与事务 CAS 检查。8 CPU、34 GiB 宿主内存、swap 0、读写各 100 MiB/s 和 AppArmor/NoNewPrivileges 已核验。[迁移 PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 保持 draft，完整验收尚未通过。
 
 受保护安装快照和当前 9b1799ea 模板已经包含启动顺序修复、job umask 0022、锁定的 docker-compose-plugin 5.7.1，以及 Playwright 官方 Ubuntu 24.04 Chromium 系统依赖。注册与私有文件继续使用 umask 0077；APT 索引保留供每个 VM 独立重新校验，deb 下载包仍清理。浏览器二进制和项目依赖仍按 job 安装，不共享可写缓存。
 
 上一轮 CI 定位到 guest 身份和工具前置条件遗漏：自动分配的 runner 为 1000:1000，而现有身份协议及测试要求 1001:1001；无交互式登录导致用户 systemd bus 缺失，系统 Python 也没有 pip 元数据。另外 DFT 发布契约校验器仍要求所有 job 使用 hosted。当前模板已固定 guest runner UID/GID 1001，安装 python3-pip/dbus-user-session，启用该用户的 linger/user manager，并在注册前验证真实用户 bus。模板 smoke 的账号、bus 和 pip 检查已通过；新 VM 的真实注册还验证了每次启动的用户 bus 前置检查。DFT 校验器复用既有精确路由/权限校验，保持 14 local / 4 hosted、固定 SHA 和发布控制；测试夹具显式创建 0700 私有目录，生产权限检查不变。
 
-新一轮首个镜像 job 133051795519 在 Buildx 初始化时失败，原因是逗号分隔的 env.no_proxy 被 Buildx 当成多项 CSV 字段。两个本地 Buildx 步骤现为整条字段加双引号，并同步精确 policy 和语义回归测试；固定 Action 会保留这层引号供 Buildx 解析。该项仅涉及 workflow，更新 PR 后重跑，无需安装或重建模板；云端发布步骤不变。
+此前首个镜像 job 133051795519 的 Buildx CSV 引号修复已经真实生效：新一轮两个本地 Buildx 均成功启动，Web 镜像编译/生成/加载及 OpenScience 镜像构建/加载均成功。当前失败定位为可选缓存链路和本地容器代理兼容性：Web job 的 GHA 缓存导出约 33 分钟后 EOF；轻量后端在 pip 缓存恢复后卡住并触发原 10 分钟期限；OpenScience 验证高度指向 BusyBox wget 将本机健康检查误发至代理（已用固定镜像的实际二进制复现，原日志未打印具体失败断言）。
+
+源码修复关闭轻量后端及 Monomer-MD job 的可选 pip 缓存，为两个本地 GHA cache-to 增加 timeout=5m 和 ignore-error=true，并给本地静态服务/浏览器验证容器显式清空代理变量及增加失败诊断。Docker 构建和拉取仍使用原代理，构建/镜像加载/测试失败仍阻断，云端发布 job 块保持一致；无需重装宿主或重建模板。timeout 是缓存后端参数，当前 BuildKit 实现不保证整个上传在 5 分钟内结束，job 原有期限仍为最终兜底。可选缓存容错不代表链路已经修复，后续仍需分别验证缓存写入和命中。
+
+14:20 Monomer-MD job 在同一 pip 缓存恢复超时后收到 runner shutdown signal，未执行运行时准备或 pytest；这不是原 25 分钟 job 期限。管理员导出的宿主日志证明 14:20:14 的 guest/runner 关闭信号先于控制器在 14:20:46 的 GitHub 完成确认及回收，宿主 105 分钟计时器尚未到期。初始信号来源未明，不能把缓存修复视为这一事件的已验证修复；下一轮继续观察，无证据要求重新制作模板。
 
 11 月 13 日首轮前端 job 已通过 Vitest、前端构建和 Chromium 检查，但在 nginx 镜像检查期间触发原有 25 分钟超时。当前模板预装浏览器系统依赖以降低冷启动开销；保留原超时和全部检查，效果仍以真实 CI 为准。完整 20 个本地 job、ci-gate、最终资源数据与剩余故障场景仍待验收。
 

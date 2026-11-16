@@ -198,6 +198,83 @@ class RunnerRoutingPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "127.0.0.1.*expecting k=v"):
             self.buildx_driver_map(stripped)
 
+    def test_local_cache_exporter_options_preserve_scope_mode_and_real_image_output(self) -> None:
+        scopes = {
+            "image-build": "ci-${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}",
+            "openscience-overlay": "ci-openscience-ui-overlay-v1",
+        }
+        for job, scope in scopes.items():
+            with self.subTest(job=job):
+                body = policy.workflow_job_body(CI_TEXT, job, [])
+                exports = re.findall(r"^          cache-to: (.*)$", body, re.MULTILINE)
+                self.assertEqual(len(exports), 1)
+                options = dict(field.split("=", 1) for field in next(csv.reader(exports)))
+                self.assertEqual(options, {
+                    "type": "gha", "mode": "max", "scope": scope,
+                    "timeout": "5m", "ignore-error": "true",
+                })
+                self.assertIn("          cache-from: type=gha,scope=" + scope, body)
+                build = next(step for step in policy.workflow_step_blocks(body)
+                             if "uses: docker/build-push-action@" in step)
+                self.assertIn("          push: false\n", build)
+                self.assertIn("          load: true\n", build)
+                self.assertNotIn("continue-on-error:", body)
+
+    def test_local_cache_export_policy_cannot_drift_or_be_removed(self) -> None:
+        for job in ("image-build", "openscience-overlay"):
+            body = policy.workflow_job_body(CI_TEXT, job, [])
+            original = re.findall(r"^          cache-to:.*$", body, re.MULTILINE)[0]
+            for replacement in (
+                "", original.replace(",ignore-error=true", ""),
+                original.replace("ignore-error=true", "ignore-error=false"),
+                original.replace(",timeout=5m", ""),
+                original.replace("timeout=5m", "timeout=0s"),
+                original.replace("timeout=5m", "timeout=30m"),
+                original.replace("mode=max", "mode=min"),
+                original.replace("scope=ci-", "scope=release-"),
+                original + "\n" + original,
+            ):
+                with self.subTest(job=job, replacement=replacement):
+                    changed = self.replace_job(job, original, replacement)
+                    failures: list[str] = []
+                    policy.validate_local_runner_controls(changed, failures)
+                    self.assertTrue(any(job in failure and "cache export" in failure
+                                        for failure in failures), failures)
+
+    def test_only_cache_exports_may_ignore_errors_and_hosted_cache_policy_stays_strict(self) -> None:
+        for job in ("image-build", "openscience-overlay"):
+            body = policy.workflow_job_body(CI_TEXT, job, [])
+            build = next(step for step in policy.workflow_step_blocks(body)
+                         if "uses: docker/build-push-action@" in step)
+            for before, after in (
+                (policy.LOCAL_RUNNER_LINE,
+                 policy.LOCAL_RUNNER_LINE + "\n    continue-on-error: true"),
+                (build, build.splitlines()[0] + "\n        continue-on-error: true\n"
+                 + "\n".join(build.splitlines()[1:]) + "\n"),
+            ):
+                with self.subTest(job=job, control=before.splitlines()[0]):
+                    failures: list[str] = []
+                    policy.validate_local_runner_controls(self.replace_job(job, before, after), failures)
+                    self.assertTrue(any("only cache export errors" in failure
+                                        for failure in failures), failures)
+            for before, after in (("          load: true", "          load: false"),
+                                  ("          push: false", "          push: true")):
+                with self.subTest(job=job, control=before):
+                    changed = self.replace_job(job, before, after)
+                    failures = []
+                    policy.validate_backend_image_identity_policy(changed, failures)
+                    policy.validate_openscience_release_policy(changed, failures)
+                    self.assertTrue(any(job in failure for failure in failures), failures)
+        for job in policy.PUBLISHING_JOBS:
+            body = policy.workflow_job_body(CI_TEXT, job, [])
+            for export in re.findall(r"^          cache-to:.*$", body, re.MULTILINE):
+                with self.subTest(job=job, export=export):
+                    failures = []
+                    policy.validate_local_runner_controls(
+                        self.replace_job(job, export, export + ",timeout=5m,ignore-error=true"), failures)
+                    self.assertTrue(any(job in failure and "cache export" in failure
+                                        for failure in failures), failures)
+
     def test_hosted_jobs_and_global_environment_cannot_receive_local_proxy(self) -> None:
         for job in policy.PUBLISHING_JOBS:
             changed = self.replace_job(job, "\n".join(policy.BUILDX_SETUP_LINES),
@@ -254,6 +331,65 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         failures: list[str] = []
         policy.validate_lightweight_backend_tests(CI_TEXT, failures)
         self.assertEqual(failures, [])
+
+    def test_affected_python_setups_omit_optional_cache_without_changing_other_jobs(self) -> None:
+        for job in ("lightweight-backend-tests", "worker-tests"):
+            with self.subTest(job=job):
+                body = policy.workflow_job_body(CI_TEXT, job, [])
+                setup = [step.rstrip() for step in policy.workflow_step_blocks(body)
+                         if "uses: actions/setup-python@" in step]
+                self.assertEqual(setup, [policy.UNCACHED_PYTHON311_STEP])
+                self.assertNotIn("cache:", setup[0])
+                self.assertNotIn("cache-dependency-path:", setup[0])
+        for job in ("backend-tests", "dft-worker-tests", "property-filter-mcp-tests"):
+            with self.subTest(job=job):
+                other = policy.workflow_job_body(CI_TEXT, job, [])
+                self.assertIn("          cache: pip\n", other)
+
+    def test_lightweight_python_setup_rejects_cache_reintroduction_or_weakened_execution(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "lightweight-backend-tests", [])
+        setup = policy.UNCACHED_PYTHON311_STEP
+        for replacement in (
+            setup + "\n          cache: pip",
+            setup + "\n          cache-dependency-path: server_monitoring/requirements.lock",
+            setup.replace('python-version: "3.11"', 'python-version: "3.12"'),
+            setup.replace("a26af69be951a213d495a4c3e4e4022e16d87065", "0" * 40),
+            setup.replace("        with:", "        continue-on-error: true\n        with:"),
+            setup.replace("        with:", "        if: false\n        with:"),
+        ):
+            with self.subTest(replacement=replacement):
+                failures: list[str] = []
+                policy.validate_lightweight_backend_tests(
+                    CI_TEXT.replace(body, body.replace(setup, replacement, 1), 1), failures)
+                self.assertTrue(any("without pip cache" in failure for failure in failures), failures)
+        for before, after in (
+            ("    timeout-minutes: 10", "    timeout-minutes: 20"),
+            ("--require-hashes", ""),
+            ("-r server_monitoring/requirements.lock", ""),
+        ):
+            with self.subTest(control=before):
+                failures = []
+                policy.validate_lightweight_backend_tests(
+                    CI_TEXT.replace(body, body.replace(before, after, 1), 1), failures)
+                self.assertTrue(failures)
+
+    def test_worker_python_setup_rejects_cache_reintroduction_or_changed_python(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "worker-tests", [])
+        setup = policy.UNCACHED_PYTHON311_STEP
+        for replacement in (
+            setup + "\n          cache: pip",
+            setup + "\n          cache-dependency-path: workers/monomer_md_worker/requirements.lock",
+            setup.replace('python-version: "3.11"', 'python-version: "3.12"'),
+            setup.replace("a26af69be951a213d495a4c3e4e4022e16d87065", "0" * 40),
+            setup.replace("        with:", "        continue-on-error: true\n        with:"),
+            setup.replace("        with:", "        if: false\n        with:"),
+        ):
+            with self.subTest(replacement=replacement):
+                failures: list[str] = []
+                policy.validate_local_runner_controls(
+                    CI_TEXT.replace(body, body.replace(setup, replacement, 1), 1), failures)
+                self.assertTrue(any("worker-tests" in failure and "without pip cache" in failure
+                                    for failure in failures), failures)
 
     def test_lightweight_tests_cannot_leak_into_unittest_or_skip_pytest(self) -> None:
         for pattern in (
@@ -1535,7 +1671,8 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         changed = CI_TEXT.replace(identity_step, "", 1)
         cache_marker = (
             "          cache-to: type=gha,mode=max,scope=ci-"
-            "${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}\n"
+            "${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }},"
+            + policy.LOCAL_CACHE_EXPORT_OPTIONS + "\n"
         )
         changed = changed.replace(
             cache_marker,

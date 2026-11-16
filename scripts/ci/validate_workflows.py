@@ -44,6 +44,12 @@ FRONTEND_VITEST_STEP = '''      - name: Run Vitest
         env:
           VITE_AGENT_WORKSPACE_URL: https://workspace.ci.invalid/
         run: npm test -- --maxWorkers=4'''
+UNCACHED_PYTHON311_STEP = '''      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"'''
+# This is the cache backend's timeout setting, not a total export deadline.
+LOCAL_CACHE_EXPORT_OPTIONS = "timeout=5m,ignore-error=true"
 RELEASE_INPUT_PATH = REPOSITORY_ROOT / "release-input.json"
 DEPLOYMENT_DOC_PATH = REPOSITORY_ROOT / "docs" / "deployment.md"
 RELEASE_CONTROLLER_DOC_PATH = (
@@ -465,7 +471,8 @@ IMAGE_BUILD_STEP_LINES = (
     ),
     (
         "          cache-to: type=gha,mode=max,scope=ci-"
-        "${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}"
+        "${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }},"
+        + LOCAL_CACHE_EXPORT_OPTIONS
     ),
 )
 IMAGE_BUILD_VERIFY_STEP_LINES = (
@@ -836,6 +843,20 @@ def validate_runner_routing(ci_text: str, failures: list[str]) -> None:
 def validate_local_runner_controls(ci_text: str, failures: list[str]) -> None:
     """Require builder proxy settings and bounded frontend worker parallelism."""
     build_jobs = {"image-build", "openscience-overlay", *PUBLISHING_JOBS}
+    expected_exports = {
+        "image-build": tuple(line for line in IMAGE_BUILD_STEP_LINES
+                             if line.startswith("          cache-to:")),
+        "openscience-overlay": (
+            "          cache-to: type=gha,mode=max,scope=ci-openscience-ui-overlay-v1,"
+            + LOCAL_CACHE_EXPORT_OPTIONS,
+        ),
+        "release": tuple(line for step in (RELEASE_BACKEND_BUILD_STEP_LINES,
+                                           RELEASE_WEB_BUILD_STEP_LINES)
+                         for line in step if line.startswith("          cache-to:")),
+        "openscience-release": (
+            "          cache-to: type=gha,mode=max,scope=release-openscience-ui-overlay-v1",
+        ),
+    }
     if ci_text.count("uses: docker/setup-buildx-action@") != len(build_jobs):
         failures.append("CI must retain exactly four reviewed Buildx setup steps")
     for job_name in sorted(build_jobs):
@@ -847,12 +868,20 @@ def validate_local_runner_controls(ci_text: str, failures: list[str]) -> None:
         expected = LOCAL_BUILDX_SETUP_LINES if job_name in LOCAL_RUNNER_JOBS else BUILDX_SETUP_LINES
         if len(selected) != 1 or selected[0].rstrip().splitlines() != list(expected):
             failures.append(f"{job_name} must retain its exact reviewed Buildx proxy configuration")
+        exports = tuple(re.findall(r"(?m)^          cache-to:[^\n]*", body))
+        if exports != expected_exports[job_name]:
+            failures.append(f"{job_name} must retain its exact reviewed cache export policy")
+        if job_name in LOCAL_RUNNER_JOBS and "continue-on-error:" in body:
+            failures.append(f"{job_name} may ignore only cache export errors; build and test failures must block CI")
     frontend = workflow_job_body(ci_text, "frontend", failures)
     if frontend is not None:
         selected = [step for step in workflow_step_blocks(frontend)
                     if step.startswith("      - name: Run Vitest\n")]
         if len(selected) != 1 or selected[0].rstrip() != FRONTEND_VITEST_STEP:
             failures.append("frontend must run the complete Vitest suite with at most four workers")
+    worker = workflow_job_body(ci_text, "worker-tests", failures)
+    if worker is not None:
+        validate_uncached_python_setup(worker, "worker-tests", failures)
 
 
 def validate_actionlint_config(text: str, failures: list[str]) -> None:
@@ -1417,6 +1446,13 @@ def validate_script_tests_budget(
         )
 
 
+def validate_uncached_python_setup(body: str, job_name: str, failures: list[str]) -> None:
+    python_steps = [step.rstrip() for step in workflow_step_blocks(body)
+                    if "uses: actions/setup-python@" in step]
+    if python_steps != [UNCACHED_PYTHON311_STEP]:
+        failures.append(f"{job_name} must retain the pinned Python 3.11 setup without pip cache")
+
+
 def validate_lightweight_backend_tests(ci_text: str, failures: list[str]) -> None:
     body = workflow_job_body(ci_text, "lightweight-backend-tests", failures)
     script_body = workflow_job_body(ci_text, "script-tests", failures)
@@ -1433,6 +1469,7 @@ def validate_lightweight_backend_tests(ci_text: str, failures: list[str]) -> Non
             failures.append(f"lightweight-backend-tests must collect {pattern}")
     for marker in (
         "    needs: resolve-sha\n",
+        "    timeout-minutes: 10\n",
         "      PYTHONPATH: backend\n",
         '          python-version: "3.11"',
         "python -m pip install --require-hashes -r backend/requirements-knowledge-poc.lock",
@@ -1443,6 +1480,7 @@ def validate_lightweight_backend_tests(ci_text: str, failures: list[str]) -> Non
     ):
         if marker not in body:
             failures.append(f"lightweight-backend-tests is missing: {marker}")
+    validate_uncached_python_setup(body, "lightweight-backend-tests", failures)
     monitoring_step = (
         "      - name: Run standalone server monitoring tests\n"
         "        run: python -m pytest server_monitoring/tests -q"

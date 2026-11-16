@@ -213,6 +213,20 @@ web 镜像 job 在 Set up Buildx 失败，日志精确报 `invalid value "127.0.
 
 固定 [setup-buildx-action 源码](https://github.com/docker/setup-buildx-action/blob/8d2750c68a42422c14e847fe6c8ac0403b4cbd6f/src/context.ts#L34) 使用 `getInputList` 的 `ignoreComma:true, quote:false`，其锁定的 [actions-toolkit 0.63.0](https://github.com/docker/actions-toolkit/blob/v0.63.0/src/util.ts#L38) 保留整项引号，再由 [Buildx 0.31.1 的 CSV 解析](https://github.com/docker/buildx/blob/v0.31.1/builder/builder.go#L567) 处理。使用实际 csv-parse 5.6.0 和 Buildx 锁定的 go-csvvalue 030d3b2625d0 分别验证：新写法保留完整六个 NO_PROXY 主机，旧写法精确复现错误，仅引用等号后的值也失败。验证不调用宿主 Docker daemon。相关 workflow/DFT **128 项测试通过**，workflow policy、actionlint 1.7.7（含 ShellCheck）与 diff 检查通过；完整 CI 将随修复推送重新执行。
 
+## 2026-11-16 完整 CI 的缓存与容器代理问题
+
+run 43795108192 已真实通过全部 2383 项脚本测试（1681.328 秒，19 skipped）、三个后端分片、DFT Worker、policy、MCP、生产别名集成及 PG14/15/18 等 job。此前身份、用户 bus 和 pip 修复的主要失败项已通过；仍不能把本轮标为完整通过。
+
+Web job 133062105529 的 npm/Vite 编译、镜像导出和 Docker load 均成功，失败发生在 GHA cache export：约 2011.9 秒后 CreateCacheEntry 返回 unexpected EOF。目标 results-receiver.actions.githubusercontent.com 已在原官方白名单内；同轮 OpenScience 的缓存导出成功，未发现放宽白名单的依据。两个本地 cache-to 增加 timeout=5m,ignore-error=true，保持 mode=max/scope 和 cache-from。仅缓存导出错误容错，镜像构建、导出、加载、身份和测试继续阻断；云端发布块不变。[Docker GHA 参数](https://docs.docker.com/build/cache/backends/gha/) 支持这两个选项。实际运行 BuildKit v0.34.2 的缓存库将 Timeout 用于请求重试预算，v2 Azure 上传不保证受该值限制，因此不能声称总上传硬截止为 5 分钟。
+
+轻量 job 133062105440 在 Python 3.11.18 安装成功后恢复 196,643,524 bytes pip 缓存，停在 117,440,512 bytes / 59.7%，报告下载超时后未及时退出，最终触发原 10 分钟期限。固定 setup-python SHA 的捆绑 @actions/cache 4.0.3 超时包装器仅在成功路径清除计时器，拒绝路径可能遗留默认 10 分钟计时器；具体 Node 句柄没有采样，不能把该解释视为现场已证实。去除 lightweight-backend-tests 和发生相同缓存停滞的 worker-tests 两项可选 pip cache；保留 Python SHA/版本、10/25 分钟期限、全部哈希锁、空环境运行时准备及完整测试。其余已成功的 Python cache 保留，Node 24 提示没有被当作原因。
+
+OpenScience job 133062105557 的镜像构建/加载/缓存导出及验证开头 4 项 Node、13 项 Python 测试通过，之后静默约 49.5 秒退出 1。固定父镜像的 healthcheck 为 BusyBox wget 请求 127.0.0.1:4454/healthz。通过 GHCR 匿名只读下载、校验 OCI layer，提取同镜像 BusyBox 1.37.0-r12 并用其 musl loader 在临时目录执行：即使 NO_PROXY/no_proxy 包含 127.0.0.1，它仍选用 http_proxy，明确复现本机请求误走代理。原日志没有失败断言，具体退出行仍需重跑证实。三个本地静态服务验证脚本对新建的本地 nginx/browser fixture 显式覆盖六个出站代理变量为空；镜像 build/pull 代理和既有 --container 目标配置保持原有行为。失败时输出阶段、行号、有限 State.Health/容器日志，并为启动/就绪查询设置期限，不输出 Config.Env 或凭据。
+
+MD job 133062105566 同样停在 pip 缓存，06:16:28 UTC 报恢复超时，06:20:14 收到 runner shutdown signal；运行时准备及 pytest 均未开始。管理员导出 /home/devuser/nexpoly-runner-md-shutdown.log 显示控制器 06:20:46 才以 github_job_completed 发起关机，06:22:46 在宽限结束后终止 VM，06:22:49 完成回收；没有提前触发启动/执行期限。初始信号来自 guest/runner 的路径尚未定位，独立保留未解，不声称关闭 pip cache 已修复它，也不基于猜测重建模板。
+
+修复后的 workflow/DFT policy、本地容器代理、OpenScience 静态准备及 Compose delivery 相关 **167 项测试通过**。新增 8 项离线测试用 Docker CLI 替身模拟真实 config.json 代理注入与 --env 覆盖优先级，移除覆盖参数可复现失败；检查 build/pull 仍继承代理、配置文件未改、健康/HTTP 等待失败仍返回非零且输出有限诊断、既有 --container 目标不被重建或输出日志、预期 grep 零匹配保持安静以及真实父层失败只报告一次。ShellCheck 0.10.0 默认级别、Bash 语法、workflow policy、actionlint 1.7.7 和 diff 检查通过；四个 hosted job 块与修改前逐字节一致。未调用宿主 Docker 或修改系统服务。实际容器验证及完整 CI 将随修复提交重跑；关闭信号与完整验收仍保留未解。
+
 ## 复验命令
 
 在仓库根目录：
