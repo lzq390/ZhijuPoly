@@ -179,6 +179,18 @@ PR https://github.com/lzq390/ZhijuPoly/pull/111 已创建为 draft 并附到当�
 
 将 c192967 中的 Chromium 系统依赖与 APT 索引保留修复同步到 `/data/lzq/github-runner/control/guest/build.py`，同步 PLAN/VALIDATION 并重新生成 SHA256SUMS；交付源文件逐项核对，Python 源码静态解析通过。源码未新增功能变更，沿用此前已通过的 277 项相关测试。受保护的安装快照与封存镜像尚未更新，下一步由管理员执行交付包 maintain-template.sh，完成后再核验 runner 注册和完整 CI。
 
+## 2026-11-16 模板维护完成与新 runner 接单
+
+读取用户保存的 `/home/devuser/nexpoly-runner-maintenance.log`：安装成功，guest 从 apt_update/apt_dependencies、四个 Docker 包、Buildx/runner 到 smoke/seal 全阶段通过；模板于北京时间 09:29:44 封存为 `base-8508969b544f2c8ed77bb2c4820205718fb59c776b4522f659ea9fb0b37d6226.qcow2`。脚本正常执行 resume/start。末尾 status 的 paused=true 是 resume 请求尚未被新控制器消费的瞬时状态；随后真实 Online/busy 证明已恢复接单。
+
+只读核验 `/usr/local/libexec/nexpoly-runner` 的 template.py、guest build/bootstrap/smoke/software-lock 与工作树 SHA256 一致，均 root 所有；实际包含 job umask 0022、Compose 5.7.1 与 30 秒 smoke、33 项 Chromium 系统依赖、保留 APT 索引及 apt-get clean。只读模板实际分配 3,741,048,832 bytes（3.484 GiB），较旧模板增加约 532.82 MiB；专用文件系统可用约 189 GiB，宿主 /data 可用约 184 GiB。
+
+控制器自北京时间 09:29:49 起 active、NRestarts=0。唯一执行 VM UUID=9c81588cc087418b8d57f729ebbc3080，09:30:35 启动；QEMU 参数实际为 -m32768、-smp8、bps_rd/bps_wr=104857600、sandbox 开启、IPv6 关闭。cgroup cpu.max=800000/100000、memory.max=36507222016、swap.max=0，service 为 nexpoly-vm/AppArmor=nexpoly-runner-vm/NoNewPrivileges=yes；磁盘限速由 QEMU 实施，io.max 为空不代表无限速。
+
+GitHub API 返回 total_count=1：runner ID22、name=nexpoly-ci-9c81588cc087418b8d57f729ebbc3080、online/busy，标签匹配。PR #111 当前 head=6b3cc6213229ed74c47ba62b1ef48ff312c8dc0f；CI run 43784833577 已通过 hosted resolve-sha，新模板首个 job 133030077936（Release and deployment script tests）于 09:31:15 开始，checkout/SHA/commit identity 均通过，完整 script tests 执行中。其余 19 个本地 job 排队。此轮完成前不推送仅文档更新，以免 concurrency 取消活动任务。
+
+执行中采样 MemoryPeak=2,716,450,816 bytes（约 2.53 GiB）、CPUUsageNSec=865454996000、IOReadBytes=565125632、IOWriteBytes=1974495232，仅为采样时下界；最终 job 结果、回收及完整 CI 仍待验收。
+
 ## 复验命令
 
 在仓库根目录：

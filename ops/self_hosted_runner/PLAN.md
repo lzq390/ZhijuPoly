@@ -6,19 +6,19 @@
 
 已实现控制器、宿主安装工具、受限网络配置、VM 模板制作、guest 启动程序、版本锁和 CI 迁移代码。源码位于仓库 `ops/self_hosted_runner/`，部署副本位于 `/data/lzq/github-runner/control/`。本文件同时保存为 `/data/lzq/github-runner/PLAN.md`。
 
-**专用 runner 已完成首次接单，CI 迁移 PR 正在验收。** 2026-11-13 16:50（北京时间）GitHub API 确认目标仓库恰有一台 runner：ID 21，`nexpoly-ci-a0398f54c8a643a4aa30f79b8809b10f`，标签为 self-hosted/Linux/X64/nexpoly-ci-ephemeral。该 VM 的 8 CPU 配额、MemoryMax 34 GiB、MemorySwapMax=0 已核验。[迁移 PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 为 draft，首个本地前端 job 已通过依赖安装、Vitest、前端构建和 Chromium 双编辑器检查，但在 nginx 镜像检查期间触发原有 25 分钟超时。17:24 左右对应 VM 已 inactive/dead、GitHub runner 数为 0；用户已 drain，控制器保持 active，等待模板维护。
+**模板维护完成，CI 迁移 PR 正在验收。** 2026-11-16 管理员执行 maintain-template.sh，安装、模板制作、smoke、seal 和控制器恢复均成功。当前模板为 `base-8508969b544f2c8ed77bb2c4820205718fb59c776b4522f659ea9fb0b37d6226.qcow2`，于北京时间 09:29:44 封存，实际分配约 3.484 GiB，较上一模板增加约 532.82 MiB，低于 25 GiB 上限。
 
-管理员已完成 guest 启动顺序修复后的模板重建，新镜像为 `base-d3bd857a91806acc549ed09a8ed404c06dc63a2a210f017d886276ae607b93da.qcow2`，上一版本 053aef 仍保留。bootstrap 使用 Type=exec、WantedBy=cloud-init.target、Requires=cloud-final.service，新执行 VM 已完成注册。首次完整 PR、每 job 身份变化/回收、BuildKit/cache/浏览器依赖与 CI 资源峰值仍待验证，暂不将 Online 视为完整 CI 已通过。
+GitHub API 核验当前恰有一台 runner：ID 22，`nexpoly-ci-9c81588cc087418b8d57f729ebbc3080`，online/busy，标签 self-hosted/Linux/X64/nexpoly-ci-ephemeral。控制器自 09:29:49 起 active、NRestarts=0，唯一 VM 自 09:30:35 起 active；8 CPU、34 GiB 宿主内存、swap 0、读写各 100 MiB/s 和 AppArmor/NoNewPrivileges 已核验。[迁移 PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 保持 draft，[CI run 43784833577](https://github.com/lzq390/ZhijuPoly/actions/runs/43784833577) 正在该 runner 上运行 Release and deployment script tests。完整 20 个本地 job、每 job 回收/新身份、ci-gate 及最终资源数据仍待验收。
 
-首轮验收复查补齐两项 guest 差异：仅在实际 job 子进程降权后设置 umask 0022，使 checkout 保持原 policy 要求的 0755/0644；注册与宿主私有文件继续使用 0077。显式锁定第四个 Docker APT 包 docker-compose-plugin 5.7.1，并在 smoke 中检查 `docker compose version`；此前 --no-install-recommends 不会安装 CLI 的 Compose 推荐包。两项修复已在源码/交付包准备，当前 d3bd 模板尚未包含，需停止空闲控制器并重建模板；不放宽既有 workflow 权限校验。
+受保护的安装快照与源码哈希一致，封存模板已经包含启动顺序修复、job umask 0022、锁定的 docker-compose-plugin 5.7.1，以及 Playwright 1.62.1/1.63.0 官方一致的 Ubuntu 24.04 Chromium 系统库、字体和工具。注册与私有文件继续采用 umask 0077。模板保留签名 APT 索引供每台新 VM 独立重新校验，并清理 deb 下载包；浏览器二进制和项目依赖仍按 job 安装，不共享可写缓存。
 
-首个前端 job 的浏览器依赖安装耗时 6 分 31 秒，Chromium 检查耗时 8 分 59 秒，最终超时。源码进一步将仓库锁定的 Playwright 1.62.1/1.63.0 官方一致的 Ubuntu 24.04 Chromium 系统库、字体与工具预装到模板，并保留签名 APT 索引供每台新 VM 独立重新校验；继续清理 deb 下载包。首轮系统包安装新增约 299 MB，索引额外空间和新执行耗时待实测。浏览器二进制和项目依赖仍按 job 安装，不共享可写缓存；保留 25 分钟超时和全部检查。2026-11-16 用户确认维护脚本尚未执行，最后一项修复现已同步到 control 交付包；宿主安装快照与封存模板仍需管理员通过 maintain-template.sh 更新。
+11 月 13 日首轮前端 job 已通过 Vitest、前端构建和 Chromium 检查，但在 nginx 镜像检查期间触发原有 25 分钟超时；浏览器依赖安装占 6 分 31 秒。上述预装旨在降低冷启动开销，保留原超时和全部检查，效果仍以本轮真实 CI 为准，不能将模板 smoke 或 runner Online 视为完整 CI 成功。
 
-专用 GitHub App 已创建并安装：`ZhijuPolyrunner`（slug `zhijupolyrunner`），App ID `5740902`、Installation ID `181516914`，所有者 `lzq390`。用户提供的 PEM 已通过格式与实际 JWT 认证校验，App 权限精确为 Administration write、Actions read、Metadata read，events 为空。用户将安装范围从 all 改为 selected 后，GitHub 再次核实仅含 `lzq390/ZhijuPoly` 一个仓库、未暂停；短期 installation token 及目标仓库 runner API 验证通过，现有 runner 数为 0。验证用短期 token 已撤销。
+专用 GitHub App 已创建并安装：`ZhijuPolyrunner`（slug `zhijupolyrunner`），App ID `5740902`、Installation ID `181516914`，所有者 `lzq390`。用户提供的 PEM 已通过格式与实际 JWT 认证校验，App 权限精确为 Administration write、Actions read、Metadata read，events 为空。用户将安装范围从 all 改为 selected 后，GitHub 再次核实仅含 `lzq390/ZhijuPoly` 一个仓库、未暂停；短期 installation token 及目标仓库 runner API 验证通过；首次认证时 runner 数为 0，随后已完成真实注册。验证用短期 token 已撤销。
 
 系统已配置 App ID 5740902、Installation ID 181516914，私钥为 `/etc/nexpoly-runner/app.pem`、root:root 0600；安装和真实 App/runner API 认证已核验。部署专用 config.app.toml 已安装，源码 example 保留通用默认值。此次 guest 修复通过重装及重建模板应用，不需要重新配置 App 或私钥。
 
-执行 VM 的 qcow2 backing image AppArmor 只读锁权限 `rk` 已加载，执行 VM 已成功启动；未赋予基础镜像写权限。新的 guest unit 改挂 cloud-init.target、明确依赖 cloud-final.service，并使用 Type=exec，避免循环及长任务阻塞 boot target。回归测试实际复现旧版 systemd 事务循环、验证新版没有循环且保留启动任务；构建期间仍因 build-mode 跳过注册。此修复必须重新构建基础镜像后才能影响执行 VM。
+执行 VM 的 qcow2 backing image AppArmor 只读锁权限 `rk` 已加载，执行 VM 已成功启动；未赋予基础镜像写权限。新的 guest unit 改挂 cloud-init.target、明确依赖 cloud-final.service，并使用 Type=exec，避免循环及长任务阻塞 boot target。回归测试实际复现旧版 systemd 事务循环、验证新版没有循环且保留启动任务；构建期间仍因 build-mode 跳过注册。此修复已包含在当前重新构建的 8508969b 模板中。
 
 以下为部署期间的问题记录；最新状态以上述段落为准。
 
@@ -200,9 +200,9 @@ doctor 不申请/打印 token，App 实际授权与注册是否正确由启动�
 | 验收项 | 当前状态 / 记录内容 |
 | --- | --- |
 | actionlint、workflow policy、磁盘脚本、控制器/host/template 测试 | 见交付 `VALIDATION.md` |
-| 唯一 VM / runner 与 cgroup 资源限制 | 唯一 Online/idle runner、唯一 VM，8 CPU/34 GiB/swap 0 已实测；任务运行峰值待验收 |
+| 唯一 VM / runner 与 cgroup 资源限制 | 当前唯一 Online/busy runner、唯一 VM，8 CPU/34 GiB/swap 0 已实测；最终任务峰值待验收 |
 | 无注册 VM smoke（DNS、代理 HTTPS、Docker、部分隔离检查） | 模板构建已完成并封存；更完整目标矩阵及 CI 容量检查待验收 |
-| 完整 PR 20 个不同身份、main 18 个、本地 ci-gate | PR #111 已运行首个本地 job；完整 20 job 与 gate 待验收 |
+| 完整 PR 20 个不同身份、main 18 个、本地 ci-gate | 新模板已在 PR #111 / run 43784833577 接单；完整 20 job 与 gate 待验收 |
 | Docker pull、BuildKit remote Git、GHA cache、apt/pip/npm | 模板构建完成 apt 与固定 hello-world pull/run；其余待真实 CI |
 | 禁止宿主业务端口、27891、Docker 网段、元数据、IPv6、非白名单 | 已执行 27891、公共直接出口与私网代理拒绝 smoke；其余目标矩阵待完整验收 |
 | 成功、失败、取消、超时、重启均回收；无前任务残留 | 状态机负测已覆盖；真实 VM 仍待实测 |
