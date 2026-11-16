@@ -26,9 +26,9 @@ const BASE_INDEX = `<!doctype html>
     <!-- Font families match ZhijuPoly; assets are served by this iframe. -->
     <link rel="preload" href="/fonts/zhijupoly/ibm-plex-sans-variable.ttf" as="font" type="font/ttf" crossorigin="anonymous" />
     <script id="openscience-theme-preload-script" src="/openscience-theme-preload.js"></script>
-    <script type="importmap">{"imports":{"/assets/index-CtiA6yRV.js":"/assets/index-nexpoly-6ec6a90395a8.js"}}</script>
-    <script type="module" crossorigin src="/assets/index-nexpoly-6ec6a90395a8.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DlN1gRLG.css">
+    <script type="importmap">{"imports":{"/assets/index-BBDSa-Fc.js":"/assets/index-production-52b20bca83f6.js"}}</script>
+    <script type="module" crossorigin src="/assets/index-production-52b20bca83f6.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CLG89VVQ.css">
   </head>
   <body class="antialiased overscroll-none text-12-regular overflow-hidden">
     <noscript>You need to enable JavaScript to run this app.</noscript>

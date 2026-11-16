@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url"
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const TOOL_NAMES = ["list_filter_properties", "search_polymers", "get_property_histogram"]
-const TOOL_PREFIX = "nexpoly_property_filter_"
+const TOOL_PREFIXES = new Set(["capability_gateway_", "nexpoly_property_filter_"])
 const INPUT = '[data-component="prompt-input"][role="textbox"][contenteditable="true"]'
 const RESPONSE = '[data-slot="session-turn-markdown"]'
 
@@ -23,13 +23,16 @@ function options(argv) {
     outputDir: path.join(ROOT, ".runtime", "openscience-mcp-dev", "browser-evidence",
       new Date().toISOString().replace(/[:.]/g, "-")),
     timeoutMs: 240000,
-    agent: "property-filter",
+    agent: "research",
+    toolPrefix: "capability_gateway_",
+    expectedModel: undefined,
     playwrightPackage: undefined,
     checkConfig: false,
     naturalLanguage: false,
   }
   const names = { "--base-url": "baseUrl", "--output-dir": "outputDir", "--timeout-ms": "timeoutMs",
-    "--agent": "agent", "--playwright-package": "playwrightPackage" }
+    "--agent": "agent", "--playwright-package": "playwrightPackage", "--expected-model": "expectedModel",
+    "--tool-prefix": "toolPrefix" }
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--check-config") {
       result.checkConfig = true
@@ -53,7 +56,16 @@ function options(argv) {
   if (!Number.isInteger(result.timeoutMs) || result.timeoutMs < 10000 || result.timeoutMs > 360000) {
     throw new Error("timeout-ms must be between 10000 and 360000")
   }
-  if (result.agent !== "property-filter") throw new Error("Only the isolated property-filter agent is permitted")
+  if (!["research", "property-filter"].includes(result.agent)) {
+    throw new Error("Only the isolated research or property-filter agent is permitted")
+  }
+  if (!TOOL_PREFIXES.has(result.toolPrefix)) {
+    throw new Error("tool-prefix must select capability_gateway_ or the historical nexpoly_property_filter_ server")
+  }
+  if (result.expectedModel !== undefined && (!result.expectedModel.trim()
+      || result.expectedModel !== result.expectedModel.trim() || result.expectedModel.startsWith("--"))) {
+    throw new Error("expected-model must be a nonempty model ID")
+  }
   result.outputDir = path.resolve(result.outputDir)
   if (!result.outputDir.startsWith(path.join(ROOT, ".runtime") + path.sep)) {
     throw new Error("Browser evidence must remain in this worktree's private .runtime directory")
@@ -83,8 +95,8 @@ function assertBusinessPrompt(prompt) {
     "The natural-language prompt contains an internal interface name")
 }
 
-function logicalTool(name) {
-  return TOOL_NAMES.find(tool => name === TOOL_PREFIX + tool)
+function logicalTool(name, prefix) {
+  return TOOL_NAMES.find(tool => name === prefix + tool)
 }
 
 function inspectMessages(messages, scope) {
@@ -104,17 +116,18 @@ function inspectMessages(messages, scope) {
     part => part.type === "text" && part.text?.trim()))
   const finalText = (finalMessage?.parts ?? []).filter(part => part.type === "text").map(part => part.text).join("\n")
   return { tools, finalText, finalMessage,
+    assistantModels: assistant.map(message => ({ messageId: message.info.id, modelID: message.info.modelID })),
     modelErrors: assistant.map(message => message.info?.error).filter(Boolean),
     userMessageId: user?.info.id, messageCount: assistant.length + (user ? 1 : 0) }
 }
 
-function toolSummary(part) {
+function toolSummary(part, prefix) {
   const output = typeof part.state?.output === "string" ? part.state.output : JSON.stringify(part.state?.output ?? null)
   const structured = structuredOutput(part)
   const input = part.state?.input ?? null
   const started = part.state?.time?.start
   const ended = part.state?.time?.end
-  return { name: part.tool, logicalName: logicalTool(part.tool), callId: part.callID, assistantMessageId: part.messageID,
+  return { name: part.tool, logicalName: logicalTool(part.tool, prefix), callId: part.callID, assistantMessageId: part.messageID,
     status: part.state?.status, ok: structured?.ok, errorCode: structured?.error?.code,
     inputDatasetRevision: typeof input?.dataset_revision === "string" ? input.dataset_revision : null,
     outputDatasetRevision: structured?.dataset_revision,
@@ -143,6 +156,21 @@ async function privateJson(filename, value) {
   await chmod(filename, 0o600)
 }
 
+async function revealResponse(page, userMessageId, marker, revision) {
+  const turn = page.locator(`[data-message-id="${userMessageId}"]`)
+  const response = turn.locator(RESPONSE).filter({ hasText: marker }).filter({ hasText: revision }).last()
+  await response.waitFor({ state: "attached", timeout: 30000 })
+  const toggle = turn.locator("[data-nexpoly-original-toggle]").last()
+  if (await toggle.count() && await toggle.getAttribute("aria-expanded") === "false") {
+    await toggle.click({ timeout: 15000 })
+  } else if (!await response.isVisible()) {
+    await toggle.waitFor({ state: "visible", timeout: 15000 })
+    if (await toggle.getAttribute("aria-expanded") === "false") await toggle.click()
+  }
+  await response.waitFor({ state: "visible", timeout: 20000 })
+  return response
+}
+
 async function main(config) {
   const { chromium } = playwright(config.playwrightPackage)
   process.umask(0o077)
@@ -151,7 +179,7 @@ async function main(config) {
   const reportPath = path.join(config.outputDir, "report.json")
   const marker = (config.naturalLanguage ? "polymer-query-ui-" : "nexpoly-mcp-ui-") + randomBytes(6).toString("hex")
   const prompt = config.naturalLanguage ? [
-    "请查询玻璃化转变温度在 100 到 200 摄氏度之间（包含两端边界）的聚合物。",
+    "请在 NexPoly 聚合物数据库中查询玻璃化转变温度在 100 到 200 摄氏度之间（包含两端边界）的聚合物。",
     "最多展示 2 个不同结构，每个结构只展示 1 条测量证据及其来源，同时给出玻璃化转变温度在整个数据库中的分布。",
     "请列出实际命中的结构总数、材料结构与测量数值、每个结构匹配的测量总数，并说明证据是否仅展示了一部分。",
     "请说明多项性能条件一起检索时，是否保证来自同一实验条件。",
@@ -168,6 +196,7 @@ async function main(config) {
   ].join("\n")
   if (config.naturalLanguage) assertBusinessPrompt(prompt)
   const report = { ok: false, baseUrl: config.baseUrl, startedAt: new Date().toISOString(), marker,
+    expectedModel: config.expectedModel, expectedToolPrefix: config.toolPrefix,
     mode: config.naturalLanguage ? "natural_language" : "explicit_tools",
     evidence: { promptSubmittedThroughUi: false, allThreeToolsCompleted: false, responseRendered: false, refreshPreservedResponse: false },
     toolCalls: [], browserErrors: [], blockedOrigins: [], promptRequests: 0 }
@@ -204,6 +233,12 @@ async function main(config) {
           return
         }
         promptRequest = { url: url.href, body }
+        if (config.expectedModel && body?.model?.modelID !== config.expectedModel) {
+          report.model = body?.model
+          unsafePrompt = `The UI selected a model other than ${config.expectedModel}`
+          await route.abort("blockedbyclient")
+          return
+        }
       }
       await route.continue()
     })
@@ -226,6 +261,8 @@ async function main(config) {
     report.sessionId = decodeURIComponent(matchedPath[2])
     report.agent = promptRequest.body.agent
     report.model = promptRequest.body.model
+    if (config.expectedModel) assert.equal(report.model?.modelID, config.expectedModel,
+      "The UI-submitted prompt selected a different model")
     if (config.naturalLanguage) {
       const submittedPrompt = (promptRequest.body.parts ?? []).filter(part => part.type === "text")
         .map(part => part.text).join("\n")
@@ -248,15 +285,23 @@ async function main(config) {
     }
     let completed = false
     let idleIncomplete = 0
+    function verifyModels(snapshot) {
+      report.assistantModels = snapshot.assistantModels
+      if (config.expectedModel) {
+        for (const assistant of snapshot.assistantModels) assert.equal(assistant.modelID, config.expectedModel,
+          `Scoped assistant message ${assistant.messageId} used a different model`)
+      }
+    }
     while (Date.now() < deadline) {
       inspected = inspectMessages(await readJson(messagesUrl), messageScope)
-      report.toolCalls = inspected.tools.map(toolSummary)
-      const unexpected = inspected.tools.filter(part => !logicalTool(part.tool))
-      assert.equal(unexpected.length, 0, "The model used a tool outside the three-tool acceptance scope")
+      verifyModels(inspected)
+      report.toolCalls = inspected.tools.map(part => toolSummary(part, config.toolPrefix))
+      const unexpected = inspected.tools.filter(part => !logicalTool(part.tool, config.toolPrefix))
+      assert.equal(unexpected.length, 0, "The model used a tool outside the selected server's three-tool acceptance scope")
       const failed = inspected.tools.filter(part => part.state?.status === "error")
       assert.equal(failed.length, 0, "A real MCP tool call failed; inspect the private development session")
       const completedTools = new Set(inspected.tools.filter(part => part.state?.status === "completed"
-        && structuredOutput(part)?.ok === true).map(part => logicalTool(part.tool)))
+        && structuredOutput(part)?.ok === true).map(part => logicalTool(part.tool, config.toolPrefix)))
       const status = await readJson(statusUrl)
       const idle = !status[report.sessionId] || status[report.sessionId].type === "idle"
       const done = inspected.finalMessage?.info?.time?.completed
@@ -279,7 +324,7 @@ async function main(config) {
     report.messageCount = inspected.messageCount
     report.assistantResponse = { bytes: Buffer.byteLength(inspected.finalText), sha256: digest(inspected.finalText) }
     const actualCalls = Object.fromEntries(TOOL_NAMES.map(tool => [tool,
-      [...inspected.tools].reverse().find(part => logicalTool(part.tool) === tool && structuredOutput(part)?.ok === true)]))
+      [...inspected.tools].reverse().find(part => logicalTool(part.tool, config.toolPrefix) === tool && structuredOutput(part)?.ok === true)]))
     const actualOutputs = Object.fromEntries(TOOL_NAMES.map(tool => [tool, structuredOutput(actualCalls[tool])]))
     const revision = actualOutputs.list_filter_properties.dataset_revision
     assert.equal(typeof revision, "string", "Catalog response did not contain a real dataset revision")
@@ -338,25 +383,25 @@ async function main(config) {
         fields: Object.keys(parsed), datasetRevision: parsed["数据版本"],
         matchedMaterialCount: parsed["命中结构总数"], returnedMaterialCount: parsed["材料"].length }
     }
-    await page.waitForFunction(({ selector, marker, revision }) => [...document.querySelectorAll(selector)].some(
-      element => element.textContent?.includes(marker) && element.textContent?.includes(revision)),
-      { selector: RESPONSE, marker, revision }, { timeout: 20000 })
+    const response = await revealResponse(page, inspected.userMessageId, marker, revision)
     report.evidence.responseRendered = true
-    await page.locator(RESPONSE).last().scrollIntoViewIfNeeded()
+    await response.scrollIntoViewIfNeeded()
     const screenshot = path.join(config.outputDir, "conversation.png")
     await page.screenshot({ path: screenshot, fullPage: false })
     await chmod(screenshot, 0o600)
     report.screenshot = screenshot
     const responseScreenshot = path.join(config.outputDir, "response.png")
-    await page.locator(RESPONSE).last().screenshot({ path: responseScreenshot })
+    await response.screenshot({ path: responseScreenshot })
     await chmod(responseScreenshot, 0o600)
     report.responseScreenshot = responseScreenshot
     report.sessionUrl = page.url()
     assert.equal(new URL(report.sessionUrl).origin, origin)
     await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 })
-    await page.waitForFunction(({ selector, marker }) => [...document.querySelectorAll(selector)].some(
-      element => element.textContent?.includes(marker)), { selector: RESPONSE, marker }, { timeout: 30000 })
+    await revealResponse(page, inspected.userMessageId, marker, revision)
     const reloaded = inspectMessages(await readJson(messagesUrl), messageScope)
+    verifyModels(reloaded)
+    assert.equal(reloaded.tools.filter(part => !logicalTool(part.tool, config.toolPrefix)).length, 0,
+      "Saved tool calls belong to a different server or capability after refresh")
     assert.equal(digest(reloaded.finalText), report.assistantResponse.sha256, "Saved response changed after refresh")
     report.evidence.refreshPreservedResponse = true
     report.ok = true
@@ -385,6 +430,7 @@ async function main(config) {
 try {
   const config = options(process.argv.slice(2))
   if (config.checkConfig) console.log(JSON.stringify({ ok: true, baseUrl: config.baseUrl, agent: config.agent,
+    expectedModel: config.expectedModel, expectedToolPrefix: config.toolPrefix,
     mode: config.naturalLanguage ? "natural_language" : "explicit_tools" }))
   else await main(config)
 } catch (error) {
