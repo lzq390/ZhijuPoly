@@ -3,10 +3,11 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// This is the deployed 4522be0-production-dual index, inspected read-only from
-// openscience-ui-20260922. This contract is separate from the production overlay.
-export const BASE_INDEX_SHA256 = '5647ece9a54520ad8df4b04b2424293a54f3537f21293649729522144ddd3157';
-export const MODULE_ANCHOR = '    <script type="module" crossorigin src="/assets/index-nexpoly-6ec6a90395a8.js"></script>';
+// This is the deployed 9e342b5-production-dual index, inspected read-only from
+// openscience-ui-20261112 on port 9011. Keep its application and cache-compatible
+// assets unchanged; the development result panel is an independent addition.
+export const BASE_INDEX_SHA256 = '98d73cc0ab6b6504ec0ee2f9bba49f5a98f78486f2ca16fa37aa97ce6eb5fe71';
+export const MODULE_ANCHOR = '    <script type="module" crossorigin src="/assets/index-production-52b20bca83f6.js"></script>';
 export const ASSET_NAMES = Object.freeze(['results-controller.mjs', 'results-view.mjs', 'results-view.css']);
 export const ASSET_PREFIX = '/assets/nexpoly-results/';
 const OUTPUT_NAMES = { 'results-controller.mjs': 'results-controller.js', 'results-view.mjs': 'results-view.js', 'results-view.css': 'results-view.css' };

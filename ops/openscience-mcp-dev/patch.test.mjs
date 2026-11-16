@@ -3,7 +3,25 @@ import { createHash } from "node:crypto"
 import test from "node:test"
 import { CONTENT_ADAPTER, PATCH_MARKER, patchPrompt } from "./patch.mjs"
 
-const source = `// representative MCP adapter, with exact upstream anchors
+const bindingGuard = `        if (key === "knowledge_service_kb_search") {
+          const bound = await bindings(ctx.sessionID)
+          if (!bound.length) {
+            const output = "No knowledge bases are bound to this session"
+            return {
+              title: "",
+              metadata: {},
+              output,
+              attachments: [],
+              content: [{ type: "text", text: output }],
+              isError: true,
+            }
+          }
+          args = { ...(args as Record<string, unknown>), kb_ids: bound }
+        }
+`
+const source = `// representative deployed MCP adapter, with session binding and exact upstream anchors
+${bindingGuard}        const result = await execute(args, opts)
+
         const textParts: string[] = []
         const attachments: MessageV2.FilePart[] = []
 
@@ -26,6 +44,8 @@ test("source transformation makes structured JSON available in saved output and 
   assert.ok(patched.includes("content: modelContent,"))
   assert.ok(patched.includes("output: truncated.content"))
   assert.ok(!patched.includes("of result.content"))
+  assert.ok(patched.includes(bindingGuard), "The deployed session knowledge-base binding guard must stay intact")
+  assert.ok(patched.indexOf(bindingGuard) < patched.indexOf(PATCH_MARKER))
 })
 
 test("unexpected source, repeated anchors and already applied patches fail closed", () => {

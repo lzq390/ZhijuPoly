@@ -1,9 +1,9 @@
 # The development launcher must verify this local tag resolves to the exact image
 # ID below before building. The source checksum independently fails closed.
-ARG OPENSCIENCE_BASE_IMAGE=openscience-backend-poc:38ba323-demo-rc1
+ARG OPENSCIENCE_BASE_IMAGE=openscience-backend-poc:release-20261029
 FROM ${OPENSCIENCE_BASE_IMAGE}
 LABEL org.nexpoly.purpose="openscience-mcp-development" \
-      org.nexpoly.expected-base-image="sha256:41a2b6929bc74a1bf3c0bac54df09f8e5f835954b3ba58dfba81f703b3ffe17a"
+      org.nexpoly.expected-base-image="sha256:7e4c055b4641bfcc0d329cbb2b61ef473b89e8435b3505dabc7b2895d11f0435"
 # The upstream application source belongs to root. Elevate only in this build layer.
 USER root
 COPY dev-boundary.mjs /app/backend/cli/src/server/nexpoly-dev-boundary.mjs

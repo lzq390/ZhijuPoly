@@ -8,8 +8,8 @@ import { readFile, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
-export const EXPECTED_BASE_IMAGE = "sha256:41a2b6929bc74a1bf3c0bac54df09f8e5f835954b3ba58dfba81f703b3ffe17a"
-export const EXPECTED_PROMPT_SHA256 = "d9f9a16c6a2710502143942271ce22c49fe7ccfe78694522b5a76d3a48d9866a"
+export const EXPECTED_BASE_IMAGE = "sha256:7e4c055b4641bfcc0d329cbb2b61ef473b89e8435b3505dabc7b2895d11f0435"
+export const EXPECTED_PROMPT_SHA256 = "c6909f7ac353466cbb78c65916dff4343afbf979462b7c9730af3da8d6f1b705"
 export const EXPECTED_SERVER_SHA256 = "e9d7a5a148f60e3f329c981be73502ca5453f0c3136596d8dd986fb442be4fd8"
 export const PATCH_MARKER = "nexpoly-mcp-structured-content-v1"
 

@@ -1,7 +1,9 @@
 // Development-only presentation of authoritative property-filter tool outputs.
 // This module is deliberately independent of the model's prose and of the host UI.
-const PREFIX = "nexpoly_property_filter_"
-const TOOLS = new Set(["list_filter_properties", "search_polymers", "get_property_histogram"])
+// Keep persisted direct-MCP history readable after routing new queries through
+// the development capability gateway. Other gateway tools are not filter data.
+const TOOLS = new Map(["nexpoly_property_filter_", "capability_gateway_"].flatMap(prefix =>
+  ["list_filter_properties", "search_polymers", "get_property_histogram"].map(name => [prefix + name, name])))
 const NS = "http://www.w3.org/2000/svg"
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value)
 const string = value => typeof value === "string"
@@ -160,10 +162,9 @@ export function extractFilterTurns(messages) {
     if (message?.info?.role !== "assistant" || !users.has(message.info.parentID) || !Array.isArray(message.parts)) continue
     const revisions = users.get(message.info.parentID)
     for (const part of message.parts) {
-      if (part?.type !== "tool" || !string(part.tool) || !part.tool.startsWith(PREFIX)
-          || !TOOLS.has(part.tool.slice(PREFIX.length)) || part.state?.status !== "completed"
+      const name = TOOLS.get(part?.tool)
+      if (part?.type !== "tool" || !name || part.state?.status !== "completed"
           || !object(part.state.input)) continue
-      const name = part.tool.slice(PREFIX.length)
       const value = structuredOutput(part)
       if (!value) {
         rejected.add(message.info.parentID)
