@@ -287,7 +287,13 @@ Set up Python步骤为07:19:38—07:49:34，共29分56秒。日志分段确认�
 
 backend的241条宿主metrics采样显示内存峰约4.103 GiB、CPU累计316秒、I/O读约0.561 GiB/写约2.595 GiB，OOM/KILL均0；数据仅覆盖准备阶段，不能代表完整backend测试资源峰值。runner83及旧VM已正常回收；当前唯一runner84/nexpoly-ci-eefe8e2f26cc4d4b85e491b67fb89dbe为online/idle，对应唯一active VM；控制器仍active、NRestarts=0，27892专用GitHub HTTPS复查200/0.894秒。
 
-本轮script成功证明该任务已通过新模板的实际复验；backend0本轮因已知期限取消，仍未完成测试验收。旧shutdown的最初触发仍无法追溯，不能将本次有明确超时注释的取消用于解释旧信号。另四项旧网络失败未重跑，未通过新提交触发完整CI，PR整套CI仍未通过。建议下一步移除backend的可选pip cache并改善Python工具下载，再重跑该项；当前尚未修改该workflow或推送新提交。
+本轮script成功证明该任务已通过新模板的实际复验；backend0本轮因已知期限取消，仍未完成测试验收。旧shutdown的最初触发仍无法追溯，不能将本次有明确超时注释的取消用于解释旧信号。该轮另四项旧网络失败未重跑，PR整套CI未通过。随后用户选择保留Backend缓存并延长期限，后续配置与完整复验要求见下一节。
+
+## 2026-11-17 保留缓存并将 Backend 期限调整为75分钟
+
+用户明确授权调整上限并重跑完整CI。`backend-tests`唯一的job级timeout从40改为75分钟，覆盖原有三个矩阵分片；pip cache及依赖锁路径保留。script-tests仍为40分钟，所有其他job块（包括四个hosted job）保持原样，宿主105分钟兜底、资源和单VM并发约束不变。依据本轮准备耗时约38分钟及此前成功shard0主测试约11分钟，75分钟用于留出完整测试和额外依赖预算；这是验收预算调整，不证明下载或缓存链路已修复。
+
+增加workflow policy精确验证唯一的75分钟job字段。4项新增回归覆盖旧40、105及更高值、其他未审阅值、表达式、重复、缺失和伪步级字段，并验证policy CLI拒绝旧配置。最终复验共397项通过：runner相关251项、镜像资源与DFT契约34项、workflow policy112项；actionlint1.7.7、ShellCheck0.10.0及workflow policy检查通过。提交后还需复核`--require-committed`，再推送新head触发完整20个本地job及hosted gate；旧run重跑不会读取新75分钟配置。当前没有将完整CI记为通过。
 
 ## 复验命令
 

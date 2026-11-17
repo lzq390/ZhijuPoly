@@ -6,13 +6,15 @@
 
 已实现控制器、宿主安装工具、受限网络配置、VM 模板制作、guest 启动程序、版本锁和 CI 迁移代码。源码位于仓库 `ops/self_hosted_runner/`，部署副本位于 `/data/lzq/github-runner/control/`。本文件同时保存为 `/data/lzq/github-runner/PLAN.md`。
 
+**2026-11-17 完整 CI 复验配置。** 用户选择保留 Backend 的 pip 缓存，将 `backend-tests` 三个矩阵分片的任务上限从40分钟调整为75分钟，并由新提交触发一次完整CI。其余任务期限、8vCPU/32GiB guest资源和宿主105分钟兜底保持原值。新policy精确校验唯一的75分钟任务字段；缓存下载、Python工具下载和测试用时仍需分别记录。此次延长期限不代表网络已恢复稳定，也不改变全部20个本地job及ci-gate的验收要求；旧run重跑会沿用旧40分钟配置。
+
 **2026-11-17 新模板与17891代理已部署，两项定向复验已结束：script通过，backend准备超时，完整验收待完成。** 管理员第三次执行统一维护，六个锁定制品均在第1次尝试通过响应长度与SHA256校验，smoke/seal全部成功。新模板为 `base-13de146aa1b1c105703fa9882f3607b3a47267d8819353b9e158be10a460c3da.qcow2`，于北京时间11月17日14:32:21封存；控制器14:32:25恢复active，14:33:14启动唯一VM `d8468c50d212459b9b72664b199d1057`，随后GitHub runner ID82在线，四个路由标签正确。实际 `/etc` upstream与Squid parent均为17891，专用nft规则已通过精确检查；`27892 → 17891 → GitHub` HTTPS最新复查返回200、约0.894秒。受保护安装中的build.py、template.py、controller.py哈希均与交付源码一致。共享隧道服务保持原状，guest仍只通过`10.0.2.2:27892`访问受限代理。
 
 原 [run 43817712995](https://github.com/lzq390/ZhijuPoly/actions/runs/43817712995) 的script-tests单项重跑已通过：attempt2的新job [133867148568](https://github.com/lzq390/ZhijuPoly/actions/runs/43817712995/job/133867148568) 使用runner82，于06:35:56—07:07:24 UTC执行；2397项测试耗时1694.205秒，19 skipped、0 failures/errors，原中断附近的 `test_abort_refuses_completed_authority` 明确通过，未出现runner shutdown或实际warning/error。宿主采样内存峰约3.041 GiB，OOM/KILL计数均0，记录于 `/data/lzq/jobs/runner-ci-verification-20261117/script-metrics.jsonl`。
 
 backend0的单项重跑 [133881233680](https://github.com/lzq390/ZhijuPoly/actions/runs/43817712995/job/133881233680) 已结束：使用runner83、VM `0dcd8018ced24398a7875c3f5063c1e9`，07:11:06—07:51:34 UTC状态cancelled，GitHub annotation明确超过既有40分钟期限，未出现runner shutdown signal。Set up Python共29分56秒：官方Python发布包下载耗19分35.625秒，随后安装成功；140,922,306字节pip cache命中后约1分44秒报恢复超时、进度0字节，并在警告后又等8分19.106秒才进入pip。cache hit至pip总计10分02.718秒，旧backend0也有约10分03秒的同类等待。pip仅运行1分55秒即被取消，尚未到Installing collected packages或越过旧断点，PG客户端、pytest和离线MD检查均未执行。
 
-runner83及旧VM已正常回收，当前唯一runner84 `nexpoly-ci-eefe8e2f26cc4d4b85e491b67fb89dbe` 在线空闲，对应唯一活跃VM；控制器active、NRestarts=0。backend准备阶段的241条宿主采样内存峰约4.103 GiB、CPU316秒、读0.561 GiB/写2.595 GiB，OOM/KILL均0，不能作为完整backend测试资源峰值。本次取消来源已知为GitHub job超时；旧shutdown最初触发仍无法追溯。head保持 `fd459377e45aae46ea77fc3041986601abb7415a`，script本轮已通过，另外四项旧网络失败未重跑，PR整套CI仍未通过。建议下一步关闭backend可选pip cache并改善Python工具下载后再复验；当前尚未修改该workflow或推送新提交。
+定向复验结束时，runner83及旧VM已正常回收，唯一runner84 `nexpoly-ci-eefe8e2f26cc4d4b85e491b67fb89dbe` 在线空闲，对应唯一活跃VM；控制器active、NRestarts=0。backend准备阶段的241条宿主采样内存峰约4.103 GiB、CPU316秒、读0.561 GiB/写2.595 GiB，OOM/KILL均0，不能作为完整backend测试资源峰值。本次取消来源已知为GitHub job超时；旧shutdown最初触发仍无法追溯。该轮head为 `fd459377e45aae46ea77fc3041986601abb7415a`，script已通过，另外四项旧网络失败未重跑，PR整套CI未通过。随后用户选择保留Backend缓存、延长至75分钟并重跑完整CI，配置见本节开头；完整结果以后续新run为准。
 
 此前两次候选分别因Ubuntu security索引HTTP502和Docker制品校验失败中止。原Python urllib曾实测HTTP200/Content-Length24,586,336却仅收9,539,441字节便EOF，固定SHA已拒绝半包；curl的HTTP/2和HTTP/1.1+Python UA对照均完整，不能归因某个协议或UA。现已部署的下载器增加长度校验、固定SHA、同目录原子替换，以及最多三次尝试共享600秒预算和1 GiB单文件上限；诊断只保留固定制品名、次数、HTTP状态和字节数。新模板构建证明该路径已实际通过，不代表隧道今后无瞬时故障或完整CI已通过。
 

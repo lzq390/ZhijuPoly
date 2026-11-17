@@ -343,7 +343,7 @@ jobs:
     name: Backend tests (shard ${{ matrix.shard }})
     needs: resolve-sha
     runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
-    timeout-minutes: 40
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts.ci import validate_workflows as policy
 
@@ -1186,6 +1187,52 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
             ),
             failures,
         )
+
+    def test_backend_matrix_uses_the_reviewed_job_budget(self) -> None:
+        failures: list[str] = []
+        policy.validate_backend_tests_budget(CI_TEXT, failures)
+        policy.validate_script_tests_budget(CI_TEXT, failures)
+        self.assertEqual(failures, [])
+        body = policy.workflow_job_body(CI_TEXT, "backend-tests", [])
+        self.assertIn("        shard: [0, 1, 2]\n", body)
+        self.assertIn("          cache: pip\n", body)
+        self.assertIn("          cache-dependency-path: backend/requirements-ci.lock\n", body)
+
+    def test_backend_budget_rejects_old_unreviewed_and_host_watchdog_values(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "backend-tests", [])
+        for value in ("0", "40", "74", "76", "105", "106", "180", '"75"',
+                      "${{ matrix.timeout }}"):
+            with self.subTest(value=value):
+                changed = CI_TEXT.replace(body, body.replace(
+                    "    timeout-minutes: 75\n", f"    timeout-minutes: {value}\n", 1), 1)
+                failures: list[str] = []
+                policy.validate_backend_tests_budget(changed, failures)
+                self.assertTrue(any("75-minute job budget" in failure for failure in failures), failures)
+
+    def test_backend_budget_requires_one_real_job_level_field(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "backend-tests", [])
+        for replacement in (
+            "", "    # timeout-minutes: 75\n", "        timeout-minutes: 75\n",
+            "    timeout-minutes: 75\n    timeout-minutes: 75\n",
+            "    timeout-minutes: 75\n    timeout-minutes: 106\n",
+        ):
+            with self.subTest(replacement=replacement):
+                changed = CI_TEXT.replace(body, body.replace(
+                    "    timeout-minutes: 75\n", replacement, 1), 1)
+                failures: list[str] = []
+                policy.validate_backend_tests_budget(changed, failures)
+                self.assertTrue(any("75-minute job budget" in failure for failure in failures), failures)
+
+    def test_workflow_policy_cli_rejects_the_old_backend_budget(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "backend-tests", [])
+        changed = CI_TEXT.replace(body, body.replace(
+            "    timeout-minutes: 75\n", "    timeout-minutes: 40\n", 1), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "ci.yml"
+            candidate.write_text(changed)
+            with mock.patch.object(policy, "CI_PATH", candidate), mock.patch("builtins.print") as printed:
+                self.assertEqual(policy.main(), 1)
+        self.assertTrue(any("75-minute job budget" in str(call) for call in printed.call_args_list))
 
     def test_script_tests_keep_fault_injection_budget(self) -> None:
         script_job = CI_TEXT.index("  script-tests:\n")
