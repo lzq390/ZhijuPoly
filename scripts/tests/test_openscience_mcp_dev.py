@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import contextlib
 import importlib.util
 import io
@@ -979,6 +980,90 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
             with self.assertRaises(dev.DevError):
                 dev.setup()
         self.assertEqual(dev.read_private("mcp-token"), "existing-secret")
+
+    def setup_waiting_for_start(self, *, refresh_baseline=False):
+        """Hold the actual file lock while a concurrent start changes state."""
+        dev.private_directory()
+        dev.write_private("mcp-token", "existing-secret")
+        dev.write_private("gateway-token", "b" * 48 + "\n")
+        dev.write_private("protected-baseline.json", '{"release":"old"}\n')
+        waiting = threading.Event()
+        acquired = threading.Event()
+        state = {"running": False, "snapshot": {"release": "old"}}
+        observations = []
+        main_thread = threading.get_ident()
+        real_flock = dev.fcntl.flock
+
+        def flock(descriptor, operation):
+            worker = threading.get_ident() != main_thread
+            if worker:
+                waiting.set()
+            real_flock(descriptor, operation)
+            if worker:
+                acquired.set()
+
+        def ownership():
+            observations.append(("ownership", acquired.is_set()))
+            return state["running"]
+
+        def shared():
+            observations.append(("shared", acquired.is_set()))
+            return state["snapshot"], {}
+
+        with patch.object(dev.fcntl, "flock", side_effect=flock), \
+                patch.object(dev, "verify_project_ownership", side_effect=ownership), \
+                patch.object(dev, "verify_shared", side_effect=shared), \
+                patch.object(dev, "prepared_files", return_value={"mcp-token": "replacement-secret"}), \
+                ThreadPoolExecutor(max_workers=1) as executor:
+            with dev.operation_lock():
+                pending = executor.submit(dev.setup, refresh_baseline=refresh_baseline)
+                try:
+                    self.assertTrue(waiting.wait(5), "Concurrent setup did not wait for the operation lock")
+                    self.assertFalse(acquired.is_set())
+                finally:
+                    # Simulate a start finishing before releasing its lock.
+                    state["running"] = True
+                    if refresh_baseline:
+                        state["snapshot"] = {"release": "new"}
+            with self.assertRaisesRegex(dev.DevError, "Stop"):
+                pending.result(timeout=5)
+        self.assertTrue(observations)
+        self.assertTrue(all(inside_lock for _, inside_lock in observations), observations)
+        self.assertEqual(dev.read_private("mcp-token"), "existing-secret")
+        self.assertEqual(json.loads(dev.read_private("protected-baseline.json")), {"release": "old"})
+
+    def test_setup_rechecks_running_state_after_waiting_and_preserves_mounted_credentials(self):
+        self.setup_waiting_for_start()
+
+    def test_baseline_refresh_rechecks_running_state_after_waiting_and_keeps_old_baseline(self):
+        self.setup_waiting_for_start(refresh_baseline=True)
+        self.assertEqual(list(self.runtime.glob("protected-baseline.previous-*.json")), [])
+
+    def test_setup_checks_shared_snapshot_while_holding_the_operation_lock(self):
+        dev.private_directory()
+        dev.write_private("gateway-token", "b" * 48 + "\n")
+        locked = False
+        observations = []
+
+        @contextlib.contextmanager
+        def operation_lock():
+            nonlocal locked
+            locked = True
+            try:
+                yield
+            finally:
+                locked = False
+
+        def shared():
+            observations.append(locked)
+            return {"release": "current"}, {}
+
+        with patch.object(dev, "operation_lock", operation_lock), \
+                patch.object(dev, "verify_project_ownership", return_value=False), \
+                patch.object(dev, "verify_shared", side_effect=shared), \
+                patch.object(dev, "prepared_files", return_value={"mcp-token": "prepared-secret"}):
+            dev.setup()
+        self.assertEqual(observations, [True, True])
 
     def test_setup_creates_independent_gateway_token_once_and_requires_stop_when_missing(self):
         dev.private_directory()

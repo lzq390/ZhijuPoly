@@ -678,9 +678,10 @@ def prepared_files(backend: dict) -> dict[str, str]:
 
 
 def setup(*, refresh_baseline: bool = False, polytao_runtime: Path | None = None) -> dict:
-    running = verify_project_ownership()
-    snapshot, backend = verify_shared()
     with operation_lock():
+        # Read state after acquiring the lock: another CLI may have started the stack.
+        running = verify_project_ownership()
+        snapshot, backend = verify_shared()
         if refresh_baseline and running:
             raise DevError("Stop the development stack before refreshing its shared release baseline.")
         baseline = RUNTIME / "protected-baseline.json"
