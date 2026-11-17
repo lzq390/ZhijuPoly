@@ -39,6 +39,10 @@ class InventoryConnection:
             return Result([{"present": self.library}])
         if "to_regnamespace('polymer_md')" in query:
             return Result([{"present": self.polymer}])
+        if "to_regclass('retrosynthesis.jobs')" in query:
+            return Result([{"present": False}])
+        if "governance.schema_migrations" in query and params == ("0026_monomer_retrosynthesis_jobs",):
+            return Result([{"present": False}])
         raise AssertionError("Unexpected synthetic inventory query")
 
 
