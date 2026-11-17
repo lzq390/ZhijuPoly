@@ -172,7 +172,7 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
         relative = "backend/migrations/postgres/manifest.json"
         manifest = json.loads((REPOSITORY_ROOT / relative).read_text())
         for version in ("0020_structure_library", "0021_usage_metering",
-                        "0022_usage_entitlements", "0023_polymer_md_jobs", "0024_literature_projection", "0025_membership_subscriptions"):
+                        "0022_usage_entitlements", "0023_polymer_md_jobs", "0024_literature_projection", "0025_membership_subscriptions", "0026_monomer_retrosynthesis_jobs"):
             for duplicate in (False, True):
                 with self.subTest(version=version, duplicate=duplicate):
                     entries = [entry for entry in manifest["migrations"] if entry["version"] != version]
@@ -181,7 +181,7 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
                     mutated = dict(manifest, migrations=entries)
                     failures = self._schema_failures_with_sources({relative: json.dumps(mutated)})
                     expected = ("current isolation resolver must accept only exact release-known migration boundaries"
-                                if version == "0025_membership_subscriptions" and not duplicate else
+                                if version == "0026_monomer_retrosynthesis_jobs" and not duplicate else
                                 "current isolation startup requires each intervening private migration exactly once")
                     self.assertIn(expected, failures)
 

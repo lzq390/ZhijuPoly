@@ -157,6 +157,8 @@ ACTIVE_JOB_CATEGORIES_V1 = (
 )
 ACTIVE_JOB_CATEGORIES_V2 = (*ACTIVE_JOB_CATEGORIES_V1, "monomer_dft")
 ACTIVE_JOB_CATEGORIES_V3 = (*ACTIVE_JOB_CATEGORIES_V2, "polymerization_batch")
+ACTIVE_JOB_CATEGORIES_V4 = (*ACTIVE_JOB_CATEGORIES_V3, "polymer_md")
+ACTIVE_JOB_CATEGORIES_V5 = (*ACTIVE_JOB_CATEGORIES_V4, "retrosynthesis", "retrosynthesis_in_memory")
 PERSISTENT_ACTIVE_JOB_CATEGORIES_V1 = (
     "monomer_md",
     "online_knowledge",
@@ -169,6 +171,8 @@ PERSISTENT_ACTIVE_JOB_CATEGORIES_V3 = (
     *PERSISTENT_ACTIVE_JOB_CATEGORIES_V2,
     "polymerization_batch",
 )
+PERSISTENT_ACTIVE_JOB_CATEGORIES_V4 = (*PERSISTENT_ACTIVE_JOB_CATEGORIES_V3, "polymer_md")
+PERSISTENT_ACTIVE_JOB_CATEGORIES_V5 = (*PERSISTENT_ACTIVE_JOB_CATEGORIES_V4, "retrosynthesis")
 # Compatibility for existing operational tooling and tests. New consumers
 # should select a category set through the payload schema version.
 ACTIVE_JOB_CATEGORIES = ACTIVE_JOB_CATEGORIES_V1
@@ -1524,6 +1528,10 @@ def validated_active_total(
             required_categories = set(ACTIVE_JOB_CATEGORIES_V2)
         elif schema_version == 3:
             required_categories = set(ACTIVE_JOB_CATEGORIES_V3)
+        elif schema_version == 4:
+            required_categories = set(ACTIVE_JOB_CATEGORIES_V4)
+        elif schema_version == 5:
+            required_categories = set(ACTIVE_JOB_CATEGORIES_V5)
         else:
             raise ReleaseError("deployment status has an unsupported schema version")
     jobs = payload.get("active_jobs")
@@ -1585,6 +1593,10 @@ def validated_persistent_active_total(
         required_categories = set(PERSISTENT_ACTIVE_JOB_CATEGORIES_V2)
     elif schema_version == 3:
         required_categories = set(PERSISTENT_ACTIVE_JOB_CATEGORIES_V3)
+    elif schema_version == 4:
+        required_categories = set(PERSISTENT_ACTIVE_JOB_CATEGORIES_V4)
+    elif schema_version == 5:
+        required_categories = set(PERSISTENT_ACTIVE_JOB_CATEGORIES_V5)
     else:
         raise ReleaseError("deployment status has an unsupported schema version")
     unversioned = {

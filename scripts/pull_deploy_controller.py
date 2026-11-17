@@ -1046,10 +1046,12 @@ ACTIVE_JOB_FIELDS_V1 = frozenset(
 ACTIVE_JOB_FIELDS_V2 = ACTIVE_JOB_FIELDS_V1 | {"monomer_dft"}
 ACTIVE_JOB_FIELDS_V3 = ACTIVE_JOB_FIELDS_V2 | {"polymerization_batch"}
 ACTIVE_JOB_FIELDS_V4 = ACTIVE_JOB_FIELDS_V3 | {"polymer_md"}
+ACTIVE_JOB_FIELDS_V5 = ACTIVE_JOB_FIELDS_V4 | {"retrosynthesis", "retrosynthesis_in_memory"}
 PERSISTENT_JOB_FIELDS_V1 = frozenset({"monomer_md", "online_knowledge"})
 PERSISTENT_JOB_FIELDS_V2 = PERSISTENT_JOB_FIELDS_V1 | {"monomer_dft"}
 PERSISTENT_JOB_FIELDS_V3 = PERSISTENT_JOB_FIELDS_V2 | {"polymerization_batch"}
 PERSISTENT_JOB_FIELDS_V4 = PERSISTENT_JOB_FIELDS_V3 | {"polymer_md"}
+PERSISTENT_JOB_FIELDS_V5 = PERSISTENT_JOB_FIELDS_V4 | {"retrosynthesis"}
 FORBIDDEN_IN_TREE_RUNTIME_PATHS = (
     ".env",
     ".env.ai",
@@ -6511,11 +6513,11 @@ def validate_active_jobs_evidence(
     if (
         not isinstance(version, int)
         or isinstance(version, bool)
-        or version not in {1, 2, 3, 4}
+        or version not in {1, 2, 3, 4, 5}
     ):
         raise PullDeployError("Backend active-job schema version is unsupported")
     counts = document.get("active_jobs")
-    expected = {1: ACTIVE_JOB_FIELDS_V1, 2: ACTIVE_JOB_FIELDS_V2, 3: ACTIVE_JOB_FIELDS_V3, 4: ACTIVE_JOB_FIELDS_V4}[version]
+    expected = {1: ACTIVE_JOB_FIELDS_V1, 2: ACTIVE_JOB_FIELDS_V2, 3: ACTIVE_JOB_FIELDS_V3, 4: ACTIVE_JOB_FIELDS_V4, 5: ACTIVE_JOB_FIELDS_V5}[version]
     if not isinstance(counts, dict) or set(counts) != expected:
         raise PullDeployError(
             "Backend active-job categories differ from the selected schema"
@@ -6570,14 +6572,14 @@ def validate_persistent_drain_evidence(
     if (
         not isinstance(version, int)
         or isinstance(version, bool)
-        or version not in {1, 2, 3, 4}
+        or version not in {1, 2, 3, 4, 5}
     ):
         raise PullDeployError(
             "persistent drain active-job schema version is unsupported"
         )
     counts = document.get("active_jobs")
     expected = (
-        {1: PERSISTENT_JOB_FIELDS_V1, 2: PERSISTENT_JOB_FIELDS_V2, 3: PERSISTENT_JOB_FIELDS_V3, 4: PERSISTENT_JOB_FIELDS_V4}[version]
+        {1: PERSISTENT_JOB_FIELDS_V1, 2: PERSISTENT_JOB_FIELDS_V2, 3: PERSISTENT_JOB_FIELDS_V3, 4: PERSISTENT_JOB_FIELDS_V4, 5: PERSISTENT_JOB_FIELDS_V5}[version]
     )
     if not isinstance(counts, dict) or set(counts) != expected:
         raise PullDeployError("persistent drain job categories are invalid")
@@ -6619,10 +6621,10 @@ def validate_bootstrap_quiesce_evidence(
     if (
         not isinstance(version, int)
         or isinstance(version, bool)
-        or version not in {1, 2, 3, 4}
+        or version not in {1, 2, 3, 4, 5}
     ):
         raise PullDeployError("bootstrap active-job schema version is unsupported")
-    expected = {1: ACTIVE_JOB_FIELDS_V1, 2: ACTIVE_JOB_FIELDS_V2, 3: ACTIVE_JOB_FIELDS_V3, 4: ACTIVE_JOB_FIELDS_V4}[version]
+    expected = {1: ACTIVE_JOB_FIELDS_V1, 2: ACTIVE_JOB_FIELDS_V2, 3: ACTIVE_JOB_FIELDS_V3, 4: ACTIVE_JOB_FIELDS_V4, 5: ACTIVE_JOB_FIELDS_V5}[version]
     counts = document.get("active_jobs")
     if (
         document.get("ingress_isolated") is not True

@@ -210,7 +210,7 @@ def _decode_candidates(
         ]
         valid_smiles = bool(reactants) and len(canonical_parts) == len(reactants)
         canonical_reactants = ".".join(canonical_parts) if valid_smiles else None
-        dedupe_key = canonical_reactants or reactants_smiles
+        dedupe_key = ".".join(sorted(canonical_parts)) if valid_smiles else reactants_smiles
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)

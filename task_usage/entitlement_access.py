@@ -6,6 +6,7 @@ from uuid import UUID
 from psycopg.rows import dict_row
 from task_usage.entitlements import MIGRATION_VERSION, EntitlementPolicyError
 from task_usage.billing_contract import BILLING_VERSION, BILLING_CHECKSUM
+from task_usage.retrosynthesis_contract import RETROSYNTHESIS_VERSION, RETROSYNTHESIS_CHECKSUM
 
 def release_contract():
     path=Path(__file__).with_name("entitlement_release.json")
@@ -30,7 +31,8 @@ def accepted_release_ledgers():
     base = release_contract()["ledger"]
     polymer = [*base, dict(OPTIONAL_MIGRATION)]
     literature = [*polymer, dict(LITERATURE_MIGRATION)]
-    return [base, polymer, literature, [*literature, {"version": BILLING_VERSION, "checksum": BILLING_CHECKSUM}]]
+    billing = [*literature, {"version": BILLING_VERSION, "checksum": BILLING_CHECKSUM}]
+    return [base, polymer, literature, billing, [*billing, {"version": RETROSYNTHESIS_VERSION, "checksum": RETROSYNTHESIS_CHECKSUM}]]
 
 
 def resolve_access_tier(connection,*,owner_user_id):
@@ -50,7 +52,7 @@ def resolve_access_tier(connection,*,owner_user_id):
             return "member"  # Preserve pre-cutover authentication initialization.
         if ledger not in accepted_release_ledgers():
             raise EntitlementPolicyError("Access tiers require the exact release-known migration ledger")
-        if ledger[-1]["version"] == BILLING_VERSION:
+        if ledger[-1]["version"] in {BILLING_VERSION, RETROSYNTHESIS_VERSION}:
             # Authority is evaluated on every HTTP admission and first start;
             # expiration does not depend on a scheduler or the collection flag.
             cursor.execute("""SELECT count(*) AS n,bool_and(c.relkind='r' AND c.relrowsecurity AND c.relforcerowsecurity) AS protected

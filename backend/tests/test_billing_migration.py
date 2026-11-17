@@ -134,7 +134,7 @@ def test_owner_isolation_and_api_cannot_purchase_access(billing_db):
 
 def test_complete_release_readiness_and_backup_include_billing(billing_db):
     from scripts.site_helper_contracts import validate_membership_ledger, SiteHelperContractError
-    assert accepted_release_ledgers()[-1] == expected_isolation_ledger(BILLING_VERSION)
+    assert expected_isolation_ledger(BILLING_VERSION) in accepted_release_ledgers()
     ledger = expected_isolation_ledger(BILLING_VERSION)
     assert validate_membership_ledger(ledger) == ledger
     with pytest.raises(SiteHelperContractError):
