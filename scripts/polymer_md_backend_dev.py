@@ -157,12 +157,14 @@ def preflight_full_app(runtime: Path, *, asset_root: Path | None = None):
     from app.auth.context import service_context
     from app.auth.settings import AuthSettings
     from app.auth.service import AuthService
-    from app.postgres_preflight import run_preflight,preflight_blockers,SCHEMA_TARGET_CURRENT_ISOLATION,SCHEMA_TARGET_POLYMER_MD,SCHEMA_TARGET_LITERATURE
+    from app.postgres_preflight import (run_preflight, preflight_blockers, SCHEMA_TARGET_CURRENT_ISOLATION,
+        SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING, SCHEMA_TARGET_RETROSYNTHESIS)
     auth_settings=AuthSettings.from_settings(settings)
     with service_context(auth_settings):
         report=run_preflight(settings,mode='runtime',strict=True,schema_target=SCHEMA_TARGET_CURRENT_ISOLATION)
         blockers=preflight_blockers(report)
-        if report.get("schema_target") not in {SCHEMA_TARGET_POLYMER_MD,SCHEMA_TARGET_LITERATURE}:
+        if report.get("schema_target") not in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE,
+                                             SCHEMA_TARGET_BILLING, SCHEMA_TARGET_RETROSYNTHESIS}:
             blockers.append("Polymer MD requires a validated current migration boundary")
         AuthService(auth_settings).assert_application_ready()
     # Do not emit the report's DSN/connection diagnostics or asset source rows.
