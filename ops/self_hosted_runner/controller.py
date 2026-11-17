@@ -32,6 +32,43 @@ from template import TemplateError
 LOCK = Path("/run/nexpoly-runner-controller/controller.lock")
 PROXY_HEALTH_URL = "https://github.com/robots.txt"
 PROXY_HEALTH_USER_AGENT = "nexpoly-runner-health/1.0"
+MAX_GUEST_DIAGNOSTICS = 64
+GUEST_UNIT_STATES = frozenset({"active", "inactive", "activating", "deactivating", "failed", "reloading", "unknown"})
+GUEST_DIAGNOSTIC_ENUMS = {
+    "reason": frozenset({"runner_started", "runner_exit", "bootstrap_signal", "unit_stop"}),
+    **{key: GUEST_UNIT_STATES for key in (
+        "docker_state", "user_manager_state", "cloud_final_state", "apt_daily_state",
+        "apt_upgrade_state", "unattended_upgrades_state")},
+    "system_state": frozenset({"initializing", "starting", "running", "degraded", "maintenance", "stopping", "offline", "unknown"}),
+    "service_exit_kind": frozenset({"exited", "killed", "dumped", "unknown"}),
+    "service_result": frozenset({"success", "resources", "timeout", "exit-code", "signal", "core-dump", "watchdog", "start-limit-hit", "oom-kill", "exec-condition", "protocol", "unknown"}),
+}
+GUEST_DIAGNOSTIC_INTS = {"exit_code": (-255, 255), "signal": (1, 64),
+                         **{key: (0, 2 ** 63 - 1) for key in (
+                             "oom_kill_count", "oom_kill_delta", "unit_oom_kill_count",
+                             "unit_oom_kill_delta", "uptime_ms")}}
+
+
+def guest_diagnostic(event: dict) -> dict | None:
+    """Retain only bounded classifications; guest data never establishes job status."""
+    if not isinstance(event, dict):
+        return None
+    if event.get("event") == "runner_exit" and set(event) == {"event", "exit_code"}:
+        # Existing templates already emit this safe, narrow event.
+        event = {"event": "guest_diagnostic", "schema_version": 1,
+                 "reason": "runner_exit", "exit_code": event["exit_code"]}
+    if event.get("event") != "guest_diagnostic" or type(event.get("schema_version")) is not int or event["schema_version"] != 1:
+        return None
+    allowed = {"event", "schema_version"} | set(GUEST_DIAGNOSTIC_ENUMS) | set(GUEST_DIAGNOSTIC_INTS)
+    if set(event) - allowed or "reason" not in event:
+        return None
+    for key, values in GUEST_DIAGNOSTIC_ENUMS.items():
+        if key in event and (not isinstance(event[key], str) or event[key] not in values):
+            return None
+    for key, (lower, upper) in GUEST_DIAGNOSTIC_INTS.items():
+        if key in event and (type(event[key]) is not int or not lower <= event[key] <= upper):
+            return None
+    return dict(event)
 
 
 def proxy_failure_reason(error: OSError | ValueError) -> str:
@@ -152,7 +189,7 @@ class Host:
         def failure(reason: str) -> RunnerError:
             return RunnerError(
                 f"Dedicated proxy cannot reach GitHub ({reason}); check "
-                "127.0.0.1:27892 -> upstream 127.0.0.1:27891. "
+                f"127.0.0.1:{self.config.proxy_port} -> upstream 127.0.0.1:{self.config.upstream_port}. "
                 "A listening port alone does not verify HTTPS connectivity.")
         try:
             with opener.open(request, timeout=15) as response:
@@ -329,7 +366,8 @@ class Host:
         now = time.time()
         path = logs / f"instance-{validate_uuid(instance['id'])}.json"
         atomic_json(path, {key: instance.get(key) for key in (
-            "id", "name", "runner_id", "job_id", "created_at", "reason", "metrics")})
+            "id", "name", "runner_id", "job_id", "created_at", "reason", "metrics",
+            "diagnostics", "diagnostics_dropped")})
         # Only our regular metric records; never traverse guest files or delete
         # the dedicated journal namespace. Its separate cap is 1 GiB.
         files = []
@@ -557,6 +595,23 @@ class Controller:
             if not self.paused() and now >= self.next_launch:
                 self.begin()
             return
+        # Drain the existing event channel before stopped/stopping/cleanup checks.
+        # Otherwise the final guest exit diagnostics vanish with its overlay.
+        try:
+            events = self.host.events(instance["id"])
+        except OSError:
+            events = []  # Missing diagnostics never change teardown or deadlines.
+        for event in events:
+            diagnostic = guest_diagnostic(event)
+            if diagnostic is not None:
+                retained = instance.setdefault("diagnostics", [])
+                retained.append({"observed_at": now, **diagnostic})
+                if len(retained) > MAX_GUEST_DIAGNOSTICS:
+                    del retained[0]
+                    instance["diagnostics_dropped"] = min(2 ** 31 - 1, instance.get("diagnostics_dropped", 0) + 1)
+                self.save()
+                print(json.dumps({"event": "guest_diagnostic", "instance": instance["id"],
+                                  "at": now, "diagnostic": diagnostic}), flush=True)
         if now >= self.next_metrics and hasattr(self.host, "metrics"):
             self.next_metrics = now + 30
             try:
@@ -598,7 +653,7 @@ class Controller:
         if self.paused() and not instance["bootstrap_attempted"]:
             self.request_stop("drained_before_registration")
             return
-        for event in self.host.events(instance["id"]):
+        for event in events:
             if event.get("event") == "ready":
                 self.bootstrap_ready = True
             # Untrusted guest hints only narrow a subsequent authenticated query.

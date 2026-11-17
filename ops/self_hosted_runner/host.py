@@ -39,11 +39,12 @@ GIB = 1024 ** 3
 STORAGE_BYTES = 200 * GIB
 IO_BYTES = 100 * 1024 ** 2
 REQUIRED_FILES = ("common.py", "github_api.py", "controller.py", "host.py", "template.py", "config.example.toml",
-                  "install.sh", "proxy/squid.conf", "proxy/domains.txt", "apparmor/nexpoly-runner-vm",
+                  "install.sh", "switch-upstream.py", "retire-idle.py", "maintain-runner.sh", "maintain-template.sh",
+                  "proxy/squid.conf", "proxy/domains.txt", "apparmor/nexpoly-runner-vm",
                   "systemd/nexpoly-runner-vm@.service", "systemd/nexpoly-runner-proxy.service",
                   "systemd/nexpoly-runner-firewall.service", "systemd/nexpoly-runner-controller.service",
                   "systemd/nexpoly-runner-storage.service", "guest/bootstrap.py", "guest/build.py",
-                  "guest/smoke.py", "guest/job-event.py", "guest/job-started.sh", "guest/job-completed.sh",
+                  "guest/smoke.py", "guest/exit_diagnostics.py", "guest/job-event.py", "guest/job-started.sh", "guest/job-completed.sh",
                   "guest/nexpoly-ci-bootstrap.service", "guest/software-lock.json")
 PACKAGES = ("qemu-system-x86", "qemu-utils", "cloud-image-utils", "nftables", "squid", "apparmor-utils",
             "gpg", "gpgv", "ubuntu-cloudimage-keyring", "openssl")
@@ -92,7 +93,7 @@ def read_config(path: Path) -> dict:
             raise HostError(f"runner.{key} exceeds this host's reviewed resource budget")
     fixed = {("paths", "root"): "/data/lzq/github-runner", ("paths", "state"): "/data/lzq/github-runner/state",
              ("runner", "vcpus"): 8, ("runner", "memory_mib"): 32768, ("runner", "disk_gib"): 160,
-             ("network", "upstream_port"): 27891, ("network", "proxy_port"): 27892, ("network", "dns"): "202.38.64.7"}
+             ("network", "upstream_port"): 17891, ("network", "proxy_port"): 27892, ("network", "dns"): "202.38.64.7"}
     for (section, key), expected in fixed.items():
         if config[section][key] != expected:
             raise HostError(f"{section}.{key} differs from the reviewed deployment contract")
@@ -629,8 +630,8 @@ def install_packages() -> None:
     environment = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "NEEDRESTART_MODE": "l"}
     # sudo usually strips proxy environment variables. Bootstrap uses the
     # existing reviewed parent: the restricted CI proxy is not installed yet.
-    apt = ["apt-get", "-o", "Acquire::http::Proxy=http://127.0.0.1:27891",
-           "-o", "Acquire::https::Proxy=http://127.0.0.1:27891"]
+    apt = ["apt-get", "-o", "Acquire::http::Proxy=http://127.0.0.1:17891",
+           "-o", "Acquire::https::Proxy=http://127.0.0.1:17891"]
     for command in ([*apt, "update"], [*apt, "install", "-y", "--no-install-recommends", *PACKAGES]):
         completed = subprocess.run(command, env=environment, check=False)
         if completed.returncode:

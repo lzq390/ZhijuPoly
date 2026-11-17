@@ -11,9 +11,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import traceback
 import urllib.error
-import urllib.request
 
 HERE = Path("/usr/local/lib/nexpoly-ci-runner")
 CONFIG = Path("/etc/nexpoly-ci-runner")
@@ -36,6 +36,26 @@ STAGES = frozenset({"preflight", "apt_update", "apt_dependencies", "docker_packa
                     "buildx_download", "runner_download", "runner_dependencies",
                     "guest_configuration", "docker_start", "smoke", "seal"})
 CURRENT_STAGE = "preflight"
+DOWNLOAD_ARTIFACTS = frozenset({"docker-ce.deb", "docker-ce-cli.deb", "containerd.io.deb",
+                                "docker-compose-plugin.deb", "docker-buildx", "runner.tar.gz"})
+DOWNLOAD_LIMIT = 1024 * 1024 * 1024
+
+
+class ArtifactDownloadError(RuntimeError):
+    """Only bounded, non-secret artifact metadata may cross the guest channel."""
+
+    def __init__(self, artifact: str, attempt: int, error_kind: str,
+                 received_bytes: int = 0, expected_bytes: int | None = None,
+                 http_status: int | None = None):
+        super().__init__("artifact download failed")
+        self.details: dict[str, object] = {
+            "artifact": artifact if artifact in DOWNLOAD_ARTIFACTS else "unknown",
+            "attempt": attempt, "error_kind": error_kind, "received_bytes": received_bytes,
+        }
+        if expected_bytes is not None:
+            self.details["expected_bytes"] = expected_bytes
+        if http_status is not None:
+            self.details["http_status"] = http_status
 
 
 def emit(event: str, **fields: object) -> None:
@@ -59,7 +79,9 @@ def report_failure(error: Exception) -> None:
         "stage": CURRENT_STAGE if CURRENT_STAGE in STAGES else "preflight",
         "error_kind": "unexpected_error",
     }
-    if isinstance(error, subprocess.CalledProcessError):
+    if isinstance(error, ArtifactDownloadError):
+        details.update(error.details)
+    elif isinstance(error, subprocess.CalledProcessError):
         details["error_kind"] = "command_failed"
         if type(error.returncode) is int and -255 <= error.returncode <= 255:
             details["exit_code"] = error.returncode
@@ -83,14 +105,93 @@ def run(*args: str) -> None:
 
 
 def download(artifact: dict, destination: Path) -> None:
-    digest = hashlib.sha256()
-    with urllib.request.urlopen(artifact["url"], timeout=120) as source, destination.open("wb") as target:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-            target.write(chunk)
-    if digest.hexdigest() != artifact["sha256"]:
-        destination.unlink()
-        raise ValueError("artifact checksum mismatch")
+    # curl detects truncated HTTP bodies that urllib can report as successful
+    # EOF. Length checks supplement, and never replace, the locked SHA-256.
+    deadline = time.monotonic() + 600
+    name = destination.name if destination.name in DOWNLOAD_ARTIFACTS else "unknown"
+    failure = ArtifactDownloadError(name, 1, "timeout")
+    for attempt in range(1, 4):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        temporary: Path | None = None
+        received, expected, status = 0, None, None
+        retry = False
+        emit("template_download", state="started", artifact=name, attempt=attempt)
+        try:
+            fd, filename = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+            os.close(fd)
+            temporary = Path(filename)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired("curl", 0)
+            result = subprocess.run([
+                "curl", "--disable", "--silent", "--show-error", "--fail", "--location",
+                "--proto", "=https", "--proto-redir", "=https", "--proxy", PROXY,
+                "--noproxy", "", "--retry", "0", "--connect-timeout", str(min(30, remaining)),
+                "--speed-limit", "1", "--speed-time", "30", "--max-time", str(remaining),
+                "--max-filesize", str(DOWNLOAD_LIMIT), "--output", str(temporary),
+                "--write-out", "%{http_code}\n%header{content-length}\n", artifact["url"],
+            ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=remaining,
+                check=False)
+            received = temporary.stat().st_size
+            metadata = result.stdout.splitlines()
+            if metadata and len(metadata[0]) == 3 and metadata[0].isascii() and metadata[0].isdigit():
+                candidate = int(metadata[0])
+                status = candidate if 100 <= candidate <= 599 else None
+            if len(metadata) > 1 and metadata[1].isascii() and metadata[1].isdigit() and len(metadata[1]) <= 10:
+                expected = int(metadata[1])
+            if result.returncode == 0:
+                if received > DOWNLOAD_LIMIT or (expected is not None and expected > DOWNLOAD_LIMIT):
+                    kind = "validation_error"
+                elif expected is not None and received != expected:
+                    kind, retry = "short_read", True
+                else:
+                    digest = hashlib.sha256()
+                    with temporary.open("rb") as source:
+                        while time.monotonic() < deadline and (chunk := source.read(1024 * 1024)):
+                            digest.update(chunk)
+                    if time.monotonic() >= deadline:
+                        kind = "timeout"
+                    elif digest.hexdigest() != artifact["sha256"]:
+                        kind, retry = "checksum_mismatch", True
+                    else:
+                        os.replace(temporary, destination)
+                        temporary = None
+                        fields = {"artifact": name, "attempt": attempt, "received_bytes": received}
+                        if expected is not None:
+                            fields["expected_bytes"] = expected
+                        if status is not None:
+                            fields["http_status"] = status
+                        emit("template_download", state="verified", **fields)
+                        return
+            elif result.returncode == 22:
+                kind, retry = "http_error", status in (408, 429) or (status is not None and status >= 500)
+            elif result.returncode in (18, 28):
+                kind, retry = ("short_read" if result.returncode == 18 else "timeout"), True
+            elif result.returncode in (5, 6, 7, 16, 35, 52, 55, 56, 92):
+                kind, retry = "network_error", True
+            else:
+                kind = "filesystem_error" if result.returncode in (23, 26) else "validation_error"
+        except subprocess.TimeoutExpired:
+            kind, retry = "timeout", True
+            try:
+                received = temporary.stat().st_size if temporary is not None else 0
+            except OSError:
+                kind, retry = "filesystem_error", False
+        except OSError:
+            kind = "filesystem_error"
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    kind, retry = "filesystem_error", False
+        failure = ArtifactDownloadError(name, attempt, kind, received, expected, status)
+        if not retry or attempt == 3 or time.monotonic() >= deadline:
+            break
+        emit("template_download", state="retry", **failure.details)
+    raise failure from None
 
 
 def write(path: str, content: str, mode: int = 0o644) -> None:
@@ -118,7 +219,12 @@ def main() -> None:
         os.environ[key] = NO_PROXY
         env_lines.append(f'{key}={NO_PROXY}')
     os.environ["DEBIAN_FRONTEND"] = "noninteractive"
-    write("/etc/apt/apt.conf.d/80-nexpoly-proxy", f'Acquire::http::Proxy "{PROXY}";\nAcquire::https::Proxy "{PROXY}";\n')
+    # Retry transient upstream failures per file, while the host retains the
+    # existing one-hour build deadline. Missing metadata must still fail update.
+    write("/etc/apt/apt.conf.d/80-nexpoly-proxy",
+          f'Acquire::http::Proxy "{PROXY}";\nAcquire::https::Proxy "{PROXY}";\n'
+          'Acquire::Retries "3";\nAcquire::http::Timeout "30";\n'
+          'Acquire::https::Timeout "30";\nAPT::Update::Error-Mode "any";\n')
     write("/etc/environment", "\n".join(env_lines) + "\n")
     stage("apt_update")
     run("apt-get", "update")
@@ -181,6 +287,9 @@ def main() -> None:
     # instead of downloading every index again. apt-get clean removes .debs;
     # all job writes still live only in that VM's disposable overlay.
     shutil.rmtree("/opt/actions-runner/_diag", ignore_errors=True)
+    # Diagnostics are enabled only after a future registration child exits.
+    # Never seal an enabled marker or a previous job's counter baseline.
+    Path("/run/nexpoly-ci-runner/exit-diagnostics.json").unlink(missing_ok=True)
     for key in Path("/etc/ssh").glob("ssh_host_*"):
         key.unlink()
     (CONFIG / "build-mode").unlink()

@@ -19,7 +19,7 @@ disk_gib = 160
 
 [network]
 upstream_host = "127.0.0.1"
-upstream_port = 27891
+upstream_port = 17891
 proxy_port = 27892
 dns = "202.38.64.7"
 no_proxy = "localhost,127.0.0.1,::1,postgres,backend,lab-postgres"

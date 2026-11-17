@@ -50,7 +50,12 @@ BUILD_STAGES = frozenset({"preflight", "apt_update", "apt_dependencies", "docker
                           "buildx_download", "runner_download", "runner_dependencies",
                           "guest_configuration", "docker_start", "smoke", "seal"})
 BUILD_ERROR_KINDS = frozenset({"command_failed", "http_error", "timeout", "network_error",
-                              "filesystem_error", "validation_error", "unexpected_error"})
+                              "filesystem_error", "validation_error", "unexpected_error",
+                              "short_read", "checksum_mismatch"})
+BUILD_ARTIFACTS = frozenset({"docker-ce.deb", "docker-ce-cli.deb", "containerd.io.deb",
+                           "docker-compose-plugin.deb", "docker-buildx", "runner.tar.gz", "unknown"})
+BUILD_DOWNLOAD_INTS = {"attempt": (1, 3), "received_bytes": (0, 2 ** 63 - 1),
+                       "expected_bytes": (0, 2 ** 63 - 1), "http_status": (100, 599)}
 
 
 class TemplateError(RuntimeError):
@@ -135,6 +140,35 @@ class BuildConsoleCapture:
         self.output.close()
 
 
+def artifact_diagnostics(event: dict) -> list[str]:
+    """Only fixed artifact identities and bounded numeric download evidence."""
+    details = []
+    artifact = event.get("artifact")
+    if isinstance(artifact, str) and artifact in BUILD_ARTIFACTS:
+        details.append(f"artifact={artifact}")
+    for key, (lower, upper) in BUILD_DOWNLOAD_INTS.items():
+        value = event.get(key)
+        if type(value) is int and lower <= value <= upper:
+            details.append(f"{key}={value}")
+    return details
+
+
+def guest_download_progress(event: dict) -> str | None:
+    allowed = {"event", "state", "artifact", "error_kind"} | set(BUILD_DOWNLOAD_INTS)
+    if (not isinstance(event, dict) or set(event) - allowed
+            or event.get("event") != "template_download"
+            or not isinstance(event.get("state"), str)
+            or event["state"] not in {"started", "retry", "verified"}
+            or not isinstance(event.get("artifact"), str) or event["artifact"] not in BUILD_ARTIFACTS
+            or type(event.get("attempt")) is not int or not 1 <= event["attempt"] <= 3):
+        return None
+    details = [f"state={event['state']}", *artifact_diagnostics(event)]
+    kind = event.get("error_kind")
+    if isinstance(kind, str) and kind in BUILD_ERROR_KINDS:
+        details.append(kind)
+    return "Guest template download: " + ", ".join(details)
+
+
 def guest_build_failure(event: dict, log: Path) -> TemplateError:
     """Only fixed classifications and bounded integers can reach CLI output."""
     stage = event.get("stage")
@@ -142,10 +176,11 @@ def guest_build_failure(event: dict, log: Path) -> TemplateError:
         stage = "unknown"
     kind = event.get("error_kind")
     details = [kind] if isinstance(kind, str) and kind in BUILD_ERROR_KINDS else []
-    for key, lower, upper in (("exit_code", -255, 255), ("http_status", 100, 599)):
+    for key, lower, upper in (("exit_code", -255, 255),):
         value = event.get(key)
         if type(value) is int and lower <= value <= upper:
             details.append(f"{key}={value}")
+    details.extend(artifact_diagnostics(event))
     classification = f" ({', '.join(details)})" if details else ""
     return TemplateError(f"Guest template preparation failed at {stage}{classification}; build console: {log}")
 
@@ -388,7 +423,7 @@ def render_seed(lock: dict, output_dir: Path, instance_id: str = "nexpoly-templa
     """Write deterministic cloud-config JSON (valid YAML), without executing it."""
     output_dir.mkdir(parents=True, exist_ok=True)
     files = []
-    for name in ("bootstrap.py", "build.py", "smoke.py", "job-event.py", "job-started.sh", "job-completed.sh"):
+    for name in ("bootstrap.py", "build.py", "smoke.py", "exit_diagnostics.py", "job-event.py", "job-started.sh", "job-completed.sh"):
         files.append({"path": f"/usr/local/lib/nexpoly-ci-runner/{name}", "permissions": "0755", "encoding": "b64", "content": base64.b64encode((PACKAGE / "guest" / name).read_bytes()).decode()})
     files.extend([
         {"path": "/etc/systemd/system/nexpoly-ci-bootstrap.service", "content": (PACKAGE / "guest/nexpoly-ci-bootstrap.service").read_text()},
@@ -611,6 +646,10 @@ def build_template(config: object, lock_path: Path = DEFAULT_LOCK) -> dict:
                                 if isinstance(stage, str) and stage in BUILD_STAGES and stage != last_stage:
                                     print(f"Guest template stage: {stage}", file=sys.stderr, flush=True)
                                     last_stage = stage
+                            if event.get("event") == "template_download":
+                                progress = guest_download_progress(event)
+                                if progress is not None:
+                                    print(progress, file=sys.stderr, flush=True)
                             if event.get("event") == "failed":
                                 raise guest_build_failure(event, console.path)
                             if event.get("event") == "template_ready":

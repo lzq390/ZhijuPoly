@@ -33,6 +33,12 @@ def denied_direct(address: str, port: int) -> None:
     raise RuntimeError("Guest unexpectedly has direct network access")
 
 
+def check_direct_egress() -> None:
+    for port in (17891, 27891):
+        denied_direct("10.0.2.2", port)  # Both SSH upstreams remain host-only.
+    denied_direct("1.1.1.1", 443)  # Public HTTPS must go through the proxy.
+
+
 def main() -> None:
     config = Path("/etc/nexpoly-ci-runner")
     if not (config / "build-mode").is_file():
@@ -56,8 +62,7 @@ def main() -> None:
         if response.status != 403:
             raise RuntimeError("Proxy did not deny a loopback destination")
         response.read(1024)
-    denied_direct("10.0.2.2", 27891)  # SSH's upstream proxy must remain host-only.
-    denied_direct("1.1.1.1", 443)  # All public HTTPS must go through the proxy.
+    check_direct_egress()
     subprocess.run(["docker", "compose", "version"], check=True, timeout=30)
     lock = json.loads((config / "software-lock.json").read_text())
     image = lock["smoke_image"]["reference"]

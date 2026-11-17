@@ -89,7 +89,7 @@ class Config:
     disk_gib: int = 160
     proxy_port: int = 27892
     upstream_host: str = "127.0.0.1"
-    upstream_port: int = 27891
+    upstream_port: int = 17891
     dns: str = "202.38.64.7"
     no_proxy: str = "localhost,127.0.0.1,::1,postgres,backend,lab-postgres"
     state_min_free_gib: int = 40
@@ -135,7 +135,7 @@ class Config:
             "root": DEFAULT_ROOT, "state": DEFAULT_ROOT / "state",
             "repository": REPOSITORY, "label": LABEL, "name_prefix": "nexpoly-ci-",
             "vcpus": 8, "memory_mib": 32768, "disk_gib": 160,
-            "proxy_port": 27892, "upstream_host": "127.0.0.1", "upstream_port": 27891,
+            "proxy_port": 27892, "upstream_host": "127.0.0.1", "upstream_port": 17891,
             "dns": "202.38.64.7",
             "no_proxy": "localhost,127.0.0.1,::1,postgres,backend,lab-postgres",
             "poll_seconds": 30, "failure_limit": 3,

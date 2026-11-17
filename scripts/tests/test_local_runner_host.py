@@ -191,6 +191,7 @@ class LocalRunnerHostTests(unittest.TestCase):
             ('root = "/data/lzq/github-runner"', 'root = "/tmp/github-runner"'),
             ('state = "/data/lzq/github-runner/state"', 'state = "/data/lzq/github-runner/../state"'),
             ('upstream_host = "127.0.0.1"', 'upstream_host = "114.214.255.154"'),
+            ('upstream_port = 17891', 'upstream_port = 27891'),
             ('dns = "202.38.64.7"', 'dns = "127.0.0.53"'),
             ('proxy_port = 27892', 'proxy_port = 27891'),
             ('vcpus = 8', 'vcpus = 128'),
@@ -225,10 +226,11 @@ class LocalRunnerHostTests(unittest.TestCase):
         self.assertNotIn("hook forward", transaction)
         self.assertIn("meta skuid 200 jump vm_egress", transaction)
         self.assertIn("ip daddr 127.0.0.1 tcp dport 27892", transaction)
-        self.assertIn("ip daddr 127.0.0.1 tcp dport 27891", transaction)
+        self.assertIn("ip daddr 127.0.0.1 tcp dport 17891", transaction)
         self.assertIn("ip daddr 202.38.64.7 udp dport 53", transaction)
         vm_chain = transaction.split("chain vm_egress", 1)[1].split("chain proxy_egress", 1)[0]
         self.assertNotIn("dport 27891", vm_chain)
+        self.assertNotIn("dport 17891", vm_chain)
         self.assertNotIn("dport 443", vm_chain)
         self.assertTrue(vm_chain.rstrip().endswith("counter drop\n  }"))
 
@@ -240,6 +242,10 @@ class LocalRunnerHostTests(unittest.TestCase):
                           "http_access deny !CONNECT !http_ports", "access_log none",
                           'dstdomain -n "/etc/nexpoly-runner/proxy-domains.txt"'):
             self.assertIn(directive, proxy)
+        self.assertIn("cache_peer 127.0.0.1 parent 17891 0", proxy)
+        self.assertNotIn("parent 27891", proxy)
+        self.assertIn("tcp dport 17891", assets["/etc/nexpoly-runner/egress.nft"])
+        self.assertNotIn("tcp dport 27891", assets["/etc/nexpoly-runner/egress.nft"])
         self.assertLess(proxy.index("http_access deny host_targets"), proxy.index("http_access allow loopback"))
         proxy_unit = assets["/etc/systemd/system/nexpoly-runner-proxy.service"]
         self.assertNotIn("ExecReload=", proxy_unit)
@@ -609,7 +615,7 @@ class LocalRunnerHostTests(unittest.TestCase):
             if chain == "proxy_egress":
                 add(chain, [{"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": [2, 4]}},
                             {"counter": {"packets": 10, "bytes": 4000}}, {"accept": None}])
-            add(chain, destination("127.0.0.1", "tcp", 27892 if chain == "vm_egress" else 27891))
+            add(chain, destination("127.0.0.1", "tcp", 27892 if chain == "vm_egress" else 17891))
             add(chain, destination("202.38.64.7", "udp", 53))
             add(chain, destination("202.38.64.7", "tcp", 53))
             add(chain, [{"counter": {"packets": 1, "bytes": 52}}, {"drop": None}])
@@ -628,7 +634,23 @@ class LocalRunnerHostTests(unittest.TestCase):
         # Captured from the dedicated table only: approved addresses, ports,
         # service UIDs and counters; no credentials or unrelated host rules.
         fixture = Path(__file__).parent / "fixtures/nexpoly_runner_nft_1_0_9.json"
-        self.assertTrue(self.check_firewall_json(json.loads(fixture.read_text())))
+        old = json.loads(fixture.read_text())
+        self.assertFalse(self.check_firewall_json(old))
+        # Keep the historical capture unchanged; migrate only the parent port
+        # before verifying its numeric nftables representation against policy.
+        current = copy.deepcopy(old)
+        migrated = 0
+        for entry in current["nftables"]:
+            rule = entry.get("rule", {})
+            if rule.get("chain") != "proxy_egress":
+                continue
+            for expression in rule.get("expr", []):
+                match = expression.get("match", {})
+                if match.get("right") == 27891:
+                    match["right"] = 17891
+                    migrated += 1
+        self.assertEqual(migrated, 1)
+        self.assertTrue(self.check_firewall_json(current))
 
     def test_firewall_accepts_only_equivalent_symbolic_or_set_notation(self):
         for states in (["established", "related"], [4, 2],

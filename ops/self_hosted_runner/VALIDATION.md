@@ -227,15 +227,77 @@ MD job 133062105566 同样停在 pip 缓存，06:16:28 UTC 报恢复超时，06:
 
 修复后的 workflow/DFT policy、本地容器代理、OpenScience 静态准备及 Compose delivery 相关 **167 项测试通过**。新增 8 项离线测试用 Docker CLI 替身模拟真实 config.json 代理注入与 --env 覆盖优先级，移除覆盖参数可复现失败；检查 build/pull 仍继承代理、配置文件未改、健康/HTTP 等待失败仍返回非零且输出有限诊断、既有 --container 目标不被重建或输出日志、预期 grep 零匹配保持安静以及真实父层失败只报告一次。ShellCheck 0.10.0 默认级别、Bash 语法、workflow policy、actionlint 1.7.7 和 diff 检查通过；四个 hosted job 块与修改前逐字节一致。未调用宿主 Docker 或修改系统服务。实际容器验证及完整 CI 将随修复提交重跑；关闭信号与完整验收仍保留未解。
 
+## 2026-11-17 已授权的 17891 上游迁移交付
+
+用户在两条上游下载对照之后，明确授权将 runner 专用 Squid 的上游改为 `127.0.0.1:17891`。当前配置示例、common.Config 固定契约、host 配置校验和首次 APT bootstrap 已同步；专用 Squid parent 与 nft proxy UID 规则仍由同一 network.upstream_port 渲染，VM UID 仅允许27892，不新增直连上游或其他出口。旧27891实测和故障记录保留为历史证据，不能视为新路径已应用或已长期稳定。
+
+既有安装器保留 `/etc/nexpoly-runner/config.toml`，因此只改 example 或重装并不能完成此迁移。新增 `switch-upstream.py` 在现有全局锁内要求已drain、controller停止、无活跃VM、journal.instance=null及实例目录为空；先验证候选配置/私有源码快照，仅替换现有network.upstream_port整数，保留App IDs等其他字节，并写0600旧config备份。之后通过正常安装器升级受保护代码并同步应用专用Squid/nft，精确检查防火墙与27892 HTTPS。失败保持drained/stopped，不自动恢复接单、重建模板、修改共享隧道或触碰App私钥。
+
+原 maintain-template 仅等待 instance 消失，而 drain 明确不会将 registered idle/busy=false 视作任务完成，可能等至 110 分钟。本轮统一入口为 `sudo bash /data/lzq/github-runner/control/maintain-runner.sh`，配置与安装版本一致时能复用已 stopped/drained 状态。若配置已迁至 17891 但早期安装失败、受保护旧程序仍要求 27891，须保持无 VM 且 drained/stopped，先单独重跑 `switch-upstream.py` 修复版本一致性，再重跑统一入口，不能直接用旧 runnerctl 开始整体流程。它先使用受保护的已安装旧模块安全隔离待机路由，在至少两次、间隔不低于 30 秒的完整实际 jobs 检查后才退役；真实 job 保留并在旧 drained 控制器下自然完成，API 不确定时恢复路由后退出或保持停止。低层迁移 helper 遇到遗留 instance 仍立即拒绝。整个流程未在宿主执行。
+
+离线测试覆盖配置字节/IDs/注释保留、旧/新端口契约、私有源码验证先于配置修改、安装失败保留备份、不报告防火墙假成功、重复应用及 registered idle 拒绝。历史 nftables 1.0.9 现场 fixture 保持原始 27891 端口，测试先拒绝旧规则，再仅迁移 proxy chain 端口验证数值表示仍兼容。退役 fake API/VM 测试覆盖路由隔离前落盘、派单竞争、busy=false 下实际 job、刚完成 run、秒精度时间边界、裸 404、API 失败、路由恢复、删除后中断重试、受保护 import 目录、正常 cgroup 清理及不补机；没有真实 API mutation、VM、Docker 或服务操作。
+
+## 2026-11-17 两项关闭故障的调查与诊断交付
+
+剩余 script-tests 和 backend0 的初始终止来源仍未知。前者 57 项测试通过后中断；后者在 pip 安装时结束，APT 与 pytest 尚未开始。对 test_adopt_runtime_prerequisites 的全部 117 项隔离测试独立复验，846.769 秒全通过；这些测试使用替身，未调用真实 Docker/systemctl，未发现终止用户 bus 或 Docker 的测试。两项 VM 内存峰值约 6.52/3.37 GiB；宿主 stop 分别晚于已观察到的报错约 18.8/23.1 秒，105 分钟执行期限及 600 秒启动期限均未触发。这些证据不支持“宿主资源上限或定时器先杀任务”的解释；旧 VM 已销毁，不能追溯确定最初触发者。
+
+新增 guest 诊断只采集固定枚举的服务状态、退出/信号分类、OOM 计数与 guest uptime；控制器在回收前读取，最多保留 64 条到既有私有 JSON 资源记录。不保留原始日志、环境或任意错误文本，不读取 guest 文件系统，不以 guest 事件认定 job 完成。旧模板仍兼容既有窄 runner_exit 事件；完整新诊断须维护入口重建模板后生效。控制器原有 API 认证、期限、关机宽限和 cgroup 清理条件保持不变。guest 相关 72 项、controller 相关 70 项测试通过，最后补强后的 retirement/upstream/host/controller/diagnostics 与统一入口编排合并 157 项离线测试通过（4.928 秒），其中入口 10 项使用真实 source guard/函数及 fake 命令，未操作服务；Bash 语法和 diff 检查通过。实际原因与完整本地 CI 验收仍待确认。
+
+最终整合复验共 **378 项通过（22.273 秒）**，包含控制器、模板、guest 诊断、上游迁移、待机退役、两套维护入口、工作流策略及镜像资源检查；actionlint、ShellCheck、workflow policy、monomer DFT 提交契约和 diff 检查通过。此前独立的 117 项脚本测试不重复计入该 378 项。交付前再次直接经 17891 请求 GitHub robots.txt 返回 HTTPS 200（约 0.49 秒）；这些结果不代表系统中的上游已切换，也不替代两项实际 CI 重跑。
+
+## 2026-11-17 首次维护执行：代理迁移成功，模板因 HTTP 502 中止
+
+用户执行统一维护入口后，原待机实例 `e9a57ce6656149a583bdca88db1af256` 已先隔离路由、三次核对实际 jobs，再按普通关机/完整 cgroup 流程回收，未执行任何 job。现有 `/etc` upstream 与 Squid parent 均为 `17891`；入口的专用 nft 精确校验和 `27892 → 17891 → GitHub` HTTPS 检查成功。随后只读复查专用代理 GitHub HTTPS 200、约 0.68 秒；控制器保持 inactive，未恢复接单。
+
+候选模板在 apt_update 失败、退出 100。构建日志明确显示 `http://security.ubuntu.com/ubuntu/dists/noble-security/InRelease` 返回 HTTP 502，其他 archive.ubuntu.com 的 noble、updates、backports 索引成功；之后的 “no longer signed” 伴随该 InRelease 获取失败，没有证据表明官方签名或时钟错误。当前同一安全索引经 27892/17891 的 HTTP/HTTPS 四路完整 GET 全部恢复 200，不能将故障归为 HTTP 固定受阻、白名单拒绝或隧道永久失效。失败候选未作为新模板启用，剩余两项 CI 尚未重跑。
+
+guest APT 保持原源地址和签名/TLS 校验，在既有专用代理配置中增加 `Acquire::Retries=3`、HTTP/HTTPS 单次连接/数据超时 30 秒，并要求 `APT::Update::Error-Mode=any`，元数据仍缺失则失败。沿用宿主一小时模板制作总期限，不另做无限/整轮重试。原生 APT 2.8.3 在完全隔离的 localhost fixture 中，两次 502 后第三次 200 实测成功（约 1 秒、2 秒退避，总 3.038 秒）；错误 SHA256 仍退出 100、拒绝接受文件。该证明仅使用临时配置和固定测试数据，无外网、root 或宿主 APT 更新/安装。实际生成的 guest 配置另以 apt-config 解析六个固定字段验证。
+
+## 2026-11-17 第二次维护：APT 通过，Docker 下载出现半包风险
+
+第二次执行统一入口后，apt_update 和 apt_dependencies 已成功，候选在 docker_packages 以 validation_error 退出。失败候选已回收；controller inactive、无活跃 VM，专用代理保持 17891 且 GitHub HTTPS 检查返回 200；未 resume、未重跑 script-tests/backend0。最初导出的 console tail120 只有关机尾部，缺少原始 traceback，关机序列中的 cloud-init signal15 不能当作 Docker 下载的初始失败原因。
+
+四个锁定 deb URL、版本和 SHA256 均先经过 Docker 官方签名 InRelease → Packages.gz 哈希 → 精确包记录核验；本次已进入 VM 说明当时验证通过。只读经专用 27892 流式下载、不保存/安装：docker-ce 为 24,586,336 字节/7.865 秒，docker-ce-cli 为 17,584,604 字节/6.737 秒，containerd.io 为 23,271,468 字节/7.813 秒，docker-compose-plugin 为 8,483,736 字节/2.863 秒；全部 HTTP200、curl0、SHA256 与原锁一致。因此未修改版本、URL、hash 或签名规则。
+
+但使用与旧 guest 相同的 Python urllib 分块读取首包时，实测 HTTP200、Content-Length=24,586,336，约4.714秒后只收到9,539,441字节便 EOF，无 urllib 网络异常；SHA256不匹配。旧下载器的固定 SHA 已阻止半包继续安装，缺口在于未检查长度、未作有限重试、未区分具体下载失败。该复现说明链路可能提前结束，不能在缺少原始 traceback 时断定原构建失败的具体包或网络节点。
+
+另外各一次 curl 默认模式和 `--http1.1 --user-agent Python-urllib/3.12` 对照：前者协商 HTTP/2，8.203秒；后者 HTTP/1.1，8.224秒。两次均 HTTP200、Content-Length和实际字节数同为24,586,336，hash匹配；未复现短读，不能宣称 HTTP版本或 UA 必然触发/修复故障。这些小样本只证明当前请求成功，不保证隧道持续稳定。
+
+guest 下载器现使用 curl，禁用用户 curl 配置，显式限定专用代理、清除代理绕过、仅允许 HTTPS 初始和重定向请求，保留 TLS 校验；每制品上限1 GiB，连接和低速停滞均有期限，最多3次尝试共享600秒预算，hash分块也检查同一期限。临时文件与目标同目录，检查 Content-Length（存在时）并始终校验原 SHA256，成功后才原子替换；没有哈希正确性或代理直连回退。短读、超时、可恢复传输错误和部分HTTP状态可重试；403/404、TLS信任失败、体积超限和文件系统错误立即失败。失败临时文件清理异常安全归类，不保留原始stderr。
+
+新增制品事件仅输出固定枚举文件名、阶段/错误分类、attempt和有界状态/字节数字；宿主再次白名单过滤，不保留URL、远端正文、任意异常文本或令牌。10项新下载行为测试、6项原guest build测试与5项宿主诊断过滤测试合计21项通过（0.051秒），覆盖无异常短EOF、curl部分传输退出码18的模拟分类、三次上限、共享期限、错误hash、原目标保留、原子发布、清理失败及文本泄露防护；未调用真实curl/服务。实际网络探针与这些离线测试分开记录。新交付尚未应用到成功封存的新模板，不能替代实际维护和两项CI验收。
+
+最终相关整合复验 **97 项通过（4.591 秒）**。将新 guest 下载器在宿主上仅把代理入口映射为同一专用链路 `127.0.0.1:27892`、其余 HTTPS/长度/SHA/临时文件/替换逻辑保持原样，真实复取 docker-ce：首次尝试即取得 24,586,336 字节，响应长度相同，SHA256 与锁匹配，耗时 5.180 秒。固定 started/verified 事件完整，验证记录为 `/data/lzq/jobs/runner-download-verification-20261117.json`，包文件已随临时目录清除。此探针不需要 root，未安装包或启动 VM；它验证下载器和当前链路，不等同于完整模板已构建成功。
+
+## 2026-11-17 第三次维护成功与两项 CI 分别复验
+
+管理员第三次执行统一入口，日志 `/home/devuser/nexpoly-runner-maintenance-retry2.log` 显示六个制品（四个Docker deb、Buildx、runner）均第1次尝试通过长度和原SHA256校验，随后smoke、seal成功。新模板 `base-13de146aa1b1c105703fa9882f3607b3a47267d8819353b9e158be10a460c3da.qcow2` 于北京时间14:32:21封存（06:32:21 UTC）。已安装build.py、template.py、controller.py与交付源码哈希相同；新诊断和下载加固已包含在该模板制作/当前控制器中，完整job中的诊断收集仍随本次CI验证。
+
+控制器14:32:25恢复active、NRestarts=0；14:33:14唯一执行VM `d8468c50d212459b9b72664b199d1057` 启动，GitHub runner82为online，标签为self-hosted、Linux、X64、nexpoly-ci-ephemeral。8vCPU/32GiB guest、34GiB宿主上限、swap0、AppArmor、NoNewPrivileges与读写限速保持生效。实际config/Squid上游均为17891，专用规则精确校验成功，27892经17891到GitHub HTTPS实测200/0.827秒；这次成功不构成隧道持续可用性保证。
+
+已实际POST单项重跑原run43817712995的script-tests job133133627388，attempt2的新job133867148568由runner82执行并成功，起止为06:35:56—07:07:24 UTC（北京时间14:35:56—15:07:24）。测试日志为2397 tests / 1694.205秒、19 skipped、0 failures/errors；旧中断附近的test_abort_refuses_completed_authority明确ok，未出现runner shutdown或实际warning/error。head未改，仍为fd459377e45aae46ea77fc3041986601abb7415a。
+
+宿主采样记录 `/data/lzq/jobs/runner-ci-verification-20261117/script-metrics.jsonl` 的内存峰约3.041 GiB，OOM/KILL计数均0。这是本次script复验的采样结果，不替代所有job的资源峰值或完整压力验收。
+
+script attempt整体结束后，仅启动backend0单项重跑，新job133881233680使用runner83、VM0dcd8018ced24398a7875c3f5063c1e9，07:11:06—07:51:34 UTC（北京时间15:11:06—15:51:34）结束为cancelled；GitHub annotation明确为exceeded maximum execution time40m0s。本次取消来源已确认是workflow既有40分钟期限，未提高超时或省略检查。
+
+Set up Python步骤为07:19:38—07:49:34，共29分56秒。日志分段确认：官方Python发布包下载07:19:42.166—07:39:17.791，耗19分35.625秒；07:39:29.077安装成功。pip cache 140,922,306字节于07:39:31.578命中，07:41:15.190报“Failed to restore: The operation cannot be completed in timeout”，进度为0字节；直到07:49:34.297才进入pip。cache hit→pip为10分02.718秒，warning→pip为8分19.106秒。
+
+旧backend0同样存在cache hit→pip 10分03.336秒、warning后再等待约7分48秒的现象；额外等待所对应的具体进程句柄未现场采样，不能据此确认旧shutdown最初触发。当前这次日志没有runner shutdown signal，仅有明确的40分钟workflow取消。pip安装07:49:34—07:51:29仅运行1分55秒，尚未到Installing collected packages或越过旧失败断点，PG客户端安装、pytest、离线MD检查均skipped，不能记为这些测试失败或通过。
+
+backend的241条宿主metrics采样显示内存峰约4.103 GiB、CPU累计316秒、I/O读约0.561 GiB/写约2.595 GiB，OOM/KILL均0；数据仅覆盖准备阶段，不能代表完整backend测试资源峰值。runner83及旧VM已正常回收；当前唯一runner84/nexpoly-ci-eefe8e2f26cc4d4b85e491b67fb89dbe为online/idle，对应唯一active VM；控制器仍active、NRestarts=0，27892专用GitHub HTTPS复查200/0.894秒。
+
+本轮script成功证明该任务已通过新模板的实际复验；backend0本轮因已知期限取消，仍未完成测试验收。旧shutdown的最初触发仍无法追溯，不能将本次有明确超时注释的取消用于解释旧信号。另四项旧网络失败未重跑，未通过新提交触发完整CI，PR整套CI仍未通过。建议下一步移除backend的可选pip cache并改善Python工具下载，再重跑该项；当前尚未修改该workflow或推送新提交。
+
 ## 复验命令
 
 在仓库根目录：
 
 ```bash
-python3 -m unittest scripts.tests.test_local_runner_controller scripts.tests.test_local_runner_host scripts.tests.test_local_runner_template scripts.tests.test_local_runner_guest_build scripts.tests.test_local_runner_guest_ordering scripts.tests.test_local_runner_maintenance scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows scripts.tests.test_validate_monomer_dft_release_contract -q
+python3 -m unittest scripts.tests.test_local_runner_controller scripts.tests.test_local_runner_host scripts.tests.test_local_runner_template scripts.tests.test_local_runner_guest_build scripts.tests.test_local_runner_guest_download scripts.tests.test_local_runner_template_download_diagnostics scripts.tests.test_local_runner_guest_ordering scripts.tests.test_local_runner_guest_diagnostics scripts.tests.test_local_runner_maintenance scripts.tests.test_local_runner_runner_maintenance scripts.tests.test_local_runner_retirement scripts.tests.test_local_runner_upstream scripts.tests.test_local_runner_diagnostics scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows scripts.tests.test_validate_monomer_dft_release_contract -q
 python3 scripts/ci/validate_workflows.py
 python3 scripts/validate_monomer_dft_release_contract.py --require-committed
 actionlint -config-file .github/actionlint.yaml .github/workflows/ci.yml
-shellcheck scripts/ci/prepare_image_build_disk.sh ops/self_hosted_runner/install.sh ops/self_hosted_runner/maintain-template.sh ops/self_hosted_runner/guest/job-started.sh ops/self_hosted_runner/guest/job-completed.sh
+shellcheck -x -P ops/self_hosted_runner scripts/ci/prepare_image_build_disk.sh ops/self_hosted_runner/install.sh ops/self_hosted_runner/maintain-template.sh ops/self_hosted_runner/maintain-runner.sh ops/self_hosted_runner/guest/job-started.sh ops/self_hosted_runner/guest/job-completed.sh
 git diff --check
 ```

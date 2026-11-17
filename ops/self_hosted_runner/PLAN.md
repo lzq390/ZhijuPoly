@@ -1,16 +1,26 @@
 # 本地 GitHub Actions Runner 实施与运维方案
 
-版本：2026-11-16。目标仓库：`lzq390/ZhijuPoly`。
+版本：2026-11-17。目标仓库：`lzq390/ZhijuPoly`。
 
 ## 当前交付状态
 
 已实现控制器、宿主安装工具、受限网络配置、VM 模板制作、guest 启动程序、版本锁和 CI 迁移代码。源码位于仓库 `ops/self_hosted_runner/`，部署副本位于 `/data/lzq/github-runner/control/`。本文件同时保存为 `/data/lzq/github-runner/PLAN.md`。
 
-**模板维护完成，CI 迁移 PR 正在验收。** 2026-11-16 管理员再次执行 maintain-template.sh，安装、模板制作、smoke、seal 和控制器恢复均成功。当前模板为 `base-9b1799eafd90bb18a3ae9653b0599b8f91a0c1979bccf86a15f59f18511769d1.qcow2`，于北京时间 10:43:30 封存，实际分配约 3.504 GiB，低于 25 GiB 上限。
+**2026-11-17 新模板与17891代理已部署，两项定向复验已结束：script通过，backend准备超时，完整验收待完成。** 管理员第三次执行统一维护，六个锁定制品均在第1次尝试通过响应长度与SHA256校验，smoke/seal全部成功。新模板为 `base-13de146aa1b1c105703fa9882f3607b3a47267d8819353b9e158be10a460c3da.qcow2`，于北京时间11月17日14:32:21封存；控制器14:32:25恢复active，14:33:14启动唯一VM `d8468c50d212459b9b72664b199d1057`，随后GitHub runner ID82在线，四个路由标签正确。实际 `/etc` upstream与Squid parent均为17891，专用nft规则已通过精确检查；`27892 → 17891 → GitHub` HTTPS最新复查返回200、约0.894秒。受保护安装中的build.py、template.py、controller.py哈希均与交付源码一致。共享隧道服务保持原状，guest仍只通过`10.0.2.2:27892`访问受限代理。
+
+原 [run 43817712995](https://github.com/lzq390/ZhijuPoly/actions/runs/43817712995) 的script-tests单项重跑已通过：attempt2的新job [133867148568](https://github.com/lzq390/ZhijuPoly/actions/runs/43817712995/job/133867148568) 使用runner82，于06:35:56—07:07:24 UTC执行；2397项测试耗时1694.205秒，19 skipped、0 failures/errors，原中断附近的 `test_abort_refuses_completed_authority` 明确通过，未出现runner shutdown或实际warning/error。宿主采样内存峰约3.041 GiB，OOM/KILL计数均0，记录于 `/data/lzq/jobs/runner-ci-verification-20261117/script-metrics.jsonl`。
+
+backend0的单项重跑 [133881233680](https://github.com/lzq390/ZhijuPoly/actions/runs/43817712995/job/133881233680) 已结束：使用runner83、VM `0dcd8018ced24398a7875c3f5063c1e9`，07:11:06—07:51:34 UTC状态cancelled，GitHub annotation明确超过既有40分钟期限，未出现runner shutdown signal。Set up Python共29分56秒：官方Python发布包下载耗19分35.625秒，随后安装成功；140,922,306字节pip cache命中后约1分44秒报恢复超时、进度0字节，并在警告后又等8分19.106秒才进入pip。cache hit至pip总计10分02.718秒，旧backend0也有约10分03秒的同类等待。pip仅运行1分55秒即被取消，尚未到Installing collected packages或越过旧断点，PG客户端、pytest和离线MD检查均未执行。
+
+runner83及旧VM已正常回收，当前唯一runner84 `nexpoly-ci-eefe8e2f26cc4d4b85e491b67fb89dbe` 在线空闲，对应唯一活跃VM；控制器active、NRestarts=0。backend准备阶段的241条宿主采样内存峰约4.103 GiB、CPU316秒、读0.561 GiB/写2.595 GiB，OOM/KILL均0，不能作为完整backend测试资源峰值。本次取消来源已知为GitHub job超时；旧shutdown最初触发仍无法追溯。head保持 `fd459377e45aae46ea77fc3041986601abb7415a`，script本轮已通过，另外四项旧网络失败未重跑，PR整套CI仍未通过。建议下一步关闭backend可选pip cache并改善Python工具下载后再复验；当前尚未修改该workflow或推送新提交。
+
+此前两次候选分别因Ubuntu security索引HTTP502和Docker制品校验失败中止。原Python urllib曾实测HTTP200/Content-Length24,586,336却仅收9,539,441字节便EOF，固定SHA已拒绝半包；curl的HTTP/2和HTTP/1.1+Python UA对照均完整，不能归因某个协议或UA。现已部署的下载器增加长度校验、固定SHA、同目录原子替换，以及最多三次尝试共享600秒预算和1 GiB单文件上限；诊断只保留固定制品名、次数、HTTP状态和字节数。新模板构建证明该路径已实际通过，不代表隧道今后无瞬时故障或完整CI已通过。
+
+**11月16日旧模板与 CI 历史验收。** 2026-11-16 管理员再次执行 maintain-template.sh，安装、模板制作、smoke、seal 和控制器恢复均成功。保留的旧模板为 `base-9b1799eafd90bb18a3ae9653b0599b8f91a0c1979bccf86a15f59f18511769d1.qcow2`，于北京时间 10:43:30 封存，实际分配约 3.504 GiB，低于 25 GiB 上限。
 
 该模板已通过真实注册并连续执行不同 UUID 的 job。在 [CI run 43795108192](https://github.com/lzq390/ZhijuPoly/actions/runs/43795108192) 中，截至北京时间 14:15，20 个本地 job 已有 11 个成功、2 个失败、1 个超时、1 个执行中、5 个排队；成功项包含三个后端分片、全部脚本测试、policy、DFT Worker、MCP、PG14/15/18 与生产别名集成。此前 PG16 job 133051795491 也已通过真实 matching-major 外部媒体与事务 CAS 检查。8 CPU、34 GiB 宿主内存、swap 0、读写各 100 MiB/s 和 AppArmor/NoNewPrivileges 已核验。[迁移 PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 保持 draft，完整验收尚未通过。
 
-受保护安装快照和当前 9b1799ea 模板已经包含启动顺序修复、job umask 0022、锁定的 docker-compose-plugin 5.7.1，以及 Playwright 官方 Ubuntu 24.04 Chromium 系统依赖。注册与私有文件继续使用 umask 0077；APT 索引保留供每个 VM 独立重新校验，deb 下载包仍清理。浏览器二进制和项目依赖仍按 job 安装，不共享可写缓存。
+11月16日的受保护安装快照和旧 9b1799ea 模板已经包含启动顺序修复、job umask 0022、锁定的 docker-compose-plugin 5.7.1，以及 Playwright 官方 Ubuntu 24.04 Chromium 系统依赖。注册与私有文件继续使用 umask 0077；APT 索引保留供每个 VM 独立重新校验，deb 下载包仍清理。浏览器二进制和项目依赖仍按 job 安装，不共享可写缓存。
 
 上一轮 CI 定位到 guest 身份和工具前置条件遗漏：自动分配的 runner 为 1000:1000，而现有身份协议及测试要求 1001:1001；无交互式登录导致用户 systemd bus 缺失，系统 Python 也没有 pip 元数据。另外 DFT 发布契约校验器仍要求所有 job 使用 hosted。当前模板已固定 guest runner UID/GID 1001，安装 python3-pip/dbus-user-session，启用该用户的 linger/user manager，并在注册前验证真实用户 bus。模板 smoke 的账号、bus 和 pip 检查已通过；新 VM 的真实注册还验证了每次启动的用户 bus 前置检查。DFT 校验器复用既有精确路由/权限校验，保持 14 local / 4 hosted、固定 SHA 和发布控制；测试夹具显式创建 0700 私有目录，生产权限检查不变。
 
@@ -30,7 +40,7 @@
 
 以下为部署期间的问题记录；最新状态以上述段落为准。
 
-模板制作曾受上游 HTTPS 抖动阻塞：`27891` 通道的 HTTPS CONNECT 一度多次超时，随后恢复；最新完整 `27892 → 27891` 链路返回 GitHub HTTPS 200，程序实际健康检查也通过。`17891` 同样是现有隧道入口，不代表独立稳定的代理。本轮保持原方案 `27891`，模板可重试；本期仍依赖既有 SSH/客户端代理通道存活。
+模板制作期间，`27891` 通道的 HTTPS CONNECT 曾多次超时，随后恢复，旧 `27892 → 27891` 链路曾通过 GitHub HTTPS 与程序健康检查。此前保持旧方案的决定已由 2026-11-17 用户授权的 `17891` 切换替代。`17891` 同样是既有隧道入口，不代表独立可用性保证；仍依赖该隧道持续存活。
 
 此前重装定位到实际预留降为约 196.875 GiB：ext4 后台初始化通过 loop 的 WRITE_ZEROES 释放了底层文件的零块，原安装器将容量不满误报成挂载身份错误。已应用的修复区分挂载身份与预留容量，只在来源、大小、权限、偏移均匹配后补足预留；专用 storage 服务在每次开机挂载后关闭该 loop 的 discard，避免再次变稀疏。
 
@@ -59,7 +69,7 @@
 | I/O | QEMU 虚拟盘读、写分别最多 100 MiB/s |
 | admission 门槛 | 专用存储空闲至少 40 GiB，`/data` 空闲至少 100 GiB；启动前宿主 MemAvailable 至少 64 GiB |
 | 模板与日志 | 单模板实际分配 ≤25 GiB；保留当前及上一个模板；本地日志合计上限低于 2 GiB、保留不超过 7 天 |
-| 网络 | guest `10.0.2.2:27892` → 宿主 Squid `127.0.0.1:27892` → 既有代理 `127.0.0.1:27891` |
+| 网络 | guest `10.0.2.2:27892` → 宿主 Squid `127.0.0.1:27892` → 既有代理 `127.0.0.1:17891` |
 | DNS | `202.38.64.7`，TCP/UDP 53 |
 | GitHub 权限 | 专用 App，仅目标仓库；Administration write、Actions read、Metadata read |
 
@@ -126,7 +136,25 @@ doctor 在前置条件不全时退出码为 1，仍输出完整诊断。安装�
 
 新建文件系统同步初始化 inode/journal，并在 mkfs 后再次确认实际预留。既有文件若身份正确、仅物理预留不足，安装器使用 `posix_fallocate` 补足空洞，保留原有内容，并维持 `/data` 至少 100 GiB 空闲。`nexpoly-runner-storage.service` 每次挂载启动后验证来源，仅将该 loop 的 `discard_max_bytes` 设为 0；模板、runner 和代理依赖此服务。mount unit 另加 `X-fstrim.notrim`，不修改全局 fstrim 或宿主 NVMe 参数。默认运行时校验仍要求完整 200 GiB 预留及有效保护，不降低容量标准。
 
-重装保留现有 `/etc/nexpoly-runner/config.toml` 及其中 App IDs；配置修改通过 `sudoedit` 完成。首次安装的 APT 下载显式使用既有 `127.0.0.1:27891` 代理，不依赖尚未安装的新 Squid。
+重装保留现有 `/etc/nexpoly-runner/config.toml` 及其中 App IDs；一般配置修改通过 `sudoedit` 完成。本轮旧上游迁移使用下述专用 helper，不能仅覆盖配置示例。首次安装的 APT 下载显式使用既有 `127.0.0.1:17891` 代理，不依赖尚未安装的新 Squid。
+
+### 既有安装的上游迁移
+
+本轮统一入口同时完成已批准的 `27891 → 17891` 迁移和诊断模板更新；配置与已安装程序一致时，也可从已停止/已 drain 状态继续：
+
+```bash
+sudo bash /data/lzq/github-runner/control/maintain-runner.sh
+```
+
+入口先 drain 并停止控制器，保留其 VM；独立 `retire-idle.py` 使用受保护的已安装旧模块和旧 `/etc` 配置，避免在迁移前混用新端口契约。它在全局锁内核对唯一 UUID/runner，先持久记录隔离意图，再仅移除自定义路由标签，防止新派单。随后至少两次、间隔不低于 30 秒核验 runner 和所有非终态 workflow 的实际 jobs，同时检查本 VM 创建所在秒及之后完成的 runs，避免时间戳秒精度遗漏。busy=false 或 runner 404 均不足以证明未接过任务；API/身份/枚举不确定时保留 VM，能确认恢复路由时恢复并重启旧 drained 控制器，否则保持停止供排查。
+
+发现真实派单或 busy 时，入口恢复旧 drained 控制器，最多等待 110 分钟自然完成与回收，每 30 秒输出进度；不会用 idle 推断终止 job。只有隔离且无派单证据的待机实例才删除 GitHub 注册，调用旧控制器原有关机宽限和完整 cgroup 清理，不直接删除活跃 VM/增量盘，不补充新 VM。此前删除 runner 后中断的重试保留完整隔离证据，重新检查实际 jobs，不能将裸 404 当作成功。
+
+`switch-upstream.py` 随后持有既有生命周期锁，要求 controller 停止、drain 标记存在、journal.instance 为 null、实例目录为空且无活跃 VM。它先验证候选配置和私有源码快照，再仅修改 `/etc/nexpoly-runner/config.toml` 的 network.upstream_port 整数，保留 App IDs、私钥路径及其他配置字节。旧配置备份为 root 所有的 0600 `/etc/nexpoly-runner/config.toml.before-upstream-17891`。正常安装器同时渲染并应用 Squid parent 和专用 nft proxy UID 的新端口；VM UID 不获得直连上游权限。通过精确防火墙和 `27892 → 17891 → GitHub` HTTPS 检查后，入口才重建诊断模板，并在 smoke/seal 成功后 resume、启动控制器和显示状态。
+
+迁移、安装或模板阶段失败均不恢复接单；检查配置、已安装程序、Squid 和防火墙是否一致后再重试。若 `/etc` 已写入 17891，但安装器早期失败、受保护程序仍只接受旧 27891，此时不能直接重跑统一入口（旧 runnerctl 会拒绝新配置）。保持 drained/stopped 且无 VM，先单独执行 `sudo python3 -I -B /data/lzq/github-runner/control/switch-upstream.py`，利用同配置重渲染路径修复程序/代理/规则一致性，成功后再执行统一入口。低层 helper 始终重新验证无实例等条件，不绕过安全检查。备份用于人工排查和受审回滚；不能只把旧配置复制回来而忽略程序与网络规则版本。共享隧道、宿主 Docker 和 App 私钥文件不作修改。退役认证只使用现有 App，在宿主内存中获取短期 token，不输出凭据。
+
+原 `maintain-template.sh` 仅等待 instance 完全回收。已注册空闲 runner 的 drain 不触发退役，因此它可能等待至 110 分钟上限；本轮应使用上述统一入口。停止 controller 本身也不代表 VM 已被回收。低层 `switch-upstream.py` 单独执行时遇到遗留 instance 立即拒绝，不负责退役、模板更新或恢复接单。
 
 若首次安装在 `nexpoly-runner-proxy.service` 的 `ExecReload` 报错，使用已更新交付包重跑 `sudo bash /data/lzq/github-runner/control/install.sh` 即可。已安装依赖不需要再传 `--install-packages`；安装器保留现有存储，不会再次分配或格式化 200 GiB。
 
@@ -209,14 +237,14 @@ doctor 不申请/打印 token，App 实际授权与注册是否正确由启动�
 | 验收项 | 当前状态 / 记录内容 |
 | --- | --- |
 | actionlint、workflow policy、磁盘脚本、控制器/host/template 测试 | 见交付 `VALIDATION.md` |
-| 唯一 VM / runner 与 cgroup 资源限制 | 当前唯一 Online/busy runner、唯一 VM，8 CPU/34 GiB/swap 0 已实测；最终任务峰值待验收 |
+| 唯一 VM / runner 与 cgroup 资源限制 | 新模板分别由runner82/83的不同VM执行；已回收83，当前唯一runner84在线空闲/唯一VM；8 CPU/34 GiB/swap0/AppArmor已实测，controller active且NRestarts0 |
 | 无注册 VM smoke（DNS、代理 HTTPS、Docker、部分隔离检查） | 模板构建已完成并封存；更完整目标矩阵及 CI 容量检查待验收 |
-| 完整 PR 20 个不同身份、main 18 个、本地 ci-gate | 新模板已在 PR #111 / run 43791813121 接单；首个镜像任务定位 workflow 参数问题，修复后重跑；完整 20 job 与 gate 待验收 |
-| Docker pull、BuildKit remote Git、GHA cache、apt/pip/npm | 模板构建完成 apt 与固定 hello-world pull/run；其余待真实 CI |
+| 完整 PR 20 个不同身份、main 18 个、本地 ci-gate | run43817712995的script单项复验成功；backend0在准备阶段触发40分钟期限；四项旧网络失败未重跑，PR整套CI未通过 |
+| Docker pull、BuildKit remote Git、GHA cache、apt/pip/npm | 新模板APT、六制品和hello-world smoke通过；backend0 Python包下载19分35秒，pip cache hit到pip约10分钟，耗尽job预算；四项网络失败待复验 |
 | 禁止宿主业务端口、27891、Docker 网段、元数据、IPv6、非白名单 | 已执行 27891、公共直接出口与私网代理拒绝 smoke；其余目标矩阵待完整验收 |
-| 成功、失败、取消、超时、重启均回收；无前任务残留 | 已观察失败后旧 VM/runner 退出、新 UUID 接单；磁盘删除、成功/取消/重启等其余场景待完整实测 |
+| 成功、失败、取消、超时、重启均回收；无前任务残留 | script成功、backend0被GitHub40分钟期限取消后均已换新UUID；83已回收、84在线空闲；完整磁盘残留与重启矩阵仍待验收 |
 | 上游断开后无直连、恢复后补机 | 待维护窗口针对专用路径测试；不要随意停共享代理 |
-| CPU/RAM/磁盘/流量/总耗时 | 读取每实例 `state/logs/instance-<uuid>.json` 并汇总 |
+| CPU/RAM/磁盘/流量/总耗时 | script采样峰3.041 GiB；backend准备阶段241条采样峰4.103 GiB、CPU316秒、读0.561/写2.595 GiB，OOM/KILL0；完整backend与整轮峰值仍待验收 |
 | 现有业务容器、网络与生产目录 | 上线前后对照只读基线；安装不调用宿主 Docker |
 
 资源记录包括 cgroup MemoryPeak/CPUUsageNSec/I/O、overlay 实际分配峰值采样和 elapsed_seconds。`proxy_output_bytes` 减 `proxy_output_bytes_initial` 为专用代理出口字节量估算，包含少量控制请求、请求/响应开销，不能当成纯镜像下载字节。磁盘峰值为 30 秒采样，可能低于瞬时峰值。记录 GitHub PR URL、job ID、VM UUID、起止时间，验收至少覆盖一次完整冷 CI。

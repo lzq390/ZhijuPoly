@@ -186,6 +186,24 @@ class GuestBuildDiagnosticsTests(unittest.TestCase):
             self.assertLess(run.call_args_list.index(user_manager), run.call_args_list.index(smoke))
             self.assertEqual((apt_lists / "ubuntu_InRelease").read_text(), "release metadata fixture")
             self.assertEqual((apt_lists / "ubuntu_Packages").read_text(), "package index fixture")
+            proxy_config = root / "etc/apt/apt.conf.d/80-nexpoly-proxy"
+            content = proxy_config.read_text()
+            self.assertNotIn("AllowInsecure", content)
+            self.assertNotIn("AllowUnauthenticated", content)
+            self.assertNotIn("Verify-Peer", content)
+            # Parse the actual generated syntax without updating/installing or
+            # printing any unrelated host APT configuration.
+            if shutil.which("apt-config"):
+                parsed = subprocess.run([
+                    "apt-config", "-c", str(proxy_config), "shell",
+                    "HTTP", "Acquire::http::Proxy", "HTTPS", "Acquire::https::Proxy",
+                    "RETRIES", "Acquire::Retries", "HTTP_TIMEOUT", "Acquire::http::Timeout",
+                    "HTTPS_TIMEOUT", "Acquire::https::Timeout", "UPDATE_ERRORS", "APT::Update::Error-Mode",
+                ], check=True, capture_output=True, text=True)
+                self.assertEqual(set(parsed.stdout.splitlines()), {
+                    "HTTP='http://10.0.2.2:27892'", "HTTPS='http://10.0.2.2:27892'",
+                    "RETRIES='3'", "HTTP_TIMEOUT='30'", "HTTPS_TIMEOUT='30'", "UPDATE_ERRORS='any'",
+                })
 
 
 if __name__ == "__main__":

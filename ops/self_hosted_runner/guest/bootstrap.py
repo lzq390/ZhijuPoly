@@ -11,7 +11,12 @@ import re
 import select
 import stat
 import subprocess
+import sys
 import time
+
+# The installed directory is root-owned; never import from the job workspace.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from exit_diagnostics import GuestDiagnostics, exit_fields
 
 BOOTSTRAP = Path("/dev/virtio-ports/org.nexpoly.runner.bootstrap")
 EVENTS = Path("/dev/virtio-ports/org.nexpoly.runner.events")
@@ -184,6 +189,8 @@ def register() -> None:
         # credential material transformed by upstream logging.
         import shutil
         shutil.rmtree(RUNNER / "_diag", ignore_errors=True)
+    if (RUNNER / "_diag").exists() or (RUNNER / "_diag").is_symlink():
+        raise RuntimeError("registration diagnostics were not removed")
     if completed.returncode:
         raise RuntimeError("runner registration failed")
 
@@ -207,17 +214,23 @@ def isolated_registration() -> None:
 
 
 def main() -> int:
+    diagnostics = GuestDiagnostics(emit, RUNTIME)
     try:
         if Path("/etc/nexpoly-ci-runner/profile").read_text().strip() != PROFILE:
             raise ValueError("unrecognized runner profile")
         RUNTIME.mkdir(mode=0o700, exist_ok=True)
         ensure_user_session()
         isolated_registration()
+        if (RUNNER / "_diag").exists() or (RUNNER / "_diag").is_symlink():
+            raise RuntimeError("registration diagnostics were not removed")
+        diagnostics.enable()
         env = runner_environment()
         emit("registered")
+        diagnostics.record("runner_started")
         result = subprocess.run([str(RUNNER / "run.sh")], cwd=RUNNER, env=env,
                                 preexec_fn=prepare_job_process, check=False)
         emit("runner_exit", exit_code=result.returncode)
+        diagnostics.record("runner_exit", **exit_fields(result.returncode))
         return result.returncode
     except Exception:
         # Do not stringify exceptions: malformed JSON and subprocess errors may
@@ -225,6 +238,7 @@ def main() -> int:
         emit("failed", reason="guest_bootstrap_failed")
         return 1
     finally:
+        diagnostics.restore_signals()
         subprocess.run(["systemctl", "poweroff", "--no-block"], check=False)
 
 

@@ -8,6 +8,7 @@ ConditionPathExists=!/etc/nexpoly-ci-runner/build-mode
 [Service]
 Type=exec
 ExecStart=/usr/bin/python3 /usr/local/lib/nexpoly-ci-runner/bootstrap.py
+ExecStopPost=-/usr/bin/python3 /usr/local/lib/nexpoly-ci-runner/exit_diagnostics.py
 TimeoutStartSec=infinity
 Restart=no
 StandardOutput=journal

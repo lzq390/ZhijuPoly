@@ -646,7 +646,7 @@ class HostProxyTests(unittest.TestCase):
                 self.host.proxy_check()
         message = str(failure.exception)
         self.assertIn(expected, message)
-        self.assertIn("127.0.0.1:27892 -> upstream 127.0.0.1:27891", message)
+        self.assertIn("127.0.0.1:27892 -> upstream 127.0.0.1:17891", message)
         self.assertIn("A listening port alone does not verify HTTPS connectivity", message)
         self.assertNotIn("registration-secret", message)
         self.assertNotIn("sensitive.invalid", message)
