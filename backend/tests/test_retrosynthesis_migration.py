@@ -1,7 +1,10 @@
 """Optional 0026 upgrade, authorization and restore contract on disposable PG16."""
 from uuid import uuid4
+import json
 
 import psycopg
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 import pytest
 
@@ -68,3 +71,42 @@ def test_privilege_drift_is_rejected(retro_schema_db):
         with pytest.raises(ValueError, match="grants"):
             validate_retrosynthesis_schema(c)
         c.rollback()
+
+
+def test_dump_restore_preserves_jobs_idempotency_and_owner_isolation(retro_schema_db, tmp_path):
+    from app.auth.backup import backup_and_verify
+    owner, other, job, other_job = (uuid4() for _ in range(4))
+    with psycopg.connect(retro_schema_db["admin"]) as c:
+        for user, task in ((owner, job), (other, other_job)):
+            c.execute("INSERT INTO auth.users(user_id,username,password_hash,must_change_password) VALUES(%s,%s,'!',false)",
+                      (user, "restore-retro-" + user.hex))
+            c.execute("""INSERT INTO retrosynthesis.jobs(job_id,owner_user_id,idempotency_key,
+                request_sha256,request_json,status,stage,claim_token,result_json,storage_bytes,finished_at)
+                VALUES(%s,%s,'restore-original-key',%s,'{"smiles":"CC"}',
+                  'completed','completed',%s,'{"candidates":[{"smiles":"C.C"}]}',512,clock_timestamp())""",
+                      (task, user, "a" * 64, uuid4()))
+    name = "retro_restore_" + uuid4().hex
+    restore = make_conninfo(retro_schema_db["admin"], dbname=name)
+    with psycopg.connect(retro_schema_db["admin"], autocommit=True) as c:
+        c.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    try:
+        receipt = json.loads(backup_and_verify(retro_schema_db["admin"], restore,
+                                              tmp_path / "retrosynthesis-backup").read_text())
+        assert receipt["restore_verified"]
+        assert receipt["isolation_schema"]["retrosynthesis_schema"]["validated"]
+        with psycopg.connect(restore, row_factory=dict_row) as c:
+            assert validate_retrosynthesis_schema(c)["validated"]
+            c.execute("SET LOCAL ROLE nexpoly_api")
+            c.execute("SELECT set_config('app.user_id',%s,true)", (str(owner),))
+            rows = c.execute("SELECT job_id,idempotency_key,result_json FROM retrosynthesis.jobs").fetchall()
+            assert rows == [{"job_id": job, "idempotency_key": "restore-original-key",
+                             "result_json": {"candidates": [{"smiles": "C.C"}]}}]
+        with psycopg.connect(restore) as c:
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                c.execute("""INSERT INTO retrosynthesis.jobs(job_id,owner_user_id,idempotency_key,
+                    request_sha256,request_json,claim_token,storage_bytes)
+                    VALUES(%s,%s,'restore-original-key',%s,'{}',%s,512)""",
+                          (uuid4(), owner, "a" * 64, uuid4()))
+    finally:
+        with psycopg.connect(retro_schema_db["admin"], autocommit=True) as c:
+            c.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))

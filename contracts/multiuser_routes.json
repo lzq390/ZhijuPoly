@@ -1343,6 +1343,80 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/v1/monomer-retrosynthesis/jobs",
+      "feature": "F01",
+      "resource": "durable-retrosynthesis-job",
+      "permission": "member",
+      "frontend": "19111 capability gateway",
+      "cases": [
+        "F01",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-retrosynthesis/jobs/lookup",
+      "feature": "F01",
+      "resource": "durable-retrosynthesis-job",
+      "permission": "member",
+      "frontend": "19111 capability gateway",
+      "cases": [
+        "F01",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-retrosynthesis/jobs/{job_id}",
+      "feature": "F01",
+      "resource": "durable-retrosynthesis-job",
+      "permission": "member",
+      "frontend": "19111 capability gateway",
+      "cases": [
+        "F01",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-retrosynthesis/status",
+      "feature": "F01",
+      "resource": "retrosynthesis-capabilities",
+      "permission": "member",
+      "frontend": "19111 capability gateway",
+      "cases": [
+        "F01",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/monomer-retrosynthesis/targets/resolve",
+      "feature": "F01",
+      "resource": "retrosynthesis-target-resolution",
+      "permission": "member",
+      "frontend": "19111 capability gateway",
+      "cases": [
+        "F01",
+        "I01",
+        "I03"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/v1/online-knowledge/default-config",
       "feature": "F05",
