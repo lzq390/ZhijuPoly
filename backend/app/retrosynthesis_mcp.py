@@ -244,6 +244,19 @@ class MCPRuntime:
         self.get_journal().recover_submission(owner_id, self.config.account_uuid, key, job_id=job_id, job_status=job_status)
         return SubmissionOutput(job_id=job_id, status=job_status, replayed=True, effective_parameters=body)
 
+    async def recover_capacity_receipt(self, owner_id: str, key: str, body: dict, session: BackendSession) -> SubmissionOutput:
+        # Native admission can reject dispatch after committing an interrupted
+        # job. A 429 therefore needs its original receipt lookup before we may
+        # describe it as a rejection without a job. This operation never POSTs.
+        try:
+            return await self.recover(owner_id, key, body, session)
+        except MCPFailure as failure:
+            if failure.code == "SUBMISSION_NOT_RECEIVED":
+                self.check_status(429, {})
+            raise MCPFailure("SUBMISSION_OUTCOME_UNKNOWN", "Capacity admission returned without a verified receipt. Keep this frozen draft and key; recover the original receipt before continuing.") from None
+        except (httpx.HTTPError, ValidationError, ValueError):
+            raise MCPFailure("SUBMISSION_OUTCOME_UNKNOWN", "Capacity admission returned without a verified receipt. Keep this frozen draft and key; recover the original receipt before continuing.") from None
+
     async def submit(self, item: dict, owner_id: str, session: BackendSession) -> SubmissionOutput:
         journal, account = self.get_journal(), self.config.account_uuid
         key = "draft:" + item["draft_id"] + ":" + str(item["revision"])
@@ -257,6 +270,8 @@ class MCPRuntime:
             if record["state"] == "capacity":
                 raise MCPFailure("JOURNAL_CAPACITY_LIMITED", "Submission history is full; preserve it for operator migration.")
             if record["state"] == "rejected":
+                if record.get("error_code") == "CAPACITY_LIMITED":
+                    return await self.recover_capacity_receipt(owner_id, key, body, session)
                 raise MCPFailure(record.get("error_code") or "SUBMISSION_REJECTED", "This frozen submission was rejected; its original rejection is replayed.")
             try:
                 return await self.recover(owner_id, key, body, session)
@@ -267,8 +282,16 @@ class MCPRuntime:
                 # read or automatic recovery never reaches a second POST.
                 # PostgreSQL owns durable deduplication even if an older POST
                 # reaches the backend after this explicit retry.
+        capacity_lookup_attempted = False
         try:
             status, payload = await self.request("POST", API + "/jobs", session, body=body, idempotency_key=self.backend_key(owner_id, key))
+            if status == 429:
+                capacity_lookup_attempted = True
+                try:
+                    return await self.recover_capacity_receipt(owner_id, key, body, session)
+                except MCPFailure as failure:
+                    if failure.code != "CAPACITY_LIMITED":
+                        raise
             if status in {401, 403, 422, 429}:
                 try:
                     self.check_status(status, payload)
@@ -294,6 +317,8 @@ class MCPRuntime:
                 raise
             if record and record["state"] == "accepted":
                 return SubmissionOutput(job_id=record["job_id"], status=record["job_status"], replayed=True, effective_parameters=body)
+            if capacity_lookup_attempted:
+                raise MCPFailure("SUBMISSION_OUTCOME_UNKNOWN", "Capacity admission returned without a verified receipt. Keep this frozen draft and key; recover the original receipt before continuing.") from None
             try:
                 return await self.recover(owner_id, key, body, session)
             except MCPFailure as recovery:
@@ -309,25 +334,35 @@ class MCPRuntime:
             return self.draft_output(journal.create_draft(owner_id, account, args.conversation_id, await self.draft_values(args, session)))
         item = journal.read_draft(owner_id, account, args.conversation_id, args.draft_id)
         if name == "get_retrosynthesis_draft":
-            if item["state"] not in {"editing", "cancelled", "rejected"}:
+            if (item["state"] not in {"editing", "cancelled", "rejected"}
+                    or item["state"] == "rejected" and item["error_code"] == "CAPACITY_LIMITED"):
                 key = "draft:" + args.draft_id + ":" + str(item["revision"])
                 record = journal.submission_record(owner_id, account, key)
                 if record is not None:
                     submission = None
                     if record["state"] == "accepted":
                         submission = SubmissionOutput(job_id=record["job_id"], status=record["job_status"], replayed=True, effective_parameters=self.submission_body(item))
-                    elif record["state"] in {"dispatching", "outcome_unknown"}:
+                    elif (record["state"] in {"dispatching", "outcome_unknown"}
+                          or record["state"] == "rejected" and record["error_code"] == "CAPACITY_LIMITED"):
                         try:
-                            submission = await self.recover(owner_id, key, self.submission_body(item), session)
+                            recovery = self.recover_capacity_receipt if record["state"] == "rejected" else self.recover
+                            submission = await recovery(owner_id, key, self.submission_body(item), session)
                         except MCPFailure as failure:
-                            if failure.code not in {"SUBMISSION_OUTCOME_UNKNOWN", "SUBMISSION_NOT_RECEIVED"}:
+                            if failure.code == "CAPACITY_LIMITED" and record["state"] == "rejected":
+                                item = journal.finish_draft(owner_id, account, args.conversation_id, args.draft_id,
+                                    state="rejected", error_code="CAPACITY_LIMITED")
+                            elif failure.code not in {"SUBMISSION_OUTCOME_UNKNOWN", "SUBMISSION_NOT_RECEIVED"}:
                                 raise
+                            else:
+                                item = journal.finish_draft(owner_id, account, args.conversation_id, args.draft_id,
+                                    state="submission_unknown", error_code=failure.code)
+                        except (httpx.HTTPError, ValidationError, ValueError):
                             item = journal.finish_draft(owner_id, account, args.conversation_id, args.draft_id,
-                                state="submission_unknown", error_code=failure.code)
+                                state="submission_unknown", error_code="SUBMISSION_OUTCOME_UNKNOWN")
                     if submission:
                         item = journal.finish_draft(owner_id, account, args.conversation_id, args.draft_id, state="submitted", job_id=submission.job_id)
                         return self.draft_output(item, submission)
-                    if record["state"] == "rejected":
+                    if record["state"] == "rejected" and item["state"] != "submission_unknown":
                         item = journal.finish_draft(owner_id, account, args.conversation_id, args.draft_id, state="rejected", error_code=record["error_code"])
             return self.draft_output(item)
         journal._check_revision(item, args.revision)
