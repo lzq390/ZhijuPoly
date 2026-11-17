@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import contextlib
 import importlib.util
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -88,11 +89,11 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
         container["Config"]["Labels"]["com.docker.compose.service"] = dev.GATEWAY_SERVICE
         container["Image"] = "development-gateway-image"
         container["HostConfig"] = {"ReadonlyRootfs": True, "PortBindings": {}, "PublishAllPorts": False}
-        container["Mounts"] = [{"Type": "bind", "Source": str(self.runtime / "mcp-token"),
-            "Destination": "/run/capability-gateway/property-filter-token", "RW": False},
-            {"Type": "tmpfs", "Destination": "/tmp"}]
+        container["Mounts"] = [{"Type": "bind", "Source": str(self.runtime / name),
+            "Destination": destination, "RW": False} for name, destination in dev.GATEWAY_FILES.items()]
+        container["Mounts"].append({"Type": "tmpfs", "Destination": "/tmp"})
         container["NetworkSettings"] = {"Networks": {name: {"Aliases": [dev.GATEWAY_SERVICE]}
-            for name in (dev.DEV_NETWORK, "nexpoly_mcp_clients_dev", "nexpoly_dev_default")}}
+            for name in (dev.DEV_NETWORK, "nexpoly_mcp_clients_dev", "nexpoly_dev_default", dev.POLYTAO_CLIENT_NETWORK)}}
         return container
 
     def credential(self, *, url="http://127.0.0.1:18110/mcp"):
@@ -102,6 +103,31 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
         path.write_text("NEXPOLY_MCP_URL=" + url + "\nNEXPOLY_MCP_TOKEN=" + "a" * 48 + "\n")
         path.chmod(0o600)
         return path
+
+    def polytao_credential(self):
+        dev.private_directory()
+        directory = self.root / ".runtime/polytao-mcp"
+        directory.mkdir(mode=0o700)
+        (directory / "server").mkdir(mode=0o700)
+        identity = {"account_uuid": dev.POLYTAO_ACCOUNT_UUID, "backend_url": dev.POLYTAO_BACKEND_URL}
+        clients = []
+        for filename, token, client_id, owner, tools in (
+                ("client.env", "m" * 48, "openscience-polytao-dev", None, dev.POLYTAO_TOOLS),
+                ("ui-client.env", "u" * 48, "openscience-polytao-dev-ui", "openscience-polytao-dev", dev.POLYTAO_UI_TOOLS)):
+            path = directory / filename
+            path.write_text("NEXPOLY_MCP_URL=http://127.0.0.1:18111/mcp\nNEXPOLY_MCP_TOKEN=" + token + "\n")
+            path.chmod(0o600)
+            client = {"client_id": client_id, "token_sha256": hashlib.sha256(token.encode()).hexdigest(),
+                      "tools": list(tools), "expires_at": "2099-01-01T00:00:00+00:00"}
+            if owner:
+                client["owner_client_id"] = owner
+            clients.append(client)
+        for filename, value in (("identity.json", identity), ("clients.json", {"clients": clients})):
+            path = directory / "server" / filename
+            path.write_text(json.dumps(value))
+            path.chmod(0o600)
+        dev.write_private("polytao-source.json", json.dumps({"runtime": str(directory), **identity}))
+        return directory
 
     def owned_container(self):
         return {"Config": {"Labels": {"com.docker.compose.project": dev.PROJECT,
@@ -144,11 +170,11 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
         self.assertEqual(permission["mcp"], {"*": "deny", **dict.fromkeys(dev.TOOL_KEYS, "allow")})
         self.assertEqual({key for key, value in permission.items() if value == "allow"}, set(dev.TOOL_KEYS))
         self.assertEqual(result["agent"]["research"]["permission"]["mcp"],
-                         {"capability_gateway_dft_job_submit": "ask", **dict.fromkeys(dev.TOOL_KEYS, "allow")})
+                         {"capability_gateway_dft_job_submit": "ask", **dict.fromkeys(dev.MODEL_TOOL_KEYS, "allow")})
         self.assertEqual(result["mcp"][dev.MCP_NAME]["headers"]["Authorization"],
                          "Bearer {file:/run/openscience/gateway-token}")
         self.assertEqual(result["mcp"][dev.MCP_NAME]["url"], dev.GATEWAY_URL)
-        self.assertEqual(set(result["permission"]) - {"bash"}, set(dev.TOOL_KEYS))
+        self.assertEqual(set(result["permission"]) - {"bash"}, set(dev.MODEL_TOOL_KEYS))
         self.assertTrue(all(key.startswith("capability_gateway_") for key in dev.TOOL_KEYS))
         encoded = json.dumps(result)
         for private in ("production-only-gateway-token", "nexpoly_property_filter_", dev.MCP_URL,
@@ -191,7 +217,9 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
         environment = dict(line.split("=", 1) for line in value.splitlines())
         expected = {"ZHIJU_BASE_URL", "ZHIJU_ORIGIN", "ZHIJU_USERNAME", "ZHIJU_PASSWORD",
                     "ZHIJU_CAPABILITY_TOKEN", "LISTEN_HOST", "PROPERTY_FILTER_MCP_URL",
-                    "PROPERTY_FILTER_MCP_TOKEN_FILE", "PROPERTY_FILTER_MCP_TIMEOUT_MS"}
+                    "PROPERTY_FILTER_MCP_TOKEN_FILE", "PROPERTY_FILTER_MCP_TIMEOUT_MS", "POLYTAO_MCP_ENABLED",
+                    "POLYTAO_MCP_URL", "POLYTAO_MCP_MODEL_TOKEN_FILE", "POLYTAO_MCP_UI_TOKEN_FILE",
+                    "POLYTAO_GATEWAY_UI_TOKEN_FILE", "POLYTAO_MCP_TIMEOUT_MS"}
         self.assertEqual(set(environment), expected)
         self.assertEqual(environment["ZHIJU_CAPABILITY_TOKEN"], token)
         self.assertEqual(environment["LISTEN_HOST"], "0.0.0.0")
@@ -259,7 +287,9 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
     def test_prepared_files_separate_gateway_and_upstream_credentials(self):
         dev.private_directory()
         self.credential()
+        self.polytao_credential()
         dev.write_private("gateway-token", "b" * 48 + "\n")
+        dev.write_private("gateway-ui-token", "c" * 48 + "\n")
         with patch.object(dev, "read_source", return_value=json.dumps(self.source()).encode()), \
                 patch.object(dev, "gateway_source", return_value=self.production_gateway()):
             prepared = dev.prepared_files({})
@@ -274,6 +304,126 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
             "ZHIJU_CAPABILITY_TOKEN"], "b" * 48)
         self.assertNotIn("mcp-token", dev.PRIVATE_FILES)
         self.assertIn("gateway-token", dev.PRIVATE_FILES)
+        self.assertEqual(prepared["polytao-token"], "m" * 48 + "\n")
+        self.assertEqual(prepared["polytao-ui-token"], "u" * 48 + "\n")
+        self.assertEqual(prepared["gateway-ui-token"], "c" * 48 + "\n")
+        self.assertIn("gateway-ui-token", dev.PRIVATE_FILES)
+        self.assertNotIn("polytao-token", dev.PRIVATE_FILES)
+        self.assertNotIn("polytao-ui-token", dev.PRIVATE_FILES)
+        for private in ("m" * 48, "u" * 48, "c" * 48):
+            self.assertNotIn(private, prepared["openscience.json"])
+            self.assertNotIn(private, prepared["gateway.env"])
+
+    def test_polytao_source_requires_fixed_account_backend_endpoint_and_scoped_credentials(self):
+        directory = self.polytao_credential()
+        expected = {"polytao-token": "m" * 48 + "\n", "polytao-ui-token": "u" * 48 + "\n"}
+        self.assertEqual(dev.polytao_credentials(directory), expected)
+        self.assertEqual(dev.polytao_credentials(), expected)
+        for filename, field, value in (
+                ("server/identity.json", "account_uuid", "unapproved-account"),
+                ("server/identity.json", "backend_url", "http://unapproved-backend"),
+                ("polytao-source.json", "account_uuid", "unapproved-account")):
+            target = self.runtime / filename if filename == "polytao-source.json" else directory / filename
+            original = target.read_text()
+            payload = json.loads(original)
+            payload[field] = value
+            target.write_text(json.dumps(payload))
+            try:
+                with self.subTest(filename=filename, field=field), self.assertRaises(dev.DevError):
+                    dev.polytao_credentials()
+            finally:
+                target.write_text(original)
+        for filename in ("client.env", "ui-client.env"):
+            target = directory / filename
+            original = target.read_text()
+            for replacement in (original.replace("18111", "18110"),
+                                original.replace("NEXPOLY_MCP_TOKEN=", "NEXPOLY_MCP_TOKEN=private-secret "),
+                                original + "NEXPOLY_MCP_URL=http://127.0.0.1:18111/mcp\n"):
+                target.write_text(replacement)
+                with self.subTest(filename=filename), self.assertRaises(dev.DevError) as raised:
+                    dev.polytao_credentials(directory)
+                self.assertNotIn("private-secret", str(raised.exception))
+            target.write_text(original)
+
+    def test_polytao_source_rejects_wrong_client_owner_tools_hash_and_unsafe_files(self):
+        directory = self.polytao_credential()
+        target = directory / "server/clients.json"
+        original = target.read_text()
+        for index, field, value in ((0, "client_id", "other-client"), (0, "tools", []),
+                                   (0, "token_sha256", "0" * 64), (1, "owner_client_id", "other-owner"),
+                                   (1, "tools", list(dev.POLYTAO_TOOLS))):
+            payload = json.loads(original)
+            payload["clients"][index][field] = value
+            target.write_text(json.dumps(payload))
+            with self.subTest(index=index, field=field), self.assertRaises(dev.DevError):
+                dev.polytao_credentials(directory)
+        target.write_text(original)
+        for target in (directory, directory / "server", directory / "client.env", directory / "ui-client.env",
+                       directory / "server/identity.json", directory / "server/clients.json"):
+            previous_mode = stat.S_IMODE(target.stat().st_mode)
+            target.chmod(0o755 if target.is_dir() else 0o644)
+            with self.subTest(path=target.name), self.assertRaises(dev.DevError):
+                dev.polytao_credentials(directory)
+            target.chmod(previous_mode)
+        moved = directory.with_name("actual-polytao")
+        directory.rename(moved)
+        directory.symlink_to(moved)
+        with self.assertRaises(dev.DevError):
+            dev.polytao_credentials(directory)
+
+    def test_existing_research_identity_is_preserved_with_polytao_workflow_guidance(self):
+        source = self.source()
+        source["default_agent"] = "research"
+        source["agent"]["research"].update(prompt="Existing research instructions", model="existing-model", steps=12)
+        before = json.loads(json.dumps(source))
+        result = dev.configuration(source)
+        self.assertEqual(source, before)
+        self.assertEqual(result["default_agent"], "research")
+        research = result["agent"]["research"]
+        self.assertEqual((research["model"], research["steps"]), ("existing-model", 12))
+        self.assertTrue(research["prompt"].startswith("Existing research instructions\n\n"))
+        for text in ("capability_gateway_prepare_polytao_generation", "polymerize_monomers", "job_id",
+                     "capability_gateway_get_polytao_job", "不能代表用户确认"):
+            self.assertIn(text, research["prompt"])
+        self.assertNotIn("polytao-generation", result["agent"])
+
+    def test_model_and_ui_gateway_tokens_cannot_share_credentials(self):
+        self.polytao_credential()
+        self.credential()
+        for model, ui in (("b" * 48, "b" * 48), ("m" * 48, "c" * 48), ("b" * 48, "u" * 48)):
+            dev.write_private("gateway-token", model + "\n")
+            dev.write_private("gateway-ui-token", ui + "\n")
+            with self.subTest(model=model[:1], ui=ui[:1]), \
+                    patch.object(dev, "read_source", return_value=json.dumps(self.source()).encode()), \
+                    self.assertRaises(dev.DevError):
+                dev.prepared_files({})
+
+    def test_gateway_smoke_requires_complete_model_and_exact_ui_tool_inventory(self):
+        valid = {"model_tools": list(dev.NATIVE_TOOLS + dev.TOOLS + dev.POLYTAO_TOOLS),
+                 "ui_tools": list(dev.POLYTAO_UI_TOOLS)}
+        for mutation in (None, "missing-native", "missing-polytao", "ui-model-tool", "ui-duplicate", "extra-model"):
+            payload = json.loads(json.dumps(valid))
+            if mutation == "missing-native":
+                payload["model_tools"].remove("dft_job_status")
+            elif mutation == "missing-polytao":
+                payload["model_tools"].remove("prepare_polytao_generation")
+            elif mutation == "ui-model-tool":
+                payload["ui_tools"].append("prepare_polytao_generation")
+            elif mutation == "ui-duplicate":
+                payload["ui_tools"].append(payload["ui_tools"][0])
+            elif mutation == "extra-model":
+                payload["model_tools"].append("confirm_polytao_generation")
+            with self.subTest(mutation=mutation), patch.object(dev, "compose", return_value=json.dumps(payload)) as compose:
+                if mutation is None:
+                    self.assertEqual(dev.verify_gateway_routes(), valid)
+                else:
+                    with self.assertRaises(dev.DevError):
+                        dev.verify_gateway_routes()
+                self.assertEqual(compose.call_args.args[:5], ("exec", "-T", dev.GATEWAY_SERVICE, "bun", "-e"))
+                script = compose.call_args.args[-1]
+                self.assertIn("get_polytao_capabilities", script)
+                self.assertNotIn("confirm_polytao_generation", script)
+                self.assertNotIn("ZHIJU_PASSWORD", script)
 
     def test_private_gateway_rejects_exposed_ports_shared_aliases_or_foreign_token_mounts(self):
         for mutation in (None, "token-source", "token-destination", "token-writable", "extra-mount",
@@ -288,7 +438,7 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
             elif mutation == "extra-mount":
                 container["Mounts"].append({"Type": "bind", "Source": "/shared", "Destination": "/shared", "RW": False})
             elif mutation == "tmpfs":
-                container["Mounts"][1]["Destination"] = "/run"
+                container["Mounts"][-1]["Destination"] = "/run"
             elif mutation == "missing-network":
                 del container["NetworkSettings"]["Networks"]["nexpoly_mcp_clients_dev"]
             elif mutation == "extra-network":
@@ -308,6 +458,39 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
                 else:
                     with self.assertRaises(dev.DevError):
                         dev.verify_project_ownership()
+
+    def test_legacy_layout_is_only_accepted_for_explicit_stopped_migration_inspection(self):
+        gateway = self.owned_gateway()
+        gateway["Mounts"] = [gateway["Mounts"][0]]
+        del gateway["NetworkSettings"]["Networks"][dev.POLYTAO_CLIENT_NETWORK]
+        backend = self.owned_container()
+        backend["Mounts"] = [mount for mount in backend["Mounts"]
+                             if mount["Destination"] != dev.PRIVATE_FILES["gateway-ui-token"]]
+        for container in (gateway, backend):
+            with self.subTest(service=container["Config"]["Labels"]["com.docker.compose.service"]), \
+                    patch.object(dev, "run", return_value="container\n"), \
+                    patch.object(dev, "inspect", return_value=container):
+                with self.assertRaises(dev.DevError):
+                    dev.verify_project_ownership()
+                self.assertTrue(dev.verify_project_ownership(allow_legacy_layout=True))
+                with self.assertRaises(dev.DevError):
+                    dev.verify_project_ownership(require_ui_overlay=True, allow_legacy_layout=True)
+                container["Mounts"][0]["Source"] = "/unauthorized/secret"
+                with self.assertRaises(dev.DevError):
+                    dev.verify_project_ownership(allow_legacy_layout=True)
+
+    def test_new_gateway_requires_every_token_and_polytao_network_even_in_migration_mode(self):
+        for mutation in ("ui-token-writable", "ui-token-missing", "polytao-network-missing"):
+            gateway = self.owned_gateway()
+            if mutation == "ui-token-writable":
+                gateway["Mounts"][3]["RW"] = True
+            elif mutation == "ui-token-missing":
+                gateway["Mounts"].pop(3)
+            else:
+                del gateway["NetworkSettings"]["Networks"][dev.POLYTAO_CLIENT_NETWORK]
+            with self.subTest(mutation=mutation), patch.object(dev, "run", return_value="gateway\n"), \
+                    patch.object(dev, "inspect", return_value=gateway), self.assertRaises(dev.DevError):
+                dev.verify_project_ownership(allow_legacy_layout=True)
 
     def test_gateway_extension_requires_approved_base_layers_labels_and_nonroot_user(self):
         base = {"Id": dev.GATEWAY_BASE_IMAGE, "RootFS": {"Layers": ["gateway-base-layer"]}}
@@ -414,6 +597,8 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
         dev.private_directory()
         dev.write_private("protected-baseline.json", "{}")
         dev.write_private("gateway-token", "b" * 48 + "\n")
+        dev.write_private("gateway-ui-token", "c" * 48 + "\n")
+        self.polytao_credential()
         with patch.object(dev, "read_source", return_value=json.dumps(self.source()).encode()), \
                 patch.object(dev, "mcp_token", return_value="a" * 48), \
                 patch.object(dev, "gateway_source", return_value=self.production_gateway()), \
@@ -727,6 +912,38 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
         compose.assert_called_once_with("up", "-d", "--build", "--wait", "--wait-timeout", "120")
         self.assertEqual(ownership.call_count, 2)
         ownership.assert_called_with(require_ui_overlay=True)
+
+    def test_down_accepts_only_reviewed_legacy_layout_and_preserves_shared_baseline(self):
+        with patch.object(dev.sys, "argv", ["openscience_mcp_dev.py", "down"]), \
+                patch.object(dev, "operation_lock", return_value=contextlib.nullcontext()), \
+                patch.object(dev, "verify_project_ownership", return_value=True) as ownership, \
+                patch.object(dev, "compose", return_value="") as compose, \
+                patch.object(dev, "verify_shared", return_value=({}, {})), \
+                patch.object(dev, "protected_unchanged") as protected, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(dev.main(), 0)
+        ownership.assert_called_once_with(allow_legacy_layout=True)
+        compose.assert_called_once_with("down")
+        protected.assert_called_once_with({})
+
+    def test_setup_remembers_explicit_polytao_source_without_rotating_existing_gateway_token(self):
+        directory = self.polytao_credential()
+        (self.runtime / "polytao-source.json").unlink()
+        dev.write_private("gateway-token", "b" * 48 + "\n")
+        with patch.object(dev, "verify_project_ownership", return_value=False), \
+                patch.object(dev, "verify_shared", return_value=({}, {})), \
+                patch.object(dev, "prepared_files", return_value={}):
+            dev.setup(polytao_runtime=directory)
+        self.assertEqual(dev.gateway_token(), "b" * 48)
+        self.assertNotEqual(dev.gateway_token("gateway-ui-token"), dev.gateway_token())
+        self.assertEqual(dev.polytao_credentials(), {"polytao-token": "m" * 48 + "\n", "polytao-ui-token": "u" * 48 + "\n"})
+        previous = dev.read_private("polytao-source.json")
+        with patch.object(dev, "verify_project_ownership", return_value=True), \
+                patch.object(dev, "verify_shared", return_value=({}, {})), \
+                patch.object(dev, "polytao_credentials", return_value={}), \
+                patch.object(dev, "prepared_files") as prepared, self.assertRaises(dev.DevError):
+            dev.setup(polytao_runtime=self.root / "other-polytao-source")
+        prepared.assert_not_called()
+        self.assertEqual(dev.read_private("polytao-source.json"), previous)
 
     def test_private_baseline_detects_protected_changes(self):
         dev.private_directory()

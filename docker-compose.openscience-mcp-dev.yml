@@ -1,5 +1,5 @@
 # Separate development sessions and files; reuse the authorized 9011 knowledge
-# service. NexPoly tools use the independent development gateway.
+# knowledge service. NexPoly tools use the independent development gateway.
 name: nexpoly_openscience_dev
 
 services:
@@ -14,6 +14,9 @@ services:
         format: raw
     volumes:
       - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/mcp-token:/run/capability-gateway/property-filter-token:ro
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/polytao-token:/run/capability-gateway/polytao-token:ro
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/polytao-ui-token:/run/capability-gateway/polytao-ui-token:ro
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/gateway-ui-token:/run/capability-gateway/gateway-ui-token:ro
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m,mode=1777
@@ -23,7 +26,7 @@ services:
     mem_limit: 512m
     cpus: 1
     restart: "no"
-    networks: [default, mcp-clients, nexpoly-backend]
+    networks: [default, mcp-clients, polytao-mcp-clients, nexpoly-backend]
     healthcheck:
       test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3100/health'); if (!r.ok) process.exit(1)"]
       interval: 10s
@@ -129,6 +132,7 @@ services:
     volumes:
       - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/openscience.json:/run/openscience/openscience.json:ro
       - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/gateway-token:/run/openscience/gateway-token:ro
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/gateway-ui-token:/run/openscience/gateway-ui-token:ro
       - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/files:/openscience/files
       - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/records:/openscience/records
       - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME}/config:/var/lib/openscience/config
@@ -197,6 +201,9 @@ networks:
   mcp-clients:
     external: true
     name: nexpoly_mcp_clients_dev
+  polytao-mcp-clients:
+    external: true
+    name: nexpoly_polytao_mcp_clients_dev
   nexpoly-backend:
     external: true
     name: nexpoly_dev_default

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import test from "node:test"
-import { CONTENT_ADAPTER, PATCH_MARKER, patchPrompt } from "./patch.mjs"
+import { CONTENT_ADAPTER, CONVERSATION_ADAPTER, CONVERSATION_SCHEMA_ADAPTER, PATCH_MARKER, patchPrompt } from "./patch.mjs"
 
 const bindingGuard = `        if (key === "knowledge_service_kb_search") {
           const bound = await bindings(ctx.sessionID)
@@ -20,6 +20,7 @@ const bindingGuard = `        if (key === "knowledge_service_kb_search") {
         }
 `
 const source = `// representative deployed MCP adapter, with session binding and exact upstream anchors
+    for (const [key, item] of Object.entries(mcp)) {
 ${bindingGuard}        const result = await execute(args, opts)
 
         const textParts: string[] = []
@@ -81,4 +82,28 @@ test("tools without structured results keep their original content unchanged", (
   const content = [{ type: "text", text: "legacy tool result" }]
   assert.equal(adapt({ content }), content)
   assert.deepEqual(JSON.parse(adapt({ content: [], structuredContent: {} })[0].text), {})
+})
+
+const injectConversation = new Function("key", "args", "input", CONVERSATION_ADAPTER + "\nreturn args")
+const hideConversation = new Function("key", "item", "jsonSchema", CONVERSATION_SCHEMA_ADAPTER + "\nreturn item")
+
+test("draft ownership is injected only for exact gateway prepare/get tools and model schema hides it", () => {
+  for (const key of ["capability_gateway_prepare_polytao_generation", "capability_gateway_get_polytao_draft"]) {
+    const args = { conversation_id: "ses_forged", descriptors: { MolWt: 28 } }
+    assert.deepEqual(injectConversation(key, args, { session: { id: "ses_actual" } }),
+      { ...args, conversation_id: "ses_actual" })
+    const native = { type: "object", properties: { conversation_id: { type: "string" }, draft_id: { type: "string" } },
+      required: ["conversation_id", "draft_id"] }
+    const item = hideConversation(key, { inputSchema: { jsonSchema: native } }, schema => ({ jsonSchema: schema }))
+    assert.deepEqual(item.inputSchema.jsonSchema.required, ["draft_id"])
+    assert.ok(!Object.hasOwn(item.inputSchema.jsonSchema.properties, "conversation_id"))
+    assert.ok(Object.hasOwn(native.properties, "conversation_id"))
+  }
+  for (const key of ["knowledge_service_kb_search", "capability_gateway_search_polymers", "capability_gateway_polymerize_monomers",
+    "fake_capability_gateway_prepare_polytao_generation", "capability_gateway_confirm_polytao_generation"]) {
+    const args = { conversation_id: "original" }
+    assert.equal(injectConversation(key, args, { session: { id: "ses_actual" } }), args)
+    const item = { inputSchema: { jsonSchema: { properties: { conversation_id: {} }, required: ["conversation_id"] } } }
+    assert.equal(hideConversation(key, item, () => { throw new Error("Unrelated schema must stay intact") }), item)
+  }
 })

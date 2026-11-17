@@ -122,6 +122,10 @@ export function sessionInputAllowed(body) {
     }
   }
   if (body.parts !== undefined && !Array.isArray(body.parts)) return false
+  // Only the server bridge can persist an accepted-generation receipt. Client
+  // prompts cannot manufacture synthetic messages or saved MCP tool evidence.
+  if ((body.parts ?? []).some(part => !part || typeof part !== "object" || part.type === "tool"
+      || part.synthetic === true || Object.hasOwn(part.metadata ?? {}, "nexpoly_polytao_receipt"))) return false
   return true
 }
 
@@ -138,6 +142,10 @@ export async function devBoundary(c, next) {
     return c.json({ error: "This operation is disabled in the development UI." }, 403)
   }
   const name = routePath(pathname)
+  if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)
+      && /^\/session\/[^/]+\/message\/[^/]+(?:\/part\/[^/]+)?$/.test(name)) {
+    return c.json({ error: "Saved tool records and confirmation receipts cannot be changed by the development client." }, 403)
+  }
   const fileRoute = name === "/file" || name === "/file/content"
   const promptRoute = c.req.method === "POST" && /^\/session\/[^/]+\/(message|prompt_async)$/.test(name)
   const createSession = c.req.method === "POST" && name === "/session"

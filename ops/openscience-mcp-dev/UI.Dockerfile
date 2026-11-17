@@ -24,3 +24,7 @@ LABEL org.nexpoly.purpose="openscience-mcp-ui-development" \
 USER root
 COPY --from=patch /work/overlay/ /usr/share/nginx/html/
 USER 1001:1001
+# writeOverlay emits public files 0644 and directories 0755. Verify the copied
+# index and every new asset remain readable under nginx's actual runtime UID.
+RUN test -r /usr/share/nginx/html/index.html \
+    && for asset in /usr/share/nginx/html/assets/nexpoly-results/*/*; do test -r "$asset" || exit 1; done
