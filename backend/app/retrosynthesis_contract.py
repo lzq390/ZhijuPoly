@@ -24,4 +24,3 @@ def optional_retrosynthesis_tables(connection):
     if bool(row["present"]) != bool(ledger["present"]):
         raise ValueError("Retrosynthesis table and migration ledger disagree")
     return ("retrosynthesis.jobs",) if row["present"] else ()
-
