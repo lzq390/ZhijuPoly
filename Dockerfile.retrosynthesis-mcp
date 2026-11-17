@@ -1,0 +1,14 @@
+FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/backend
+
+WORKDIR /app
+COPY --chmod=644 backend/requirements-retrosynthesis-mcp.lock /tmp/requirements.lock
+RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r /tmp/requirements.lock
+COPY --chmod=644 backend/app/__init__.py backend/app/mcp_security.py backend/app/retrosynthesis_mcp.py backend/app/retrosynthesis_mcp_contract.py backend/app/retrosynthesis_mcp_security.py backend/app/retrosynthesis_mcp_journal.py /app/backend/app/
+
+USER 1001:1001
+EXPOSE 18211
+CMD ["python", "-m", "app.retrosynthesis_mcp"]
