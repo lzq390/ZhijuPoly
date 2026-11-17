@@ -87,7 +87,8 @@ def test_full_app_keeps_the_complete_main_router_without_starting_it(private_run
     assert app.state.polymer_md_reconciler is not None and app.state.polymer_md_reconciler.task is None
 
 
-def test_full_preflight_neither_starts_lifespan_nor_hides_missing_platform_data(private_runtime, monkeypatch):
+@pytest.mark.parametrize('target', ['polymer-md-0023', 'literature-0024', 'membership-0025', 'retrosynthesis-0026'])
+def test_full_preflight_neither_starts_lifespan_nor_hides_missing_platform_data(private_runtime, monkeypatch, target):
     runtime,assets,_,_=private_runtime
     from app import postgres_preflight
     from app.auth.service import AuthService
@@ -95,7 +96,7 @@ def test_full_preflight_neither_starts_lifespan_nor_hides_missing_platform_data(
 
     def probe(settings, **options):
         observed.append(options)
-        return {'schema_target':'polymer-md-0023','postgres':{'reachable':True,'tables':{'core.polymer_property_filter_records':0}},
+        return {'schema_target':target,'postgres':{'reachable':True,'tables':{'core.polymer_property_filter_records':0}},
             'analytics_snapshot':{'source':'postgres-missing'},'files':{'property_filter_csv':{'exists':True}},
             'strict_errors':['Property filter records are empty','Required Postgres analytics snapshot is missing or invalid',
                              'private error host=db password=must-not-escape']}
@@ -109,6 +110,26 @@ def test_full_preflight_neither_starts_lifespan_nor_hides_missing_platform_data(
     assert set(result['blocker_codes'])=={'property_filter_source_or_dataset_not_ready',
         'analytics_snapshot_missing_or_inconsistent','runtime_preflight_blocked'}
     assert 'password' not in json.dumps(result) and 'must-not-escape' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('target,ready', [
+    ('polymer-md-0023', True), ('literature-0024', True),
+    ('membership-0025', True), ('retrosynthesis-0026', True),
+    ('user-isolation-0020', False), ('retrosynthesis-0027', False), (None, False),
+])
+def test_full_preflight_accepts_only_reviewed_validated_boundaries(private_runtime, monkeypatch, target, ready):
+    runtime, assets, _, _ = private_runtime
+    from app import postgres_preflight
+    from app.auth.service import AuthService
+    report = {'schema_target': target, 'postgres': {'reachable': True, 'tables': {}},
+              'analytics_snapshot': {}, 'files': {}, 'strict_errors': []}
+    monkeypatch.setattr(postgres_preflight, 'run_preflight', lambda *_args, **_kwargs: report)
+    monkeypatch.setattr(postgres_preflight, 'preflight_blockers', lambda value: list(value['strict_errors']))
+    monkeypatch.setattr(AuthService, 'assert_application_ready', lambda _self: None)
+    result = harness.preflight_full_app(runtime, asset_root=assets)
+    assert result['ready'] is ready
+    assert result['blocker_count'] == (0 if ready else 1)
+    assert result['schema_target'] == target
 
 
 def test_private_reader_rejects_links_permissions_and_oversize(tmp_path):

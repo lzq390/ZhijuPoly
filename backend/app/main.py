@@ -49,6 +49,7 @@ from app.postgres_preflight import (
     SCHEMA_TARGET_POLYMER_MD,
     SCHEMA_TARGET_LITERATURE,
     SCHEMA_TARGET_BILLING,
+    SCHEMA_TARGET_RETROSYNTHESIS,
     preflight_blockers,
     run_preflight,
 )
@@ -762,8 +763,8 @@ def _run_database_startup_preflight(api_app: FastAPI, *, required: bool) -> None
         )
         errors = preflight_blockers(report)
         if (getattr(api_app.state.settings, "polymer_md_enabled", getattr(api_app.state.settings, "polymer_md_dev_enabled", False))
-                and report.get("schema_target") not in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING}):
-            errors.append("Polymer MD requires a validated current 0023/0024/0025 migration boundary")
+                and report.get("schema_target") not in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING, SCHEMA_TARGET_RETROSYNTHESIS}):
+            errors.append("Polymer MD requires a validated current 0023/0024/0025/0026 migration boundary")
         api_app.state.auth.assert_application_ready()
     except Exception as exc:
         errors = [f"database preflight failed: {type(exc).__name__}"]
