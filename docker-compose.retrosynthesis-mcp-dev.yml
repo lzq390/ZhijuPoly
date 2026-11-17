@@ -57,3 +57,6 @@ networks:
   development-clients:
     name: nexpoly_retrosynthesis_mcp_clients_dev
     internal: true
+    ipam:
+      config:
+        - subnet: 10.250.14.0/24
