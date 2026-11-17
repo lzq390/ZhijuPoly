@@ -8,7 +8,9 @@ WORKDIR /app
 COPY --chmod=644 backend/requirements-retrosynthesis-mcp.lock /tmp/requirements.lock
 RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r /tmp/requirements.lock
 COPY --chmod=644 backend/app/__init__.py backend/app/mcp_security.py backend/app/retrosynthesis_mcp.py backend/app/retrosynthesis_mcp_contract.py backend/app/retrosynthesis_mcp_security.py backend/app/retrosynthesis_mcp_journal.py /app/backend/app/
+RUN chmod 755 /app/backend /app/backend/app
 
 USER 1001:1001
+RUN python -c "import app.retrosynthesis_mcp"
 EXPOSE 18211
 CMD ["python", "-m", "app.retrosynthesis_mcp"]
