@@ -53,7 +53,7 @@ def test_readiness_backup_and_membership_survive_new_ledger(retro_schema_db, mon
         assert validate_retrosynthesis_schema(c)["validated"]
 
 
-@pytest.mark.parametrize("target", ["user-isolation-current", "retrosynthesis-0026"])
+@pytest.mark.parametrize("target", ["user-isolation-current", "membership-0025", "retrosynthesis-0026"])
 def test_service_api_preflight(retro_schema_db, target):
     from app.config import Settings
     from app.postgres_preflight import run_preflight
@@ -63,6 +63,34 @@ def test_service_api_preflight(retro_schema_db, target):
     assert report["schema_target"] == "retrosynthesis-0026"
     assert report["retrosynthesis_schema_ready"]
     assert report["billing_schema_ready"]
+    if target == "membership-0025":
+        assert report["requested_schema_target"] == target
+
+
+@pytest.mark.parametrize("drift", ["checksum", "unknown"])
+def test_membership_preflight_rejects_unregistered_successor(retro_schema_db, drift):
+    from app.config import Settings
+    from app.postgres_preflight import run_preflight
+    from task_usage.retrosynthesis_contract import RETROSYNTHESIS_CHECKSUM
+    settings = Settings(app_postgres_dsn=retro_schema_db["api"], pi_postgres_dsn=retro_schema_db["api"])
+    with psycopg.connect(retro_schema_db["admin"]) as c:
+        if drift == "checksum":
+            c.execute("UPDATE governance.schema_migrations SET checksum=%s WHERE version=%s",
+                      ("0" * 64, RETROSYNTHESIS_VERSION))
+        else:
+            c.execute("INSERT INTO governance.schema_migrations(version,checksum) VALUES('0027_unregistered',%s)",
+                      ("0" * 64,))
+    try:
+        report = run_preflight(settings, dsn=retro_schema_db["service"], mode="schema", strict=True,
+                               schema_target="membership-0025")
+        assert not report["strict_ok"]
+        assert report["schema_target"] == "membership-0025"
+        assert report.get("isolation_contract_error")
+    finally:
+        with psycopg.connect(retro_schema_db["admin"]) as c:
+            c.execute("UPDATE governance.schema_migrations SET checksum=%s WHERE version=%s",
+                      (RETROSYNTHESIS_CHECKSUM, RETROSYNTHESIS_VERSION))
+            c.execute("DELETE FROM governance.schema_migrations WHERE version='0027_unregistered'")
 
 
 def test_privilege_drift_is_rejected(retro_schema_db):

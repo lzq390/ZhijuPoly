@@ -536,6 +536,20 @@ def run_preflight(
             applied_migrations, duplicate_migrations = _postgres_applied_migrations(
                 connection
             )
+            if schema_target == SCHEMA_TARGET_BILLING:
+                # The membership launcher remains valid after the optional
+                # additive jobs migration, including while jobs are disabled.
+                # Promote only the complete reviewed successor, then perform
+                # all of its stronger schema, RLS and privilege checks below.
+                from app.retrosynthesis_contract import registered_retrosynthesis_ledger
+                successor = {item["version"]: item["checksum"]
+                             for item in registered_retrosynthesis_ledger()}
+                if applied_migrations == successor and not duplicate_migrations:
+                    schema_target = SCHEMA_TARGET_RETROSYNTHESIS
+                    required_migrations = _required_migrations(schema_target)
+                    report["requested_schema_target"] = SCHEMA_TARGET_BILLING
+                    report["schema_target"] = schema_target
+                    report["migrations"]["required"] = list(required_migrations)
             if schema_target == SCHEMA_TARGET_CURRENT_ISOLATION:
                 # Resolve only the supported current boundaries, then apply the
                 # same exact ledger, role, RLS and ACL checks as explicit targets.
