@@ -274,9 +274,9 @@ class SubmissionJournal:
 
     def recover_submission(self, client_id: str, account_uuid: str, key: str, *,
                            job_id: str, job_status: str) -> None:
-        """A native lookup may resolve a dispatched or previously uncertain POST."""
+        """Native receipts also repair legacy 429 rejections after dispatch admission."""
         with self._transaction() as db:
-            cursor = db.execute("UPDATE submissions SET state='accepted',job_id=?,job_status=?,error_code=NULL,updated_at=? WHERE client_id=? AND account_uuid=? AND idempotency_key=? AND state IN ('dispatching','outcome_unknown','accepted') AND (state<>'accepted' OR job_id=?)",
+            cursor = db.execute("UPDATE submissions SET state='accepted',job_id=?,job_status=?,error_code=NULL,updated_at=? WHERE client_id=? AND account_uuid=? AND idempotency_key=? AND (state IN ('dispatching','outcome_unknown','accepted') OR (state='rejected' AND error_code='CAPACITY_LIMITED')) AND (state<>'accepted' OR job_id=?)",
                                 (job_id, job_status, utc_now(), client_id, account_uuid, key, job_id))
             if cursor.rowcount != 1:
                 raise JournalError("No uncertain submission can be recovered")

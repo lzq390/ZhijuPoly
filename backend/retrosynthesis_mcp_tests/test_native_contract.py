@@ -23,7 +23,7 @@ if not os.environ.get("ISOLATION_TEST_ADMIN_DSN") or not os.environ.get("RETROSY
         raise RuntimeError("Mandatory native HTTP contract requires disposable PG and the independent locked MCP runtime")
     pytest.skip("Native HTTP contract requires the disposable backend and locked MCP runtime", allow_module_level=True)
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import uvicorn
 from app.auth.context import Identity, user_context
 from app.routers.monomer_retrosynthesis import router
@@ -52,6 +52,7 @@ async def sdk(app,token):
 async def main():
  values=json.load(sys.stdin)
  drop_first=values.pop("simulate_lost_before_receive",False)
+ dispatch_rejected=values.pop("simulate_dispatch_rejected",False)
  for name in ("session_file","clients_file","journal_file"): values[name]=Path(values[name])
  class DropFirst(httpx.AsyncBaseTransport):
   def __init__(self): self.dropped=False; self.delegate=httpx.AsyncHTTPTransport(retries=0)
@@ -82,20 +83,28 @@ async def main():
    assert second.structured_content["job_id"]==job_id and second.structured_content["submission"]["replayed"]
   snapshot=await model.call_tool("get_retrosynthesis_job",{"conversation_id":"ses_native","job_id":job_id,"wait_seconds":20})
   assert not snapshot.is_error,snapshot.structured_content
-  assert snapshot.structured_content["status"]=="completed"
-  result=snapshot.structured_content["result"]
-  assert result["target_role"]=="other" and result["inferred_target_role"]=="diamine"
-  assert "device" not in result and "detected_target_role" not in result
+  if dispatch_rejected:
+   assert snapshot.structured_content["status"]=="interrupted"
+   assert snapshot.structured_content["error_code"]=="submission_rejected" and snapshot.structured_content["result"] is None
+  else:
+   assert snapshot.structured_content["status"]=="completed"
+   result=snapshot.structured_content["result"]
+   assert result["target_role"]=="other" and result["inferred_target_role"]=="diamine"
+   assert "device" not in result and "detected_target_role" not in result
   print("SDK_NATIVE_HTTP_OK")
 asyncio.run(main())
 '''
 
 
-@pytest.mark.parametrize("lost_before_receive", [False, True])
-def test_real_native_http_postgres_and_mcp_sdk_confirm_once(configuration, repo, monkeypatch, tmp_path, lost_before_receive):
+@pytest.mark.parametrize("lost_before_receive,dispatch_rejected", [(False, False), (True, False), (False, True)])
+def test_real_native_http_postgres_and_mcp_sdk_confirm_once(configuration, repo, monkeypatch, tmp_path, lost_before_receive, dispatch_rejected):
     calls = []
     with user_context(Identity(A)):
         manager = make_manager(repo, monkeypatch, runner=lambda **kwargs: calls.append(1) or response(**kwargs))
+        if dispatch_rejected:
+            def reject_dispatch(*_args, **_kwargs):
+                raise HTTPException(429, detail="Synthetic owner admission capacity limit")
+            monkeypatch.setattr("app.services.retrosynthesis_jobs.submit_private_job", reject_dispatch)
         model = tmp_path / "model"
         model.mkdir()
         (model / "config.json").write_text("{}")
@@ -133,11 +142,12 @@ def test_real_native_http_postgres_and_mcp_sdk_confirm_once(configuration, repo,
                 + os.pathsep + str(Path(__file__).resolve().parents[1]))
             settings = {"backend_url": config.backend_url, "account_uuid": A,
                 "simulate_lost_before_receive": lost_before_receive,
+                "simulate_dispatch_rejected": dispatch_rejected,
                 **{name: str(getattr(config, name)) for name in ("session_file", "clients_file", "journal_file")}}
             result = subprocess.run([sys.executable, "-c", CHILD], input=json.dumps(settings), text=True,
                 capture_output=True, env=child_env, timeout=45)
             assert result.returncode == 0, result.stdout + result.stderr
-            assert "SDK_NATIVE_HTTP_OK" in result.stdout and calls == [1]
+            assert "SDK_NATIVE_HTTP_OK" in result.stdout and calls == ([] if dispatch_rejected else [1])
             with repo.connection() as connection:
                 assert connection.execute("SELECT count(*) AS n FROM retrosynthesis.jobs").fetchone()["n"] == 1
         finally:

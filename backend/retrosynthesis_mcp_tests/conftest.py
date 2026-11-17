@@ -72,6 +72,8 @@ class NativeBackend:
         self.accepted_count = 0
         self.first_post_entered = self.release_first_post = None
         self.first_post_status = None
+        self.rejected_job_receipt = False
+        self.lookup_transport_error = False
 
     async def __call__(self, request):
         from app.retrosynthesis_mcp import API
@@ -100,6 +102,10 @@ class NativeBackend:
             if first_post and self.first_post_status is not None:
                 return httpx.Response(self.first_post_status, json={"detail": "PRIVATE_LATE_REJECTION"})
             if self.submit_status != 202:
+                if self.rejected_job_receipt:
+                    receipt = job_response(status="interrupted")
+                    receipt.update(stage="interrupted", result=None, error_code="submission_rejected")
+                    self.jobs.setdefault(request.headers["idempotency-key"], receipt)
                 return httpx.Response(self.submit_status, json={"detail": "PRIVATE_BACKEND_ERROR"})
             key = request.headers["idempotency-key"]
             if key not in self.jobs:
@@ -109,10 +115,12 @@ class NativeBackend:
                 raise httpx.ReadError("PRIVATE_NETWORK_ERROR")
             return httpx.Response(202, json={"job_id": "retro_test", "status": "pending"})
         if request.url.path == API + "/jobs/lookup":
+            if self.lookup_transport_error:
+                raise httpx.ReadError("PRIVATE_LOOKUP_FAILURE")
             job = self.jobs.get(request.url.params["idempotency_key"])
             return httpx.Response(200, json=job) if job and not self.lookup_missing else httpx.Response(404, json={"detail": "not found"})
         if request.url.path == API + "/jobs/retro_test":
-            return httpx.Response(200, json=job_response())
+            return httpx.Response(200, json=next(iter(self.jobs.values()), job_response()))
         raise AssertionError(f"Unexpected synthetic path: {request.url.path}")
 
     @property
