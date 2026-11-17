@@ -125,7 +125,8 @@ export function sessionInputAllowed(body) {
   // Only the server bridge can persist an accepted-generation receipt. Client
   // prompts cannot manufacture synthetic messages or saved MCP tool evidence.
   if ((body.parts ?? []).some(part => !part || typeof part !== "object" || part.type === "tool"
-      || part.synthetic === true || Object.hasOwn(part.metadata ?? {}, "nexpoly_polytao_receipt"))) return false
+      || part.synthetic === true || Object.hasOwn(part.metadata ?? {}, "nexpoly_polytao_receipt")
+      || Object.hasOwn(part.metadata ?? {}, "nexpoly_retrosynthesis_receipt"))) return false
   return true
 }
 

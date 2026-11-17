@@ -24,13 +24,13 @@ export const CONTENT_ADAPTER = `        // ${PATCH_MARKER}: preserve structured 
 `
 
 export const CONVERSATION_ADAPTER = `        // Bind draft ownership to the current server session, never a model-supplied ID.
-        if (["capability_gateway_prepare_polytao_generation", "capability_gateway_get_polytao_draft"].includes(key)) {
+        if (["capability_gateway_prepare_polytao_generation", "capability_gateway_get_polytao_draft", "capability_gateway_prepare_monomer_retrosynthesis", "capability_gateway_resolve_retrosynthesis_target", "capability_gateway_get_retrosynthesis_draft", "capability_gateway_get_retrosynthesis_job"].includes(key)) {
           args = { ...args, conversation_id: input.session.id }
         }
 `
 
 export const CONVERSATION_SCHEMA_ADAPTER = `      // conversation_id is server context, not a parameter for the model to infer.
-      if (["capability_gateway_prepare_polytao_generation", "capability_gateway_get_polytao_draft"].includes(key)) {
+      if (["capability_gateway_prepare_polytao_generation", "capability_gateway_get_polytao_draft", "capability_gateway_prepare_monomer_retrosynthesis", "capability_gateway_resolve_retrosynthesis_target", "capability_gateway_get_retrosynthesis_draft", "capability_gateway_get_retrosynthesis_job"].includes(key)) {
         const nativeSchema = item.inputSchema.jsonSchema
         const properties = { ...nativeSchema.properties }
         delete properties.conversation_id
@@ -68,7 +68,7 @@ export function patchServer(source, expectedHash = EXPECTED_SERVER_SHA256) {
     throw new Error("Unexpected OpenScience server source; refusing HTTP boundary patch")
   }
   let patched = replaceOnce(source, 'import { Session } from "../session"',
-    'import { Session } from "../session"\nimport { SessionPrompt } from "../session/prompt"\nimport { devBoundary, workspacePath } from "./nexpoly-dev-boundary.mjs"\nimport { createPolytaoFormBoundary } from "./polytao-form-bridge.mjs"')
+    'import { Session } from "../session"\nimport { SessionPrompt } from "../session/prompt"\nimport { devBoundary, workspacePath } from "./nexpoly-dev-boundary.mjs"\nimport { createPolytaoFormBoundary } from "./polytao-form-bridge.mjs"\nimport { createRetrosynthesisFormBoundary } from "./retrosynthesis-form-bridge.mjs"')
   return replaceOnce(patched, '        .route("/global", GlobalRoutes())',
     `        .use(devBoundary)
         .use(createPolytaoFormBoundary({
@@ -79,13 +79,31 @@ export function patchServer(source, expectedHash = EXPECTED_SERVER_SHA256) {
             return Session.messages({ sessionID, limit: 1000 })
           },
           assertNotBusy: (sessionID) => SessionPrompt.assertNotBusy(sessionID),
-          persistReceipt: async (sessionID, text, receipt) => {
+          persistReceipt: async (sessionID, text, receipt, receiptKey) => {
             const messages = await Session.messages({ sessionID, limit: 1000 })
             const user = messages.findLast(message => message.info.role === "user")?.info
             if (!user) throw new Error("No conversation user context")
             return SessionPrompt.prompt({ sessionID, agent: user.agent, model: user.model,
               noReply: true, parts: [{ type: "text", synthetic: true, text,
-                metadata: { nexpoly_polytao_receipt: receipt } }] })
+                metadata: { [receiptKey]: receipt } }] })
+          },
+          resume: (sessionID) => SessionPrompt.loop(sessionID),
+        }))
+        .use(createRetrosynthesisFormBoundary({
+          validateDirectory: (directory) => workspacePath(directory, ""),
+          withSession: (directory, fn) => Instance.provide({ directory, init: InstanceBootstrap, fn }),
+          getMessages: async (sessionID) => {
+            await Session.get(sessionID)
+            return Session.messages({ sessionID, limit: 1000 })
+          },
+          assertNotBusy: (sessionID) => SessionPrompt.assertNotBusy(sessionID),
+          persistReceipt: async (sessionID, text, receipt, receiptKey) => {
+            const messages = await Session.messages({ sessionID, limit: 1000 })
+            const user = messages.findLast(message => message.info.role === "user")?.info
+            if (!user) throw new Error("No conversation user context")
+            return SessionPrompt.prompt({ sessionID, agent: user.agent, model: user.model,
+              noReply: true, parts: [{ type: "text", synthetic: true, text,
+                metadata: { [receiptKey]: receipt } }] })
           },
           resume: (sessionID) => SessionPrompt.loop(sessionID),
         }))

@@ -14,35 +14,41 @@ export function patchGateway(source) {
     source = source.replace(before, after)
   }
   replace('import { logEvent } from "./log";',
-    'import { logEvent } from "./log";\nimport { propertyFilterProxy, isPropertyFilterTool } from "./property-filter";\nimport { polytaoProxy, isPolytaoTool, isPolytaoAudienceTool } from "./polytao";\nimport type { PolytaoAudience } from "./polytao";')
+    'import { logEvent } from "./log";\nimport { propertyFilterProxy, isPropertyFilterTool } from "./property-filter";\nimport { polytaoProxy, isPolytaoTool, isPolytaoAudienceTool } from "./polytao";\nimport type { PolytaoAudience } from "./polytao";\nimport { retrosynthesisProxy, isRetrosynthesisTool, isRetrosynthesisAudienceTool } from "./retrosynthesis";')
   replace('export async function handleMcpRequest(request: Request): Promise<Response> {',
     'export async function handleMcpRequest(request: Request, audience: PolytaoAudience = "model"): Promise<Response> {')
   replace('  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));',
     `  // nexpoly-polytao-gateway-v1: every request carries its authenticated audience.
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     if (audience === "ui") {
-      try { return { tools: await polytaoProxy.listTools("ui") }; }
-      catch {
-        logEvent({ evt: "polytao_ui_registry_unavailable", error: "Polymer generation is temporarily unavailable" });
-        return { tools: [] };
-      }
+      const results = await Promise.allSettled([polytaoProxy.listTools("ui"), retrosynthesisProxy.listTools("ui")]);
+      return { tools: results.flatMap(result => result.status === "fulfilled" ? result.value : []) };
     }
-    const [filter, polytao] = await Promise.allSettled([
-      propertyFilterProxy.listTools(), polytaoProxy.listTools("model"),
+    const [filter, polytao, retrosynthesis] = await Promise.allSettled([
+      propertyFilterProxy.listTools(), polytaoProxy.listTools("model"), retrosynthesisProxy.listTools("model"),
     ]);
     if (filter.status === "rejected")
       logEvent({ evt: "filter_registry_unavailable", error: "Property filtering is temporarily unavailable" });
     if (polytao.status === "rejected")
       logEvent({ evt: "polytao_registry_unavailable", error: "Polymer generation is temporarily unavailable" });
+    if (retrosynthesis.status === "rejected")
+      logEvent({ evt: "retrosynthesis_registry_unavailable", error: "Monomer retrosynthesis is temporarily unavailable" });
     return { tools: [...TOOLS,
       ...(filter.status === "fulfilled" ? filter.value : []),
-      ...(polytao.status === "fulfilled" ? polytao.value : [])] };
+      ...(polytao.status === "fulfilled" ? polytao.value : []),
+      ...(retrosynthesis.status === "fulfilled" ? retrosynthesis.value : [])] };
   });`)
   replace('    try {\n      let result: unknown;',
     `    try {
-      if ((audience === "ui" && !isPolytaoAudienceTool(params.name, "ui"))
-          || (isPolytaoTool(params.name) && !isPolytaoAudienceTool(params.name, audience))) {
+      if ((audience === "ui" && !isPolytaoAudienceTool(params.name, "ui") && !isRetrosynthesisAudienceTool(params.name, "ui"))
+          || (isPolytaoTool(params.name) && !isPolytaoAudienceTool(params.name, audience))
+          || (isRetrosynthesisTool(params.name) && !isRetrosynthesisAudienceTool(params.name, audience))) {
         return { isError: true, content: [{ type: "text", text: "This gateway credential cannot access this tool." }] };
+      }
+      if (isRetrosynthesisTool(params.name)) {
+        const result = await retrosynthesisProxy.callTool(params.name, params.arguments ?? {}, audience);
+        ok = !result.isError;
+        return result;
       }
       if (isPolytaoTool(params.name)) {
         const result = await polytaoProxy.callTool(params.name, params.arguments ?? {}, audience);
@@ -68,10 +74,11 @@ export function patchGatewayServer(source) {
     source = source.replace(before, after)
   }
   replace('import { logEvent, redact } from "./log";',
-    'import { logEvent, redact } from "./log";\nimport { authenticatePolytaoUi } from "./polytao";')
+    'import { logEvent, redact } from "./log";\nimport { authenticatePolytaoUi } from "./polytao";\nimport { authenticateRetrosynthesisUi } from "./retrosynthesis";')
   replace('      if (!authenticated(request.headers.get("Authorization")))',
     `      const modelAuthenticated = authenticated(request.headers.get("Authorization"));
-      const uiAuthenticated = !modelAuthenticated && await authenticatePolytaoUi(request.headers.get("Authorization"), env);
+      const uiAuthenticated = !modelAuthenticated && (await authenticatePolytaoUi(request.headers.get("Authorization"), env)
+        || await authenticateRetrosynthesisUi(request.headers.get("Authorization"), env));
       if (!modelAuthenticated && !uiAuthenticated)`)
   replace('      return response = await handleMcpRequest(request);',
     '      return response = await handleMcpRequest(request, uiAuthenticated ? "ui" : "model");')

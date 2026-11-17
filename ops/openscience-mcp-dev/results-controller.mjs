@@ -1,6 +1,7 @@
 /** Inline display of original read-only tool results in the development UI. */
 import { extractFilterTurns, renderFilterResult, extractPolytaoTurns, renderPolytaoResult,
-  extractPolytaoDrafts, renderPolytaoDraft } from "./results-view.mjs"
+  extractPolytaoDrafts, renderPolytaoDraft, extractRetrosynthesisDrafts, renderRetrosynthesisDraft,
+  extractRetrosynthesisTurns, renderRetrosynthesisResult } from "./results-view.mjs"
 
 const API_PREFIX = "/openscience-api/"
 const SESSION_ID = /^ses_[A-Za-z0-9_-]+$/
@@ -16,6 +17,16 @@ export function polytaoDraftBridgeBody(sessionId, directory, action, input) {
   for (const name of ["descriptors", "parameters", "reference_smiles"]) {
     if (Object.hasOwn(input, name)) result[name] = input[name]
   }
+  return result
+}
+
+export function retrosynthesisDraftBridgeBody(sessionId, directory, action, input) {
+  if (!SESSION_ID.test(sessionId) || !managedDirectory(directory)
+      || !["get", "resolve", "update", "cancel", "confirm", "continue"].includes(action)
+      || !input || !/^rtd_[a-f0-9]{32}$/.test(input.draft_id ?? "") || !Number.isSafeInteger(input.revision)
+      || input.revision < 1) throw new TypeError("A current session and retrosynthesis draft revision are required")
+  const result = { session_id: sessionId, directory, action, draft_id: input.draft_id, revision: input.revision }
+  for (const name of ["target", "parameters"]) if (Object.hasOwn(input, name)) result[name] = input[name]
   return result
 }
 
@@ -84,7 +95,9 @@ export function startResultsUi(win = window, doc = document) {
     try {
       records.delete(key)
       records.set(key, { messages, models: [...extractFilterTurns(messages), ...extractPolytaoTurns(messages),
-        ...extractPolytaoDrafts(messages).filter(model => model.draft.conversation_id === sessionId)], updatedAt: Date.now() })
+        ...extractPolytaoDrafts(messages).filter(model => model.draft.conversation_id === sessionId),
+        ...extractRetrosynthesisTurns(messages),
+        ...extractRetrosynthesisDrafts(messages).filter(model => model.draft.conversation_id === sessionId)], updatedAt: Date.now() })
       while (records.size > 5) records.delete(records.keys().next().value)
       scheduleMount()
     } catch { /* An unavailable panel must not break the normal conversation. */ }
@@ -173,17 +186,19 @@ export function startResultsUi(win = window, doc = document) {
       if (host._nexpolySignature !== signature) {
         const fragments = models.map(model => {
           if (model.kind === "polytao") return renderPolytaoResult(doc, model)
-          if (model.kind !== "polytao-draft") return renderFilterResult(doc, model)
+          if (model.kind === "retrosynthesis") return renderRetrosynthesisResult(doc, model)
+          if (!["polytao-draft", "retrosynthesis-draft"].includes(model.kind)) return renderFilterResult(doc, model)
+          const retro = model.kind === "retrosynthesis-draft"
           const panelKey = `${key}\0${model.draft.draft_id}`
           let panel = draftPanels.get(panelKey)
           if (!panel) {
-            panel = renderPolytaoDraft(doc, model, {
+            panel = (retro ? renderRetrosynthesisDraft : renderPolytaoDraft)(doc, model, {
               perform: async (action, input) => {
                 if (sessionFromPath(win.location.pathname) !== sessionId || directories.get(sessionId) !== directory) {
                   throw new Error("SESSION_CHANGED")
                 }
-                const body = polytaoDraftBridgeBody(sessionId, directory, action, input)
-                const address = new URL(`${API_PREFIX}nexpoly/polytao/draft`, win.location.origin)
+                const body = (retro ? retrosynthesisDraftBridgeBody : polytaoDraftBridgeBody)(sessionId, directory, action, input)
+                const address = new URL(`${API_PREFIX}nexpoly/${retro ? "retrosynthesis" : "polytao"}/draft`, win.location.origin)
                 const controller = new AbortController()
                 const timeout = win.setTimeout(() => controller.abort(), 35000)
                 try {
@@ -213,7 +228,7 @@ export function startResultsUi(win = window, doc = document) {
         host._nexpolySignature = signature
       }
       const response = content.querySelector('[data-slot="session-turn-response"]')
-      const hideJson = models.some(model => model.search || model.histograms?.length || model.kind === "polytao")
+      const hideJson = models.some(model => model.search || model.histograms?.length || ["polytao", "retrosynthesis"].includes(model.kind))
         && originalAnswerIsJson(record.messages, turnId)
       if (response) response.classList.toggle("nexpoly-original-answer-hidden", hideJson && host.dataset.originalExpanded !== "true")
       let toggle = host.querySelector("[data-nexpoly-original-toggle]")

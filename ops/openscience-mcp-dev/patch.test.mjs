@@ -88,7 +88,9 @@ const injectConversation = new Function("key", "args", "input", CONVERSATION_ADA
 const hideConversation = new Function("key", "item", "jsonSchema", CONVERSATION_SCHEMA_ADAPTER + "\nreturn item")
 
 test("draft ownership is injected only for exact gateway prepare/get tools and model schema hides it", () => {
-  for (const key of ["capability_gateway_prepare_polytao_generation", "capability_gateway_get_polytao_draft"]) {
+  for (const key of ["capability_gateway_prepare_polytao_generation", "capability_gateway_get_polytao_draft",
+    "capability_gateway_prepare_monomer_retrosynthesis", "capability_gateway_resolve_retrosynthesis_target",
+    "capability_gateway_get_retrosynthesis_draft", "capability_gateway_get_retrosynthesis_job"]) {
     const args = { conversation_id: "ses_forged", descriptors: { MolWt: 28 } }
     assert.deepEqual(injectConversation(key, args, { session: { id: "ses_actual" } }),
       { ...args, conversation_id: "ses_actual" })
