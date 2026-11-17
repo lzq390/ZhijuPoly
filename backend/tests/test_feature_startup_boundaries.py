@@ -6,14 +6,15 @@ import pytest
 from app import main
 from app.postgres_preflight import (SCHEMA_TARGET_CURRENT_ISOLATION,
                                    SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_BILLING,
-                                   SCHEMA_TARGET_STRUCTURE_LIBRARY)
+                                   SCHEMA_TARGET_RETROSYNTHESIS, SCHEMA_TARGET_STRUCTURE_LIBRARY)
 
 
 @pytest.mark.parametrize("md_settings", [
     {"polymer_md_dev_enabled": True},
     {"polymer_md_enabled": True, "polymer_md_dev_enabled": False},
 ], ids=["legacy-development-setting", "production-enabled-setting"])
-@pytest.mark.parametrize("boundary", [SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING])
+@pytest.mark.parametrize("boundary", [SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE,
+                                      SCHEMA_TARGET_BILLING, SCHEMA_TARGET_RETROSYNTHESIS])
 def test_md_startup_accepts_only_validated_current_private_boundaries(monkeypatch, boundary, md_settings):
     check = Mock(return_value={"schema_target": boundary})
     monkeypatch.setattr(main, "run_preflight", check)
@@ -48,7 +49,8 @@ def test_md_startup_rejects_missing_md_even_when_legacy_startup_is_optional(monk
     {"polymer_md_dev_enabled": True},
     {"polymer_md_enabled": True, "polymer_md_dev_enabled": False},
 ], ids=["legacy-development-setting", "production-enabled-setting"])
-@pytest.mark.parametrize("boundary", [SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING])
+@pytest.mark.parametrize("boundary", [SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING,
+                                      SCHEMA_TARGET_RETROSYNTHESIS])
 def test_md_startup_never_discards_a_current_boundary_blocker(monkeypatch, boundary, md_settings):
     monkeypatch.setattr(main, "run_preflight", lambda *args, **kwargs: {"schema_target": boundary})
     monkeypatch.setattr(main, "preflight_blockers", lambda report: ["schema drift"])

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.services.monomer_dft_schema import probe_monomer_dft_schema
 
-PRIVATE_SCHEMAS = ("billing", "usage", "usage_entitlements", "structure_library", "auth", "governance", "online_knowledge", "md", "monomer_dft", "polymerization_batch", "polymer_md", "knowledge")
+PRIVATE_SCHEMAS = ("retrosynthesis", "billing", "usage", "usage_entitlements", "structure_library", "auth", "governance", "online_knowledge", "md", "monomer_dft", "polymerization_batch", "polymer_md", "knowledge")
 OWNER_TABLES = {
     "online_knowledge.history": "history_id", "online_knowledge.jobs": "job_id",
     "md.monomer_md_jobs": "job_id", "monomer_dft.jobs": "job_id",
@@ -17,10 +17,10 @@ CHILD_TABLES = {
 
 
 def owner_tables(connection, through: str | None = None):
-    from .isolation_ledger import LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION
+    from .isolation_ledger import LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION, RETROSYNTHESIS_VERSION
     if through is None:
         through = connection.execute("SELECT max(version) AS version FROM governance.schema_migrations").fetchone()["version"]
-    return {**OWNER_TABLES, **({"structure_library.records": "id"} if through in {LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION} else {})}
+    return {**OWNER_TABLES, **({"structure_library.records": "id"} if through in {LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, BILLING_VERSION, RETROSYNTHESIS_VERSION} else {})}
 
 
 def ownership_tables(connection, through: str | None = None):
@@ -32,6 +32,8 @@ def ownership_tables(connection, through: str | None = None):
         children.update({f"polymer_md.{table}": ("polymer_md.jobs", "job_id", key) for table, key in (
             ("job_attempts", "job_id,attempt"), ("stage_runs", "job_id,stage_run_id"),
             ("artifacts", "job_id,artifact_id"))})
+    if connection.execute("SELECT to_regclass('retrosynthesis.jobs') IS NOT NULL AS present").fetchone()["present"]:
+        owners["retrosynthesis.jobs"] = "job_id"
     return owners, children
 
 
@@ -167,6 +169,9 @@ def validate_isolation_schema(connection, through: str | None = None):
         if "polymer_md.jobs" in owners:
             from app.services.polymer_md_schema import validate_polymer_md_schema
             validate_polymer_md_schema(connection)
+        if "retrosynthesis.jobs" in owners:
+            from app.services.retrosynthesis_schema import validate_retrosynthesis_schema
+            validate_retrosynthesis_schema(connection)
         dft = probe_monomer_dft_schema(connection)
         if not dft.ready:
             raise ValueError("DFT schema is not canonical: " + dft.reason)

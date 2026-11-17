@@ -257,6 +257,7 @@ ACTIVE_JOB_FIELDS_V1 = frozenset(
 ACTIVE_JOB_FIELDS_V2 = ACTIVE_JOB_FIELDS_V1 | {"monomer_dft"}
 ACTIVE_JOB_FIELDS_V3 = ACTIVE_JOB_FIELDS_V2 | {"polymerization_batch"}
 ACTIVE_JOB_FIELDS_V4 = ACTIVE_JOB_FIELDS_V3 | {"polymer_md"}
+ACTIVE_JOB_FIELDS_V5 = ACTIVE_JOB_FIELDS_V4 | {"retrosynthesis", "retrosynthesis_in_memory"}
 BUSINESS_MUTABLE_TABLES = (
     ("online_knowledge", "history"),
     ("online_knowledge", "jobs"),
@@ -594,6 +595,8 @@ def validate_literature_ledger(records: object) -> list[dict[str, str]]:
 MEMBERSHIP_MIGRATION_LEDGER = (*LITERATURE_MIGRATION_LEDGER,
     ("0025_membership_subscriptions", "ced7418143e8b1cb22e45f72ff0d5e53190b348a85fb7951f96a5cc7a5ff3db5"),
 )
+POST_0026_BUSINESS_MUTABLE_TABLES = (("retrosynthesis", "jobs"),)
+
 POST_0025_BUSINESS_MUTABLE_TABLES = tuple(("billing", name) for name in
     ("accounts", "subscriptions", "orders", "payment_events"))
 
@@ -977,10 +980,10 @@ def validate_active_jobs(document: object) -> dict[str, Any]:
     }:
         raise SiteHelperContractError("active-jobs evidence has an invalid shape")
     version = document.get("active_jobs_schema_version", 1)
-    if type(version) is not int or version not in {1, 2, 3, 4}:
+    if type(version) is not int or version not in {1, 2, 3, 4, 5}:
         raise SiteHelperContractError("active-jobs evidence schema is unsupported")
     _require_bool(document, "ingress_isolated", True)
-    expected = {1: ACTIVE_JOB_FIELDS_V1, 2: ACTIVE_JOB_FIELDS_V2, 3: ACTIVE_JOB_FIELDS_V3, 4: ACTIVE_JOB_FIELDS_V4}[version]
+    expected = {1: ACTIVE_JOB_FIELDS_V1, 2: ACTIVE_JOB_FIELDS_V2, 3: ACTIVE_JOB_FIELDS_V3, 4: ACTIVE_JOB_FIELDS_V4, 5: ACTIVE_JOB_FIELDS_V5}[version]
     jobs = document.get("active_jobs")
     if not isinstance(jobs, dict) or set(jobs) != set(expected):
         raise SiteHelperContractError("active-jobs evidence categories differ")

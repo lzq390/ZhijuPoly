@@ -208,6 +208,7 @@ class Settings:
         polytao_rate_limit_per_ip_per_minute: int | None = None,
         polytao_rate_limit_window_seconds: int | None = None,
         polytao_max_active_jobs: int | None = None,
+        retro_jobs_enabled: bool | None = None,
         retro_model_enabled: bool | None = None,
         retro_model_id: str | None = None,
         retro_device: str | None = None,
@@ -1214,6 +1215,7 @@ class Settings:
         self.polytao_rate_limit_per_ip_per_minute = max(1, int(raw_polytao_rate_limit_per_ip_per_minute))
         self.polytao_rate_limit_window_seconds = max(1, int(raw_polytao_rate_limit_window_seconds))
         self.polytao_max_active_jobs = max(1, int(raw_polytao_max_active_jobs))
+        self.retro_jobs_enabled = _strict_bool("RETRO_JOBS_ENABLED", retro_jobs_enabled if retro_jobs_enabled is not None else _first_non_blank(os.getenv("RETRO_JOBS_ENABLED"), env_values.get("RETRO_JOBS_ENABLED"), default="false"))
         self.retro_model_enabled = bool(raw_retro_model_enabled)
         self.retro_model_id = raw_retro_model_id.strip()
         self.retro_device = raw_retro_device.strip().lower()

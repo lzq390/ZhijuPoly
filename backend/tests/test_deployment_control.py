@@ -49,6 +49,7 @@ def _install_zero_activity_components(app: FastAPI) -> None:
         active_executions=0,
     )
     app.state.polytao_job_manager = SimpleNamespace(active_jobs=0, active_executions=0)
+    app.state.retrosynthesis_job_manager = SimpleNamespace(active_jobs=0, active_executions=0)
     app.state.gpu_runtime_registry = SimpleNamespace(
         active_inferences=0,
         waiting_inferences=0,
@@ -745,6 +746,7 @@ def test_active_job_summary_covers_in_memory_job_managers() -> None:
             conditional_generation_job_manager=manager,
             reverse_design_job_manager=manager,
             polytao_job_manager=SimpleNamespace(active_jobs=1, active_executions=2),
+            retrosynthesis_job_manager=SimpleNamespace(active_jobs=0, active_executions=1),
             gpu_runtime_registry=SimpleNamespace(
                 active_inferences=3,
                 waiting_inferences=4,
@@ -760,10 +762,11 @@ def test_active_job_summary_covers_in_memory_job_managers() -> None:
         "conditional_generation": 2,
         "reverse_design": 2,
         "polytao": 2,
+        "retrosynthesis_in_memory": 1,
         "gpu_inference": 3,
         "gpu_waiting": 4,
     }
-    assert summary.total == 14
+    assert summary.total == 15
     inflight_api_writes.exit()
 
 
@@ -774,6 +777,7 @@ def test_active_job_summary_covers_in_memory_job_managers() -> None:
         "conditional_generation_job_manager",
         "reverse_design_job_manager",
         "polytao_job_manager",
+        "retrosynthesis_job_manager",
         "gpu_runtime_registry",
     ],
 )
@@ -831,6 +835,7 @@ class _ExplodingInflightCounter:
             SimpleNamespace(active_jobs=0),
         ),
         ("conditional_generation_job_manager", _ExplodingManagerCounter()),
+        ("retrosynthesis_job_manager", SimpleNamespace(active_jobs=0)),
         (
             "gpu_runtime_registry",
             SimpleNamespace(active_inferences=0, waiting_inferences=-1),

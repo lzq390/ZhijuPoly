@@ -88,6 +88,7 @@ def authorize_memory_start(owner_user_id: str) -> bool:
 
 
 _START_TARGETS = {
+    ("retrosynthesis.jobs", "job_id"),
     ("md.monomer_md_jobs", "job_id"),
     ("online_knowledge.jobs", "job_id"),
     ("polymerization_batch.jobs", "id"),
