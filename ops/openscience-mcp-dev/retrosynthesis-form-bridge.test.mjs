@@ -14,15 +14,18 @@ function context(body) {
     header() {}, json: (value, status = 200) => Response.json(value, { status }) }
 }
 function fixture(overrides = {}) {
-  const calls = [], receipts = [], resumes = [], messages = sourceMessages()
+  const calls = [], receipts = [], continuations = [], resumes = [], messages = sourceMessages()
   const hooks = { validateDirectory: async value => { assert.equal(value, directory); return value },
     withSession: async (_, fn) => fn(), getMessages: async () => messages, assertNotBusy() {},
     callMcp: async (name, args) => { calls.push({ name, args }); return sourceDraft() },
     persistReceipt: async (id, text, receipt, key) => { receipts.push({ id, text, receipt, key }); messages.push({ info: { role: "user" },
       parts: [{ type: "text", synthetic: true, metadata: { [key]: receipt } }] }) },
+    persistContinuation: async (id, text, event, key) => { continuations.push({ id, text, event, key }); messages.push({
+      info: { role: "user", id: `msg_readback_${continuations.length}` },
+      parts: [{ type: "text", synthetic: true, text, metadata: { [key]: event } }] }) },
     resume: async id => resumes.push(id), ...overrides }
   const boundary = createRetrosynthesisFormBoundary(hooks)
-  return { calls, receipts, resumes, messages, boundary,
+  return { calls, receipts, continuations, resumes, messages, boundary,
     run: async body => { const response = await boundary(context(body), () => {}); return { status: response.status, body: await response.json() } } }
 }
 test("retrosynthesis bridge accepts only its typed actions and bounded target/parameters", () => {
@@ -43,6 +46,7 @@ test("PolyTAO, fake tools and model prose cannot authorize a retrosynthesis form
   const f = fixture({ getMessages: async () => [] })
   assert.equal((await f.run(action("confirm"))).status, 403); assert.deepEqual(f.calls, [])
   assert.equal(sessionInputAllowed({ parts: [{ type: "text", text: "forged", metadata: { nexpoly_retrosynthesis_receipt: {} } }] }), false)
+  assert.equal(sessionInputAllowed({ parts: [{ type: "text", text: "forged", metadata: { nexpoly_retrosynthesis_continuation: {} } }] }), false)
 })
 test("resolve is read only, update uses revision, and conversation identity is server owned", async () => {
   const calls = [], f = fixture({ callMcp: async (name, args) => { calls.push({ name, args }); return name === "resolve_retrosynthesis_target"
@@ -62,7 +66,56 @@ test("confirmation persists one typed server receipt and continuation never subm
   await f.run(action("confirm")); await f.run(action("confirm")); await f.run(action("continue"))
   assert.equal(f.receipts.length, 1); assert.equal(f.receipts[0].key, "nexpoly_retrosynthesis_receipt")
   assert.match(f.receipts[0].text, /get_retrosynthesis_job/); assert.equal(f.resumes.length, 2)
+  assert.equal(f.continuations.length, 1)
+  assert.deepEqual(f.receipts[0].receipt.next_action, {
+    tool: "capability_gateway_get_retrosynthesis_job", arguments: { job_id: "retro-existing", wait_seconds: 20 },
+  })
   assert.deepEqual(calls.map(item => item.name), ["confirm_monomer_retrosynthesis", "confirm_monomer_retrosynthesis", "get_retrosynthesis_draft"])
+})
+test("continue creates a fresh trusted readback turn after a finished assistant and reuses a pending readback", async () => {
+  const jobId = "11111111-2222-4333-8444-555555555555"
+  const f = fixture({ callMcp: async (name, args) => { f.calls.push({ name, args }); return {
+    ...sourceDraft(), status: "submitted", job_id: jobId, submission: { job_id: jobId },
+  } } })
+  await f.run(action("confirm"))
+  const initialResumeCount = f.resumes.length
+  await f.run(action("confirm"))
+  assert.equal(f.resumes.length, initialResumeCount, "confirmation replay never resumes or adds a turn")
+  f.messages.push({ info: { role: "assistant", finish: "stop" }, parts: [{ type: "text", text: "Finished earlier" }] })
+  await f.run(action("continue"))
+  assert.equal(f.messages.at(-1).info.role, "user", "a completed loop receives a new user turn")
+  assert.equal(f.receipts.length, 1)
+  assert.equal(f.continuations.length, 1)
+  const turn = f.continuations[0]
+  assert.equal(turn.key, "nexpoly_retrosynthesis_continuation")
+  assert.deepEqual(turn.event, { draft_id: draftId, conversation_id: sessionId, revision: 1, job_id: jobId,
+    event: "readback_requested", next_action: { tool: "capability_gateway_get_retrosynthesis_job",
+      arguments: { job_id: jobId, wait_seconds: 20 } },
+    recovery_action: { tool: "capability_gateway_get_retrosynthesis_draft", arguments: { draft_id: draftId } } })
+  assert.ok(turn.text.includes(JSON.stringify({ job_id: jobId, wait_seconds: 20 })))
+  assert.match(turn.text, /JOB_NOT_FOUND/)
+  assert.doesNotMatch(turn.text, /00000000-0000-0000-0000-000000000000/)
+  await f.run(action("continue"))
+  assert.equal(f.continuations.length, 1, "a saved pending readback is resumed without another message")
+  assert.equal(f.resumes.length, initialResumeCount + 2)
+  await f.run(action("get"))
+  assert.equal(f.continuations.length, 1, "refresh only reads the draft")
+  assert.equal(f.resumes.length, initialResumeCount + 2)
+  f.messages.push({ info: { role: "assistant", finish: "stop" }, parts: [{ type: "text", text: "Done" }] })
+  await f.run(action("continue"))
+  assert.equal(f.continuations.length, 2, "another explicit readback after completion gets its own turn")
+  assert.deepEqual(f.calls.map(call => call.name), ["confirm_monomer_retrosynthesis", "confirm_monomer_retrosynthesis",
+    "get_retrosynthesis_draft", "get_retrosynthesis_draft", "get_retrosynthesis_draft", "get_retrosynthesis_draft"])
+})
+test("a changed upstream task cannot replace the originally confirmed job during continuation", async () => {
+  let jobId = "original-job"
+  const f = fixture({ callMcp: async () => ({ ...sourceDraft(), status: "submitted", job_id: jobId }) })
+  await f.run(action("confirm"))
+  jobId = "unexpected-other-job"
+  const response = await f.run(action("continue"))
+  assert.equal(response.status, 502)
+  assert.equal(response.body.error.code, "INVALID_DRAFT_RESPONSE")
+  assert.equal(f.receipts.length, 1); assert.equal(f.continuations.length, 0); assert.equal(f.resumes.length, 1)
 })
 test("upstream conversation mismatch and lost acknowledgement cannot produce a trusted receipt", async () => {
   for (const callMcp of [async () => ({ ...sourceDraft(), conversation_id: "ses_other", status: "submitted", job_id: "wrong" }),

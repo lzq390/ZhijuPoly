@@ -24,6 +24,9 @@ export const RETROSYNTHESIS_FORM_ADAPTER = Object.freeze({
   extraFields: { update: ["target", "parameters"], resolve: ["target"] },
   prepareTools: ["capability_gateway_prepare_monomer_retrosynthesis"],
   receiptKey: "nexpoly_retrosynthesis_receipt",
+  continuationKey: "nexpoly_retrosynthesis_continuation",
+  readbackTools: { capability_gateway_prepare_monomer_retrosynthesis: "capability_gateway_get_retrosynthesis_job" },
+  recoveryTools: { capability_gateway_prepare_monomer_retrosynthesis: "capability_gateway_get_retrosynthesis_draft" },
   uiTools: ["resolve_retrosynthesis_target", "get_retrosynthesis_draft", "update_retrosynthesis_draft",
     "confirm_monomer_retrosynthesis", "cancel_retrosynthesis_draft"],
   validExtra(body) {
@@ -49,6 +52,7 @@ export const RETROSYNTHESIS_FORM_ADAPTER = Object.freeze({
   },
   receiptText: "用户已在参数板确认并提交单体逆合成任务。以下是服务端通过 MCP 返回的提交收据。"
     + "仅使用 get_retrosynthesis_job 查询该 job_id 并展示单步前体候选；不得重新准备或提交任务。",
+  continuationText: "用户点击继续查询，要求读取此前已确认的单体逆合成任务。请查询以下同一任务并展示单步前体候选；不得重新准备或提交任务。",
 })
 export const validateRetrosynthesisDraftAction = body => validateCapabilityDraftAction(RETROSYNTHESIS_FORM_ADAPTER, body)
 export const retrosynthesisSessionContainsDraft = (messages, sessionId, draftId) => capabilitySessionContainsDraft(RETROSYNTHESIS_FORM_ADAPTER, messages, sessionId, draftId)

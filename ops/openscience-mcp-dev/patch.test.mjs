@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import test from "node:test"
-import { CONTENT_ADAPTER, CONVERSATION_ADAPTER, CONVERSATION_SCHEMA_ADAPTER, PATCH_MARKER, patchPrompt } from "./patch.mjs"
+import { CONTENT_ADAPTER, CONVERSATION_ADAPTER, CONVERSATION_SCHEMA_ADAPTER, TRUSTED_USER_PART_ADAPTER, PATCH_MARKER, patchPrompt } from "./patch.mjs"
 
 const bindingGuard = `        if (key === "knowledge_service_kb_search") {
           const bound = await bindings(ctx.sessionID)
@@ -86,6 +86,26 @@ test("tools without structured results keep their original content unchanged", (
 
 const injectConversation = new Function("key", "args", "input", CONVERSATION_ADAPTER + "\nreturn args")
 const hideConversation = new Function("key", "item", "jsonSchema", CONVERSATION_SCHEMA_ADAPTER + "\nreturn item")
+
+test("trusted receipt and continuation callbacks create new synthetic user turns with their own metadata", async () => {
+  const persisted = [], model = { providerID: "provider", modelID: "model" }
+  const persist = new Function("Session", "SessionPrompt", `return (${TRUSTED_USER_PART_ADAPTER})`)(
+    { messages: async () => [{ info: { role: "user", agent: "research", model } }] },
+    { prompt: async input => { persisted.push(input); return input } },
+  )
+  const receipt = { job_id: "original-job", draft_id: "original-draft" }
+  const event = { ...receipt, event: "readback_requested" }
+  await persist("ses_actual", "Initial server receipt", receipt, "nexpoly_retrosynthesis_receipt")
+  await persist("ses_actual", "Continue original task", event, "nexpoly_retrosynthesis_continuation")
+  assert.equal(persisted.length, 2)
+  for (const turn of persisted) {
+    assert.equal(turn.noReply, true); assert.equal(turn.agent, "research"); assert.equal(turn.model, model)
+    assert.equal(turn.parts[0].synthetic, true); assert.equal(turn.parts[0].type, "text")
+    assert.equal(Object.hasOwn(turn, "messageID"), false, "prompt creates a new message instead of editing the receipt")
+  }
+  assert.deepEqual(persisted[0].parts[0].metadata, { nexpoly_retrosynthesis_receipt: receipt })
+  assert.deepEqual(persisted[1].parts[0].metadata, { nexpoly_retrosynthesis_continuation: event })
+})
 
 test("draft ownership is injected only for exact gateway prepare/get tools and model schema hides it", () => {
   for (const key of ["capability_gateway_prepare_polytao_generation", "capability_gateway_get_polytao_draft",

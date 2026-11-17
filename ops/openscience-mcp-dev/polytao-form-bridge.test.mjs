@@ -19,7 +19,7 @@ function context(body, { method = "POST", endpoint = "/nexpoly/polytao/draft", t
       headers: { "content-type": "application/json" } }) }
 }
 function fixture(overrides = {}) {
-  const calls = [], receipts = [], resumes = []
+  const calls = [], receipts = [], continuations = [], resumes = []
   let messages = sourceMessages()
   const hooks = { validateDirectory: async value => value,
     withSession: async (value, fn) => { assert.equal(value, directory); return fn() },
@@ -28,8 +28,10 @@ function fixture(overrides = {}) {
     persistReceipt: async (id, text, receipt) => { receipts.push({ id, text, receipt }); messages.push({
       info: { role: "user", sessionID: id }, parts: [{ type: "text", synthetic: true, text,
         metadata: { nexpoly_polytao_receipt: receipt } }] }) },
+    persistContinuation: async (id, text, event, key) => { continuations.push({ id, text, event, key }); messages.push({
+      info: { role: "user", sessionID: id }, parts: [{ type: "text", synthetic: true, text, metadata: { [key]: event } }] }) },
     resume: async id => { resumes.push(id) }, ...overrides }
-  return { handle: createPolytaoFormBoundary(hooks), calls, receipts, resumes,
+  return { handle: createPolytaoFormBoundary(hooks), calls, receipts, continuations, resumes, messages,
     run: async body => { const response = await createPolytaoFormBoundary(hooks)(context(body), () => {}); return { status: response.status, body: await response.json() } } }
 }
 
@@ -89,6 +91,24 @@ test("confirmation persists one receipt and resumes without any native generatio
   assert.equal((await repeat.json()).continuation.status, "existing")
   assert.equal(f.receipts.length, 1); assert.equal(f.resumes.length, 2)
   assert.equal(f.receipts[0].receipt.job_id, "polytao.test")
+  assert.equal(f.continuations.length, 1)
+  assert.equal(f.continuations[0].key, "nexpoly_polytao_continuation")
+  assert.deepEqual(f.continuations[0].event.next_action, {
+    tool: "capability_gateway_get_polytao_job", arguments: { job_id: "polytao.test", wait_seconds: 20 },
+  })
+})
+
+test("PolyTAO readback keeps the exact namespace established by the trusted prepare tool", async () => {
+  const f = fixture({ callMcp: async () => ({ ...sourceDraft(), status: "submitted", job_id: "polytao.legacy" }) })
+  f.messages[0].parts[0].tool = "nexpoly_polytao_prepare_polytao_generation"
+  await f.handle(context(action("confirm")), () => {})
+  f.messages.push({ info: { role: "assistant", finish: "stop" }, parts: [] })
+  await f.handle(context(action("continue")), () => {})
+  assert.equal(f.receipts[0].receipt.next_action.tool, "nexpoly_polytao_get_polytao_job")
+  assert.equal(f.continuations[0].event.next_action.tool, "nexpoly_polytao_get_polytao_job")
+  assert.equal(f.continuations[0].event.recovery_action.tool, "nexpoly_polytao_get_polytao_draft")
+  assert.deepEqual(f.continuations[0].event.recovery_action.arguments, { draft_id: draftId, conversation_id: sessionId })
+  assert.equal(f.receipts.length, 1)
 })
 
 test("a continuation failure preserves accepted task and can retry only through get draft", async () => {

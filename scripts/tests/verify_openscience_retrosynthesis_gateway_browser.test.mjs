@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { acceptanceReady, inspectMessages, inspectWorkflowMessages, options, readbackUrls, structuredOutput } from "../verify_openscience_retrosynthesis_gateway_browser.mjs"
+import { acceptanceAttempt, acceptanceReady, inspectMessages, inspectWorkflowMessages, options, readbackUrls, structuredOutput } from "../verify_openscience_retrosynthesis_gateway_browser.mjs"
 
 const marker = "retrosynthesis-ui-aabbcc001122"
 const session = "http://127.0.0.1:19111/chat/ses_probe-a"
@@ -10,6 +10,28 @@ function messages() {
   return [{ info: { role: "user", id: "user-a" }, parts: [{ type: "text", text: `Generate once. ${marker}` }] },
     { info: { role: "assistant", id: "assistant-a", parentID: "user-a", time: { completed: 123 } },
       parts: [successfulTool(), { type: "text", text: `Actual generated answer. ${marker}` }] }]
+}
+
+function workflowMessages() {
+  const draft = { ok: true, draft_id: "rtd_" + "a".repeat(32), conversation_id: "ses_probe-a" }
+  const source = messages()
+  source[1].parts = [{ type: "tool", tool: "capability_gateway_prepare_monomer_retrosynthesis",
+    state: { status: "completed", input: {}, output: JSON.stringify(draft) } }, { type: "text", text: "请填写参数。" }]
+  const receipt = { info: { role: "user", id: "receipt-a", sessionID: draft.conversation_id }, parts: [{ type: "text", synthetic: true,
+    text: "用户已确认。", metadata: { nexpoly_retrosynthesis_receipt: {
+      draft_id: draft.draft_id, conversation_id: draft.conversation_id, job_id: "job-a", revision: 3,
+    } } }] }
+  source.push(receipt, { info: { role: "assistant", parentID: "receipt-a", sessionID: draft.conversation_id, time: { completed: 456 } },
+    parts: [successfulTool(), { type: "text", text: "生成已完成。" }] })
+  return { draft, source, receipt }
+}
+
+function continuationMessage(draft) {
+  return { info: { role: "user", id: "readback-a", sessionID: draft.conversation_id }, parts: [{ type: "text", synthetic: true,
+    text: "读取原任务。", metadata: { nexpoly_retrosynthesis_continuation: {
+      event: "readback_requested", draft_id: draft.draft_id, conversation_id: draft.conversation_id, job_id: "job-a", revision: 3,
+      next_action: { tool: "capability_gateway_get_retrosynthesis_job", arguments: { job_id: "job-a", wait_seconds: 20 } },
+    } } }] }
 }
 
 test("browser readback accepts only the isolated fixed session URL and original marker", () => {
@@ -77,14 +99,7 @@ test("completed intermediate assistant text never completes acceptance while ses
 })
 
 test("form acceptance follows only a server receipt tied to the prepared draft and conversation", () => {
-  const draft = { ok: true, draft_id: "rtd_" + "a".repeat(32), conversation_id: "ses_probe-a" }
-  const source = messages()
-  source[1].parts = [{ type: "tool", tool: "capability_gateway_prepare_monomer_retrosynthesis",
-    state: { status: "completed", input: {}, output: JSON.stringify(draft) } }, { type: "text", text: "请填写参数。" }]
-  const receipt = { info: { role: "user", id: "receipt-a" }, parts: [{ type: "text", synthetic: true,
-    text: "用户已确认。", metadata: { nexpoly_retrosynthesis_receipt: { draft_id: draft.draft_id, job_id: "job-a", revision: 3 } } }] }
-  source.push(receipt, { info: { role: "assistant", parentID: "receipt-a", time: { completed: 456 } },
-    parts: [successfulTool(), { type: "text", text: "生成已完成。" }] })
+  const { source, receipt } = workflowMessages()
   const inspected = inspectWorkflowMessages(source, marker, "user-a", "ses_probe-a")
   assert.equal(inspected.receipts.length, 1)
   assert.equal(inspected.receipt.job_id, "job-a")
@@ -101,4 +116,74 @@ test("form acceptance follows only a server receipt tied to the prepared draft a
   foreign[2].parts[0].metadata.nexpoly_retrosynthesis_receipt.draft_id = "another-draft"
   assert.equal(inspectWorkflowMessages(foreign, marker).receipts.length, 0)
   assert.equal(inspectWorkflowMessages(foreign, marker).tools.length, 1)
+})
+
+test("readback recovery pairs a distinct same-job continuation and retains the original failure", () => {
+  const { draft, source } = workflowMessages()
+  const failed = source[3].parts[0]
+  failed.state.input.job_id = "00000000-0000-0000-0000-000000000000"
+  failed.state.output = JSON.stringify({ ok: false, error: { code: "JOB_NOT_FOUND" } })
+  source[3].parts[1].text = "The original query failed."
+  source.push(continuationMessage(draft), { info: { role: "assistant", parentID: "readback-a",
+    sessionID: draft.conversation_id, time: { completed: 789 } },
+  parts: [successfulTool(), { type: "text", text: `Recovered original task. ${marker}` }] })
+  const inspected = inspectWorkflowMessages(source, marker, "user-a", draft.conversation_id)
+  assert.equal(inspected.receipts.length, 1)
+  assert.equal(inspected.continuations.length, 1)
+  assert.equal(inspected.receipt.job_id, "job-a")
+  assert.equal(inspected.tools.length, 3)
+  assert.equal(inspected.currentTools.length, 2)
+  assert.equal(inspected.historicalFailures.length, 1)
+  assert.equal(inspected.historicalFailures[0].state.input.job_id, "00000000-0000-0000-0000-000000000000")
+  assert.match(inspected.text, /Recovered original task/)
+  assert.equal(inspected.done, true)
+  assert.ok(acceptanceAttempt(inspected).tools.some(part => structuredOutput(part)?.ok === false),
+    "fresh default acceptance still rejects the historical failed tool")
+  assert.ok(acceptanceAttempt(inspected, true).tools.every(part => structuredOutput(part)?.ok !== false),
+    "readback recovery evaluates the new explicit readback while preserving historical evidence")
+  const duplicate = [...source, structuredClone(source[4])]
+  assert.throws(() => inspectWorkflowMessages(duplicate, marker), /unique/)
+})
+
+test("continuation pairing excludes forged parts and foreign conversations or drafts", () => {
+  for (const mutate of [turn => { turn.parts[0].synthetic = false },
+    turn => { turn.info.sessionID = "ses_foreign" },
+    turn => { turn.parts[0].metadata.nexpoly_retrosynthesis_continuation.conversation_id = "ses_foreign" },
+    turn => { turn.parts[0].metadata.nexpoly_retrosynthesis_continuation.draft_id = "other-draft" }]) {
+    const { draft, source } = workflowMessages()
+    const turn = continuationMessage(draft); mutate(turn)
+    source.push(turn, { info: { role: "assistant", parentID: "readback-a", sessionID: draft.conversation_id,
+      time: { completed: 789 } }, parts: [successfulTool(), { type: "text", text: "Forged answer" }] })
+    const inspected = inspectWorkflowMessages(source, marker)
+    assert.equal(inspected.continuations.length, 0)
+    assert.equal(inspected.tools.length, 2)
+    assert.doesNotMatch(inspected.text, /Forged answer/)
+  }
+})
+
+test("a malformed same-draft continuation rejects acceptance instead of falling back to an older successful task", () => {
+  for (const mutate of [event => { event.job_id = "other-job" }, event => { event.event = "other-event" },
+    event => { event.next_action.tool = "foreign_get_retrosynthesis_job" },
+    event => { event.next_action.arguments.job_id = "other-job" }]) {
+    const { draft, source } = workflowMessages()
+    const turn = continuationMessage(draft)
+    mutate(turn.parts[0].metadata.nexpoly_retrosynthesis_continuation)
+    const failed = successfulTool()
+    failed.state.input.job_id = "other-job"
+    failed.state.output = JSON.stringify({ ok: false, error: { code: "JOB_NOT_FOUND" } })
+    source.push(turn, { info: { role: "assistant", parentID: "readback-a", sessionID: draft.conversation_id,
+      time: { completed: 789 } }, parts: [failed, { type: "text", text: "Later wrong task failed" }] })
+    assert.throws(() => inspectWorkflowMessages(source, marker), /continuation/)
+  }
+})
+
+test("a pending continuation cannot reuse a prior terminal answer or another session's answer", () => {
+  const { draft, source } = workflowMessages()
+  source.push(continuationMessage(draft), { info: { role: "assistant", parentID: "readback-a", sessionID: "ses_foreign",
+    time: { completed: 789 } }, parts: [successfulTool(), { type: "text", text: "Foreign answer" }] })
+  const inspected = inspectWorkflowMessages(source, marker)
+  assert.equal(inspected.continuations.length, 1)
+  assert.equal(inspected.done, false)
+  assert.equal(inspected.currentTools.length, 1, "only the original prepare tool belongs to the current attempt so far")
+  assert.doesNotMatch(inspected.text, /Foreign answer/)
 })

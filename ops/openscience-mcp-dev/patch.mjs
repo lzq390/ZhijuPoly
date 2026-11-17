@@ -39,6 +39,15 @@ export const CONVERSATION_SCHEMA_ADAPTER = `      // conversation_id is server c
       }
 `
 
+export const TRUSTED_USER_PART_ADAPTER = `async (sessionID, text, value, metadataKey) => {
+            const messages = await Session.messages({ sessionID, limit: 1000 })
+            const user = messages.findLast(message => message.info.role === "user")?.info
+            if (!user) throw new Error("No conversation user context")
+            return SessionPrompt.prompt({ sessionID, agent: user.agent, model: user.model,
+              noReply: true, parts: [{ type: "text", synthetic: true, text,
+                metadata: { [metadataKey]: value } }] })
+          }`
+
 const INSERT_ANCHOR = '        const textParts: string[] = []\n        const attachments: MessageV2.FilePart[] = []\n\n        for (const contentItem of result.content) {'
 const RETURN_ANCHOR = '          content: result.content, // directly return content to preserve ordering when outputting to model'
 
@@ -79,14 +88,8 @@ export function patchServer(source, expectedHash = EXPECTED_SERVER_SHA256) {
             return Session.messages({ sessionID, limit: 1000 })
           },
           assertNotBusy: (sessionID) => SessionPrompt.assertNotBusy(sessionID),
-          persistReceipt: async (sessionID, text, receipt, receiptKey) => {
-            const messages = await Session.messages({ sessionID, limit: 1000 })
-            const user = messages.findLast(message => message.info.role === "user")?.info
-            if (!user) throw new Error("No conversation user context")
-            return SessionPrompt.prompt({ sessionID, agent: user.agent, model: user.model,
-              noReply: true, parts: [{ type: "text", synthetic: true, text,
-                metadata: { [receiptKey]: receipt } }] })
-          },
+          persistReceipt: ${TRUSTED_USER_PART_ADAPTER},
+          persistContinuation: ${TRUSTED_USER_PART_ADAPTER},
           resume: (sessionID) => SessionPrompt.loop(sessionID),
         }))
         .use(createRetrosynthesisFormBoundary({
@@ -97,14 +100,8 @@ export function patchServer(source, expectedHash = EXPECTED_SERVER_SHA256) {
             return Session.messages({ sessionID, limit: 1000 })
           },
           assertNotBusy: (sessionID) => SessionPrompt.assertNotBusy(sessionID),
-          persistReceipt: async (sessionID, text, receipt, receiptKey) => {
-            const messages = await Session.messages({ sessionID, limit: 1000 })
-            const user = messages.findLast(message => message.info.role === "user")?.info
-            if (!user) throw new Error("No conversation user context")
-            return SessionPrompt.prompt({ sessionID, agent: user.agent, model: user.model,
-              noReply: true, parts: [{ type: "text", synthetic: true, text,
-                metadata: { [receiptKey]: receipt } }] })
-          },
+          persistReceipt: ${TRUSTED_USER_PART_ADAPTER},
+          persistContinuation: ${TRUSTED_USER_PART_ADAPTER},
           resume: (sessionID) => SessionPrompt.loop(sessionID),
         }))
         .route("/global", GlobalRoutes())`)

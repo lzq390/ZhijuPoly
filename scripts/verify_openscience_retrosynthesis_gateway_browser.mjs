@@ -76,25 +76,62 @@ export function inspectMessages(messages, marker, expectedUserId) {
     modelErrors: answers.map(message => message.info.error).filter(Boolean) }
 }
 
-/** Follow only the server receipt for this user's exact prepared draft. */
+const failedTool = part => part.state?.status === "error" || structuredOutput(part)?.ok === false
+
+/** Follow the original server receipt and explicit readbacks of that same task. */
 export function inspectWorkflowMessages(messages, marker, expectedUserId, conversationId) {
   const origin = inspectMessages(messages, marker, expectedUserId)
   const prepared = origin.tools.filter(part => part.tool === PREFIX + "prepare_monomer_retrosynthesis"
     && part.state?.status === "completed" && structuredOutput(part)?.ok === true)
   const draft = prepared.length ? structuredOutput(prepared[0]) : null
-  if (!draft) return { ...origin, draft: null, receipts: [], receipt: null }
+  if (!draft) return { ...origin, draft: null, receipts: [], receipt: null, continuations: [],
+    currentTools: origin.tools, currentModelErrors: origin.modelErrors, historicalFailures: [], historicalModelErrors: [] }
   assert.ok(prepared.every(part => structuredOutput(part).draft_id === draft.draft_id), "More than one draft was prepared")
   if (conversationId) assert.equal(draft.conversation_id, conversationId, "Draft belongs to another conversation")
-  const receipts = messages.filter(message => message?.info?.role === "user" && message.parts?.some(part =>
-    part.type === "text" && part.synthetic === true && part.metadata?.nexpoly_retrosynthesis_receipt?.draft_id === draft.draft_id))
-  assert.ok(receipts.length <= 1, "Confirmation appended duplicate continuation receipts")
-  const receipt = receipts[0]?.parts.find(part => part.synthetic === true
-    && part.metadata?.nexpoly_retrosynthesis_receipt?.draft_id === draft.draft_id)?.metadata.nexpoly_retrosynthesis_receipt ?? null
-  const ids = new Set(receipts.map(message => message.info.id))
-  const answers = messages.filter(message => message?.info?.role === "assistant" && ids.has(message.info.parentID))
+  const validReceiptPart = part => {
+    const receipt = part.type === "text" && part.synthetic === true && part.metadata?.nexpoly_retrosynthesis_receipt
+    return receipt?.draft_id === draft.draft_id && receipt.conversation_id === draft.conversation_id
+      && typeof receipt.job_id === "string" && receipt.job_id
+  }
+  const receipts = messages.filter(message => message?.info?.role === "user" && typeof message.info.id === "string"
+    && message.info.sessionID === draft.conversation_id && Array.isArray(message.parts) && message.parts.some(validReceiptPart))
+  assert.ok(receipts.length <= 1, "Confirmation appended duplicate confirmation receipts")
+  const receipt = receipts[0]?.parts.find(validReceiptPart)?.metadata.nexpoly_retrosynthesis_receipt ?? null
+  const receiptIndex = receipts.length ? messages.indexOf(receipts[0]) : -1
+  const continuations = []
+  if (receipt) for (const [index, message] of messages.entries()) {
+    if (index <= receiptIndex || message?.info?.role !== "user" || typeof message.info.id !== "string"
+        || message.info.sessionID !== draft.conversation_id || !Array.isArray(message.parts)) continue
+    const events = message.parts.filter(part => part.type === "text" && part.synthetic === true)
+      .map(part => part.metadata?.nexpoly_retrosynthesis_continuation)
+      .filter(event => event?.draft_id === draft.draft_id && event.conversation_id === draft.conversation_id)
+    if (!events.length) continue
+    for (const event of events) {
+      assert.equal(event.event, "readback_requested", "Invalid same-draft readback continuation event")
+      assert.equal(event.job_id, receipt.job_id, "Readback continuation changed the originally confirmed job")
+      assert.equal(event.next_action?.tool, PREFIX + "get_retrosynthesis_job", "Readback continuation changed its query tool")
+      assert.equal(event.next_action.arguments?.job_id, receipt.job_id, "Readback continuation changed its query job")
+    }
+    continuations.push(message)
+  }
+  const turns = [...receipts, ...continuations]
+  const ids = new Set(turns.map(message => message.info.id))
+  assert.equal(ids.size, turns.length, "Readback user message IDs must be unique")
+  const answers = messages.filter(message => message?.info?.role === "assistant"
+    && message.info.sessionID === draft.conversation_id && ids.has(message.info.parentID))
   const parts = answers.flatMap(message => Array.isArray(message.parts) ? message.parts : [])
-  const last = [...answers].reverse().find(message => message.parts?.some(part => part.type === "text" && part.text?.trim()))
-  return { ...origin, draft, receipts, receipt, tools: [...origin.tools, ...parts.filter(part => part.type === "tool")],
+  const currentId = turns.at(-1)?.info.id
+  const currentAnswers = answers.filter(message => message.info.parentID === currentId)
+  const currentParts = currentAnswers.flatMap(message => Array.isArray(message.parts) ? message.parts : [])
+  const historicalAnswers = answers.filter(message => message.info.parentID !== currentId)
+  const historicalParts = historicalAnswers.flatMap(message => Array.isArray(message.parts) ? message.parts : [])
+  const last = [...currentAnswers].reverse().find(message => Array.isArray(message.parts)
+    && message.parts.some(part => part.type === "text" && part.text?.trim()))
+  return { ...origin, draft, receipts, receipt, continuations, tools: [...origin.tools, ...parts.filter(part => part.type === "tool")],
+    currentTools: [...origin.tools, ...currentParts.filter(part => part.type === "tool")],
+    currentModelErrors: [...origin.modelErrors, ...currentAnswers.map(message => message.info.error).filter(Boolean)],
+    historicalFailures: historicalParts.filter(part => part.type === "tool" && failedTool(part)),
+    historicalModelErrors: historicalAnswers.map(message => message.info.error).filter(Boolean),
     done: receipt ? Boolean(last?.info.time?.completed) : origin.done,
     text: last ? last.parts.filter(part => part.type === "text").map(part => part.text).join("\n") : origin.text,
     modelErrors: [...origin.modelErrors, ...answers.map(message => message.info.error).filter(Boolean)] }
@@ -113,6 +150,12 @@ export function readbackUrls(sessionUrl) {
 export function acceptanceReady(inspected, terminal, statuses, sessionId) {
   const idle = !statuses?.[sessionId] || statuses[sessionId].type === "idle"
   return idle && Boolean(inspected.done) && Boolean(terminal)
+}
+
+/** Fresh acceptance is strict; readback may recover only earlier readback turns. */
+export function acceptanceAttempt(inspected, recovery = false) {
+  return { tools: recovery ? inspected.currentTools : inspected.tools,
+    modelErrors: recovery ? inspected.currentModelErrors : inspected.modelErrors }
 }
 
 const digest = text => createHash("sha256").update(text).digest("hex")
@@ -270,10 +313,17 @@ async function main(config) {
     while (Date.now() < deadline) {
       inspected = await readMessages()
       assert.ok(!unsafePrompt, "Unexpected second prompt was blocked")
-      assert.equal(inspected.modelErrors.length, 0, "Model request failed; inspect the private session")
+      const { tools: currentTools, modelErrors } = acceptanceAttempt(inspected, Boolean(config.sessionUrl))
+      if (config.sessionUrl) {
+        report.historicalFailures = inspected.historicalFailures.map(part => ({ tool: part.tool, input: part.state?.input,
+          error: structuredOutput(part)?.error ?? part.state?.error }))
+        report.historicalModelErrors = inspected.historicalModelErrors
+        report.readbackContinuationCount = inspected.continuations.length
+      }
+      assert.equal(modelErrors.length, 0, "Model request failed; inspect the private session")
       assert.ok(inspected.tools.every(part => TOOLS.some(tool => part.tool === PREFIX + tool)), "Unexpected tool in acceptance turn")
-      const completed = inspected.tools.filter(part => part.state?.status === "completed")
-      const failed = inspected.tools.filter(part => part.state?.status === "error" || structuredOutput(part)?.ok === false)
+      const completed = currentTools.filter(part => part.state?.status === "completed")
+      const failed = currentTools.filter(failedTool)
       assert.equal(failed.length, 0, "A real tool failed; do not retry generation automatically")
       terminal = [...completed].reverse().find(part => part.tool === PREFIX + "get_retrosynthesis_job" &&
         ["completed", "failed", "timed_out", "interrupted", "unknown"].includes(structuredOutput(part)?.status))
@@ -294,6 +344,7 @@ async function main(config) {
     const output = structuredOutput(terminal)
     assert.equal(output.status, "completed", "Actual prediction did not complete successfully")
     assert.equal(output.job_id, inspected.receipt.job_id)
+    assert.equal(terminal.state.input.job_id, inspected.receipt.job_id, "The model must request the originally confirmed task")
     assert.ok(output.result)
     assert.equal(output.result.total, output.result.candidates.length)
     assert.ok(output.result.total >= 0 && output.result.total <= 3)

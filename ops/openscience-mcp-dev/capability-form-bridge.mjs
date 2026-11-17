@@ -39,20 +39,61 @@ function toolOutput(adapter, part) {
   return null
 }
 
-export function capabilitySessionContainsDraft(adapter, messages, sessionId, draftId) {
-  return Array.isArray(messages) && messages.some(message => message.info?.role === "assistant"
-    && message.info.sessionID === sessionId && message.parts?.some(part => {
+function draftEvidence(adapter, messages, sessionId, draftId) {
+  if (!Array.isArray(messages)) return null
+  for (const message of messages) {
+    if (message.info?.role !== "assistant" || message.info.sessionID !== sessionId) continue
+    for (const part of message.parts ?? []) {
       const value = toolOutput(adapter, part)
-      return value?.draft_id === draftId && value.conversation_id === sessionId
-    }))
+      if (value?.draft_id === draftId && value.conversation_id === sessionId) return part
+    }
+  }
+  return null
 }
 
-function receiptExists(adapter, messages, body, jobId) {
-  return messages.some(message => message.info?.role === "user" && message.parts?.some(part => {
-    const receipt = part.type === "text" && part.synthetic === true && part.metadata?.[adapter.receiptKey]
-    return receipt?.draft_id === body.draft_id && receipt.conversation_id === body.session_id
-      && receipt.job_id === jobId
-  }))
+export function capabilitySessionContainsDraft(adapter, messages, sessionId, draftId) {
+  return Boolean(draftEvidence(adapter, messages, sessionId, draftId))
+}
+
+function matchingReceipt(adapter, messages, body) {
+  for (const message of messages) {
+    if (message.info?.role !== "user") continue
+    for (const part of message.parts ?? []) {
+      const receipt = part.type === "text" && part.synthetic === true && part.metadata?.[adapter.receiptKey]
+      if (receipt?.draft_id === body.draft_id && receipt.conversation_id === body.session_id) return receipt
+    }
+  }
+  return null
+}
+
+function pendingReadback(adapter, messages, body, jobId) {
+  const message = messages.at(-1)
+  return message?.info?.role === "user" && message.parts?.some(part => {
+    const event = part.type === "text" && part.synthetic === true && part.metadata?.[adapter.continuationKey]
+    return event?.event === "readback_requested" && event.draft_id === body.draft_id
+      && event.conversation_id === body.session_id && event.job_id === jobId
+  })
+}
+
+function readbackContext(adapter, draft, prepareTool) {
+  const tool = adapter.readbackTools[prepareTool]
+  const recoveryTool = adapter.recoveryTools[prepareTool]
+  if (!tool || !recoveryTool) throw new Error("Missing typed readback tools")
+  const recoveryArguments = { draft_id: draft.draft_id }
+  if (adapter.recoveryConversationTools?.includes(prepareTool)) recoveryArguments.conversation_id = draft.conversation_id
+  return { draft_id: draft.draft_id, conversation_id: draft.conversation_id,
+    revision: draft.revision, job_id: draft.job_id,
+    next_action: { tool, arguments: { job_id: draft.job_id, wait_seconds: 20 } },
+    recovery_action: { tool: recoveryTool, arguments: recoveryArguments } }
+}
+
+function readbackText(adapter, context, continuation) {
+  return [continuation ? adapter.continuationText : adapter.receiptText,
+    `本次真实任务 job_id 为 ${context.job_id}。必须原样使用；不得生成、替换或使用占位任务编号。`,
+    JSON.stringify(context),
+    `下一步仅调用 ${context.next_action.tool}，参数原样为 ${JSON.stringify(context.next_action.arguments)}。`,
+    `若返回 JOB_NOT_FOUND，先调用 ${context.recovery_action.tool}，参数为 ${JSON.stringify(context.recovery_action.arguments)}，核对原草稿的提交记录；不得另建任务。`,
+  ].join("\n")
 }
 
 async function privateToken(filename) {
@@ -121,7 +162,7 @@ export function createCapabilityUiMcpCaller(adapter, { fetchImpl = fetch, tokenF
 }
 
 /** Hooks run in OpenScience's own session context; UI requests cannot forge them. */
-export function createCapabilityFormBoundary(adapter, { withSession, getMessages, persistReceipt, resume, assertNotBusy,
+export function createCapabilityFormBoundary(adapter, { withSession, getMessages, persistReceipt, persistContinuation, resume, assertNotBusy,
   callMcp = createCapabilityUiMcpCaller(adapter), validateDirectory,
   } = {}) {
   const active = new Set()
@@ -145,7 +186,8 @@ export function createCapabilityFormBoundary(adapter, { withSession, getMessages
         let messages
         try { messages = await getMessages(body.session_id) }
         catch { throw new BridgeError("DRAFT_NOT_IN_SESSION", "Draft is not part of this conversation.", 403) }
-        if (!capabilitySessionContainsDraft(adapter, messages, body.session_id, body.draft_id)) {
+        const evidence = draftEvidence(adapter, messages, body.session_id, body.draft_id)
+        if (!evidence) {
           throw new BridgeError("DRAFT_NOT_IN_SESSION", "Draft is not part of this conversation.", 403)
         }
         const { name, args } = adapter.call(body)
@@ -156,17 +198,26 @@ export function createCapabilityFormBoundary(adapter, { withSession, getMessages
         }
         let continuation
         if (["confirm", "continue"].includes(body.action) && draft.status === "submitted" && typeof draft.job_id === "string") {
+          const knownReceipt = matchingReceipt(adapter, messages, body)
+          if (knownReceipt && knownReceipt.job_id !== draft.job_id) {
+            throw new BridgeError("INVALID_DRAFT_RESPONSE", "The submitted task differs from the original confirmation receipt.", 502)
+          }
           try {
-            const existing = receiptExists(adapter, messages, body, draft.job_id)
+            const existing = Boolean(knownReceipt)
             if (existing && body.action === "confirm") {
               return c.json({ ok: true, draft, continuation: { status: "existing" } })
             }
             if (assertNotBusy) await assertNotBusy(body.session_id)
+            const context = readbackContext(adapter, draft, evidence.tool)
             if (!existing) {
-              const receipt = { draft_id: draft.draft_id, conversation_id: body.session_id,
-                revision: draft.revision, job_id: draft.job_id, submission: draft.submission }
-              const text = adapter.receiptText + "\n" + JSON.stringify(receipt)
+              const receipt = { ...context, submission: draft.submission }
+              const text = readbackText(adapter, receipt, false)
               await persistReceipt(body.session_id, text, receipt, adapter.receiptKey)
+            } else if (!pendingReadback(adapter, messages, body, draft.job_id)) {
+              // A completed assistant is newer than the initial receipt. loop() alone
+              // would immediately exit; an explicit readback needs a new user turn.
+              const event = { ...context, event: "readback_requested" }
+              await persistContinuation(body.session_id, readbackText(adapter, event, true), event, adapter.continuationKey)
             }
             // loop() failures are surfaced by OpenScience's normal session event channel.
             Promise.resolve(resume(body.session_id)).catch(() => {})
