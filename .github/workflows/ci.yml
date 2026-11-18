@@ -3,6 +3,7 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -24,6 +25,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       candidate_sha: ${{ steps.resolve.outputs.candidate_sha }}
+      runner_labels: ${{ steps.resolve.outputs.runner_labels }}
     steps:
       - id: resolve
         name: Resolve and validate event SHA
@@ -31,6 +33,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_SHA: ${{ github.sha }}
           EVENT_REF: ${{ github.ref }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         shell: bash
         run: |
           set -euo pipefail
@@ -54,12 +57,31 @@ jobs:
             echo "event did not resolve to a full immutable SHA" >&2
             exit 1
           }
-          echo "candidate_sha=$candidate_sha" >>"$GITHUB_OUTPUT"
+          runner_labels='["ubuntu-24.04"]'
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            runner_labels="$(
+              python3 - <<'PY'
+          import json
+          import os
+
+          labels = json.loads(os.environ["PR_LABELS_JSON"])
+          if not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
+              raise SystemExit("PR labels must be a JSON array of names")
+          selected = (["self-hosted", "linux", "x64", "nexpoly-ci-ephemeral"]
+                      if "ci:local" in labels else ["ubuntu-24.04"])
+          print(json.dumps(selected, separators=(",", ":")))
+          PY
+            )"
+          fi
+          {
+            echo "candidate_sha=$candidate_sha"
+            echo "runner_labels=$runner_labels"
+          } >>"$GITHUB_OUTPUT"
 
   policy:
     name: Workflow, shell, compose, dependency, and migration policy
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 20
     steps:
       - name: Check out candidate
@@ -125,7 +147,7 @@ jobs:
   script-tests:
     name: Release and deployment script tests
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 40
     steps:
       - name: Check out candidate
@@ -176,7 +198,7 @@ jobs:
   lightweight-backend-tests:
     name: Lightweight backend pytest tests
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 10
     env:
       PYTHONPATH: backend
@@ -213,7 +235,7 @@ jobs:
   property-filter-mcp-tests:
     name: Independent property-filter MCP tests
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 20
     services:
       postgres:
@@ -259,7 +281,7 @@ jobs:
   confirmed-mcp-adapter-tests:
     name: Confirmed ${{ matrix.capability }} MCP adapter
     needs: resolve-sha
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -298,7 +320,7 @@ jobs:
   mcp-derived-images:
     name: Build and test isolated MCP gateway images
     needs: resolve-sha
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 30
     steps:
       - name: Check out candidate
@@ -347,7 +369,7 @@ jobs:
   production-alias-integration:
     name: Production 0005 alias PostgreSQL 16 isolation integration
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 30
     env:
       NEXPOLY_ALIAS_DOCKER_INTEGRATION: "1"
@@ -379,7 +401,7 @@ jobs:
   postgres-media-integration:
     name: PostgreSQL media matching-major integration (${{ matrix.major }})
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -430,7 +452,7 @@ jobs:
   backend-tests:
     name: Backend tests (shard ${{ matrix.shard }})
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 75
     strategy:
       fail-fast: false
@@ -537,7 +559,7 @@ jobs:
   frontend:
     name: Frontend Vitest and build
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 35
     steps:
       - name: Check out candidate
@@ -600,7 +622,7 @@ jobs:
   worker-tests:
     name: Monomer-MD Worker tests
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 25
     steps:
       - name: Check out candidate
@@ -665,7 +687,7 @@ jobs:
   dft-worker-tests:
     name: Monomer-DFT Worker tests
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 35
     steps:
       - name: Check out candidate
@@ -693,7 +715,7 @@ jobs:
     name: Build ${{ matrix.name }} image without publishing
     if: github.event_name == 'pull_request'
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -720,6 +742,10 @@ jobs:
         timeout-minutes: 5
         run: scripts/ci/prepare_image_build_disk.sh
       - name: Set up Buildx
+        if: runner.environment == 'github-hosted'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Set up Buildx for local runner
+        if: runner.environment == 'self-hosted'
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
           driver: docker-container
@@ -802,7 +828,7 @@ jobs:
   bridge-validation:
     name: bridge-validation
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 30
     steps:
       - name: Check out candidate
@@ -825,7 +851,7 @@ jobs:
   exact-b-bridge:
     name: exact-B bridge compatibility
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 90
     services:
       postgres:
@@ -873,7 +899,7 @@ jobs:
   openscience-overlay:
     name: Governed OpenScience UI overlay
     needs: resolve-sha
-    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]
+    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}
     timeout-minutes: 30
     steps:
       - name: Check out candidate
@@ -898,6 +924,10 @@ jobs:
       - name: Run confirmed MCP browser verifier contract tests
         run: node --test scripts/tests/verify_openscience_*_gateway_browser.test.mjs
       - name: Set up Buildx
+        if: runner.environment == 'github-hosted'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Set up Buildx for local runner
+        if: runner.environment == 'self-hosted'
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
           driver: docker-container

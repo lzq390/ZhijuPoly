@@ -18,11 +18,16 @@ ACTIONLINT_PATH = REPOSITORY_ROOT / ".github" / "actionlint.yaml"
 ACTIONLINT_CONFIG = "self-hosted-runner:\n  labels:\n    - nexpoly-ci-ephemeral\n"
 LOCAL_RUNNER_LINE = "    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]"
 HOSTED_RUNNER_LINE = "    runs-on: ubuntu-24.04"
-LOCAL_RUNNER_JOBS = frozenset({
+SELECTABLE_RUNNER_LINE = "    runs-on: ${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}"
+DEFAULT_RUNNER_LABELS = ("ubuntu-24.04",)
+LOCAL_RUNNER_LABELS = ("self-hosted", "linux", "x64", "nexpoly-ci-ephemeral")
+LOCAL_RUNNER_OPT_IN_LABEL = "ci:local"
+SELECTABLE_RUNNER_JOBS = frozenset({
     "policy", "script-tests", "lightweight-backend-tests", "property-filter-mcp-tests",
     "production-alias-integration", "postgres-media-integration", "backend-tests",
     "frontend", "worker-tests", "dft-worker-tests", "image-build", "bridge-validation",
-    "exact-b-bridge", "openscience-overlay",
+    "exact-b-bridge", "openscience-overlay", "confirmed-mcp-adapter-tests",
+    "mcp-derived-images",
 })
 HOSTED_RUNNER_JOBS = frozenset({"resolve-sha", "ci-gate", "release", "openscience-release"})
 PUBLISHING_JOBS = frozenset({"release", "openscience-release"})
@@ -30,7 +35,15 @@ BUILDX_SETUP_LINES = (
     "      - name: Set up Buildx",
     "        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3",
 )
-LOCAL_BUILDX_SETUP_LINES = (*BUILDX_SETUP_LINES,
+CONDITIONAL_HOSTED_BUILDX_SETUP_LINES = (
+    BUILDX_SETUP_LINES[0],
+    "        if: runner.environment == 'github-hosted'",
+    BUILDX_SETUP_LINES[1],
+)
+LOCAL_BUILDX_SETUP_LINES = (
+    "      - name: Set up Buildx for local runner",
+    "        if: runner.environment == 'self-hosted'",
+    BUILDX_SETUP_LINES[1],
     "        with:",
     "          driver: docker-container",
     "          driver-opts: |",
@@ -39,6 +52,71 @@ LOCAL_BUILDX_SETUP_LINES = (*BUILDX_SETUP_LINES,
     # setup-buildx preserves quotes; Buildx needs one complete quoted CSV field.
     '            "env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres"',
 )
+# Exact event and resolver contracts keep labels from changing test coverage,
+# token privileges or the immutable event SHA. Labels select fixed routes only.
+CI_TRIGGER_BLOCK = '''on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]'''
+RESOLVE_SHA_JOB = '''    name: Resolve immutable candidate SHA
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      candidate_sha: ${{ steps.resolve.outputs.candidate_sha }}
+      runner_labels: ${{ steps.resolve.outputs.runner_labels }}
+    steps:
+      - id: resolve
+        name: Resolve and validate event SHA
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_REF: ${{ github.ref }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request)
+              [[ "$EVENT_REF" == refs/pull/*/merge ]] || {
+                echo "pull_request must resolve through its merge ref" >&2
+                exit 1
+              }
+              candidate_sha="$EVENT_SHA"
+              ;;
+            push)
+              candidate_sha="$EVENT_SHA"
+              ;;
+            *)
+              echo "unsupported event: $EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "event did not resolve to a full immutable SHA" >&2
+            exit 1
+          }
+          runner_labels='["ubuntu-24.04"]'
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            runner_labels="$(
+              python3 - <<'PY'
+          import json
+          import os
+
+          labels = json.loads(os.environ["PR_LABELS_JSON"])
+          if not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
+              raise SystemExit("PR labels must be a JSON array of names")
+          selected = (["self-hosted", "linux", "x64", "nexpoly-ci-ephemeral"]
+                      if "ci:local" in labels else ["ubuntu-24.04"])
+          print(json.dumps(selected, separators=(",", ":")))
+          PY
+            )"
+          fi
+          {
+            echo "candidate_sha=$candidate_sha"
+            echo "runner_labels=$runner_labels"
+          } >>"$GITHUB_OUTPUT"'''
 FRONTEND_VITEST_STEP = '''      - name: Run Vitest
         working-directory: frontend
         env:
@@ -408,7 +486,7 @@ IMAGE_BUILD_JOB_PREFIX_LINES = (
     "    name: Build ${{ matrix.name }} image without publishing",
     "    if: github.event_name == 'pull_request'",
     "    needs: resolve-sha",
-    LOCAL_RUNNER_LINE,
+    SELECTABLE_RUNNER_LINE,
     "    timeout-minutes: 90",
     "    strategy:",
     "      fail-fast: false",
@@ -429,6 +507,7 @@ IMAGE_BUILD_STEP_HEADERS = (
     "      - name: Assert immutable checkout",
     "      - name: Prepare disk for scientific images",
     "      - name: Set up Buildx",
+    "      - name: Set up Buildx for local runner",
     "      - id: backend-identity",
     "      - name: Build image",
     "      - name: Verify Backend image identity",
@@ -696,6 +775,7 @@ OPENSCIENCE_OVERLAY_STEP_HEADERS = (
     "      - name: Run development MCP overlay tests in Chromium",
     "      - name: Run confirmed MCP browser verifier contract tests",
     "      - name: Set up Buildx",
+    "      - name: Set up Buildx for local runner",
     "      - name: Build the governed overlay without publishing",
     "      - name: Verify the governed overlay image",
     "      - name: Verify both trusted parents and rejected browser bridge cases",
@@ -806,15 +886,24 @@ def workflow_step_blocks(job_body: str) -> list[str]:
 
 
 def validate_runner_routing(ci_text: str, failures: list[str]) -> None:
-    """Keep disposable test runners separate from hosted image publishers."""
+    """Default to hosted CI; only an exact PR label selects disposable runners."""
     if ci_text.count("\njobs:\n") != 1:
         failures.append("CI must have one explicit jobs mapping for runner routing")
         return
     preamble, jobs_text = ci_text.split("\njobs:\n", 1)
     job_names = [match.group("name") for match in WORKFLOW_JOB_HEADER.finditer(jobs_text)]
-    expected_jobs = LOCAL_RUNNER_JOBS | HOSTED_RUNNER_JOBS
+    expected_jobs = SELECTABLE_RUNNER_JOBS | HOSTED_RUNNER_JOBS
     if set(job_names) != expected_jobs or len(job_names) != len(expected_jobs):
-        failures.append("CI runner routing must retain exactly the reviewed 14 local and 4 hosted jobs")
+        failures.append("CI runner routing must retain exactly the reviewed 16 selectable and 4 hosted jobs")
+    triggers = re.findall(r"(?ms)^on:\n.*?(?=^[^\s#]|\Z)", preamble)
+    if [trigger.rstrip() for trigger in triggers] != [CI_TRIGGER_BLOCK]:
+        failures.append("CI must retain the exact main push and complete PR label event triggers")
+    resolver = workflow_job_body(ci_text, "resolve-sha", failures)
+    if resolver is not None and resolver.rstrip() != RESOLVE_SHA_JOB:
+        failures.append("resolve-sha must retain the exact immutable SHA and fixed hosted-default/PR ci:local resolver")
+    remaining = ci_text.replace(RESOLVE_SHA_JOB, "", 1)
+    if "ci:local" in remaining or "github.event.action" in remaining:
+        failures.append("Runner label events must select routes without skipping any required checks")
     default_permissions = re.findall(r"(?m)^permissions:[^\n]*(?:\n  [^\n]*)*", preamble)
     if default_permissions != ["permissions:\n  contents: read\n  packages: read"]:
         failures.append("CI default token permissions must remain contents: read and packages: read")
@@ -825,10 +914,18 @@ def validate_runner_routing(ci_text: str, failures: list[str]) -> None:
         body = workflow_job_body(ci_text, job_name, failures)
         if body is None:
             continue
-        expected_runner = LOCAL_RUNNER_LINE if job_name in LOCAL_RUNNER_JOBS else HOSTED_RUNNER_LINE
+        expected_runner = SELECTABLE_RUNNER_LINE if job_name in SELECTABLE_RUNNER_JOBS else HOSTED_RUNNER_LINE
         runners = re.findall(r"(?m)^    runs-on:[^\n]*", body)
         if runners != [expected_runner]:
             failures.append(f"{job_name} must use its exact reviewed runner route: {expected_runner.strip()}")
+        if job_name in SELECTABLE_RUNNER_JOBS:
+            needs = re.findall(r"(?m)^    needs:[^\n]*", body)
+            if needs != ["    needs: resolve-sha"]:
+                failures.append(f"{job_name} must depend exactly on resolve-sha for its selected runner route")
+            conditions = re.findall(r"(?m)^    if:[^\n]*(?:\n      [^\n]*)*", body)
+            expected_conditions = ["    if: github.event_name == 'pull_request'"] if job_name == "image-build" else []
+            if conditions != expected_conditions:
+                failures.append(f"{job_name} must run its complete reviewed suite on label events without added job conditions")
         permissions = re.findall(r"(?m)^    permissions:[^\n]*(?:\n      [^\n]*)*", body)
         expected_permissions = []
         if job_name in PUBLISHING_JOBS:
@@ -839,6 +936,10 @@ def validate_runner_routing(ci_text: str, failures: list[str]) -> None:
             failures.append(f"{job_name} must retain its reviewed token permissions; only hosted releases may write packages")
         if job_name in HOSTED_RUNNER_JOBS and proxy_marker.search(body):
             failures.append(f"{job_name} must not inherit the local runner proxy")
+        if job_name in SELECTABLE_RUNNER_JOBS:
+            outside_local_builder = body.replace("\n".join(LOCAL_BUILDX_SETUP_LINES), "", 1)
+            if proxy_marker.search(outside_local_builder):
+                failures.append(f"{job_name} may configure the local proxy only in its exact self-hosted Buildx step")
 
 
 def validate_local_runner_controls(ci_text: str, failures: list[str]) -> None:
@@ -858,21 +959,22 @@ def validate_local_runner_controls(ci_text: str, failures: list[str]) -> None:
             "          cache-to: type=gha,mode=max,scope=release-openscience-ui-overlay-v1",
         ),
     }
-    if ci_text.count("uses: docker/setup-buildx-action@") != len(build_jobs):
-        failures.append("CI must retain exactly four reviewed Buildx setup steps")
+    if ci_text.count("uses: docker/setup-buildx-action@") != len(build_jobs) + 2:
+        failures.append("CI must retain exactly six reviewed Buildx setup steps")
     for job_name in sorted(build_jobs):
         body = workflow_job_body(ci_text, job_name, failures)
         if body is None:
             continue
         selected = [step for step in workflow_step_blocks(body)
                     if "uses: docker/setup-buildx-action@" in step]
-        expected = LOCAL_BUILDX_SETUP_LINES if job_name in LOCAL_RUNNER_JOBS else BUILDX_SETUP_LINES
-        if len(selected) != 1 or selected[0].rstrip().splitlines() != list(expected):
-            failures.append(f"{job_name} must retain its exact reviewed Buildx proxy configuration")
+        expected = ((CONDITIONAL_HOSTED_BUILDX_SETUP_LINES, LOCAL_BUILDX_SETUP_LINES)
+                    if job_name in SELECTABLE_RUNNER_JOBS else (BUILDX_SETUP_LINES,))
+        if [step.rstrip().splitlines() for step in selected] != [list(lines) for lines in expected]:
+            failures.append(f"{job_name} must retain its exact mutually exclusive Buildx hosted/local proxy configuration")
         exports = tuple(re.findall(r"(?m)^          cache-to:[^\n]*", body))
         if exports != expected_exports[job_name]:
             failures.append(f"{job_name} must retain its exact reviewed cache export policy")
-        if job_name in LOCAL_RUNNER_JOBS and "continue-on-error:" in body:
+        if job_name in SELECTABLE_RUNNER_JOBS and "continue-on-error:" in body:
             failures.append(f"{job_name} may ignore only cache export errors; build and test failures must block CI")
     frontend = workflow_job_body(ci_text, "frontend", failures)
     if frontend is not None:
@@ -1535,7 +1637,7 @@ def validate_independent_mcp_tests(ci_text: str, failures: list[str]) -> None:
     if gate.count("      - property-filter-mcp-tests\n") != 1:
         failures.append("ci-gate must require property-filter-mcp-tests")
     for marker in (
-        "    needs: resolve-sha\n", LOCAL_RUNNER_LINE + "\n",
+        "    needs: resolve-sha\n", SELECTABLE_RUNNER_LINE + "\n",
         "    timeout-minutes: 20\n", "        image: " + EXPECTED_POSTGRES_IMAGE,
         "          POSTGRES_USER: mcp_test_admin\n",
         "          POSTGRES_PASSWORD: mcp-ci-disposable-password\n",
@@ -1572,11 +1674,11 @@ def validate_confirmed_mcp_images(ci_text: str, failures: list[str]) -> None:
     if any(body is None for body in (adapter, images, gate)):
         return
     for job_name, body in (("confirmed-mcp-adapter-tests", adapter), ("mcp-derived-images", images)):
-        for marker in ("    needs: resolve-sha\n", "    runs-on: ubuntu-24.04\n",
+        for marker in ("    needs: resolve-sha\n", SELECTABLE_RUNNER_LINE + "\n",
                        "          persist-credentials: false\n",
                        "          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}\n"):
             if body.count(marker) != 1:
-                failures.append(f"{job_name} must retain immutable GitHub-hosted execution: {marker.strip()}")
+                failures.append(f"{job_name} must retain immutable selected-runner execution: {marker.strip()}")
         if gate.count("      - " + job_name + "\n") != 1:
             failures.append(f"ci-gate must require {job_name}")
         for marker in ("continue-on-error:", "    if:", "        if:", "self-hosted"):
@@ -3207,14 +3309,14 @@ def main() -> int:
             "  bridge-validation:\n"
             "    name: bridge-validation\n"
             "    needs: resolve-sha\n"
-            "    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]",
+            + SELECTABLE_RUNNER_LINE,
             "Validate exact bridge policy and schema compatibility states",
             "python3 scripts/validate_production_bridge_policy.py",
             "scripts/tests/test_production_bridge_policy.py",
             "  exact-b-bridge:\n"
             "    name: exact-B bridge compatibility\n"
             "    needs: resolve-sha\n"
-            "    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]",
+            + SELECTABLE_RUNNER_LINE,
             "Run real B-schema through F/0013 and F/0014 through F/0016 transition smoke",
             "scripts/ci/test_exact_b_bridge.sh",
             "name: ci-gate",
@@ -3258,7 +3360,7 @@ def main() -> int:
             "    name: PostgreSQL media matching-major integration "
             "(${{ matrix.major }})\n"
             "    needs: resolve-sha\n"
-            "    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral]",
+            + SELECTABLE_RUNNER_LINE,
             'NEXPOLY_RUN_POSTGRES_MEDIA_INTEGRATION: "1"',
             'NEXPOLY_RUN_MUTABLE_HELPER_INTEGRATION: "1"',
             "NEXPOLY_POSTGRES_MEDIA_TEST_ACK: ephemeral-localhost-only",

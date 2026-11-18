@@ -329,13 +329,23 @@ host cgroup 每 5 秒采样共 32 次，覆盖 16:03:33—16:06:08 的有效窗�
 
 后续同类修复需经统一维护入口重建模板，不能仅安装后使用旧镜像。安装或模板验收失败不会 resume；末尾 resume 后若 start/status 失败，需检查实际状态，不能假定已自动恢复 drain。
 
+## 2026-11-18 默认托管、PR 标签选择本地
+
+已将已部署的后台 APT 管理与限量服务事务诊断修复提交，并合入 `origin/main` 的 `27d1225`。main 新增的 confirmed MCP adapter 双能力矩阵、MCP 派生镜像/真实容器检查、后端 native HTTP/SDK 和 OpenScience 浏览器验收均保留；ci-gate 与两个发布 job 块未修改。
+
+16 个测试/构建定义通过 hosted `resolve-sha` 的固定 JSON 输出统一选择 runner。默认 GitHub 托管，仅 PR 精确包含 `ci:local` 标签才选择四个固定本地标签；main push 始终托管。两个可选 Buildx 步骤各保留互斥的 hosted 默认初始化和 self-hosted 专用代理初始化。PR 标签增删触发完整 CI，沿用同 PR concurrency 取消旧轮次，不跳过测试或 ci-gate。仓库标签已创建，具体操作与标签重跑语义见 `PLAN.md`。
+
+本地整合复验 **438 项通过**：runner 生命周期/宿主/模板等 273 项（13.178 秒），workflow/选路/磁盘资源/DFT 契约 165 项（17.638 秒）。新增真实 Bash/Python 解析器测试执行 workflow 内原始脚本，验证默认、PR 选择、本地标签不能影响 main、无效标签 JSON/SHA/ref 拒绝、标签命令及输出注入拒绝；policy 负测覆盖精确事件、16/4 路由、SHA/输出、完整测试与权限、互斥 Buildx 和代理不能泄露到 hosted 路径。workflow policy、DFT 契约 CLI、actionlint 1.7.7、集成 ShellCheck 0.10.0、全部交付 shell 脚本检查与 diff 检查通过。
+
+这次选路修改不改变已部署运行时代码，不需要重新安装或重建模板。新 head 的实际双路由检查和完整托管 CI 以 [PR #111](https://github.com/lzq390/ZhijuPoly/pull/111) 的最新运行及描述为准；上述离线结果不代表新 23 项本地完整 CI 或 main 发布验收已通过。历史 CI #306 的成功结果仍对应旧 head。
+
 ## 复验命令
 
 在仓库根目录：
 
 ```bash
 python3 -m unittest discover -s scripts/tests -p 'test_local_runner*.py' -q
-python3 -m unittest scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows scripts.tests.test_validate_monomer_dft_release_contract -q
+python3 -m unittest scripts.tests.test_ci_runner_selection scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows scripts.tests.test_validate_monomer_dft_release_contract -q
 python3 scripts/ci/validate_workflows.py
 python3 scripts/validate_monomer_dft_release_contract.py --require-committed
 actionlint -config-file .github/actionlint.yaml .github/workflows/ci.yml

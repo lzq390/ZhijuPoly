@@ -1225,6 +1225,7 @@ def validate_aimnet_build_contract(root: Path, failures: list[str]) -> None:
 def validate_ci_contract(root: Path, failures: list[str]) -> None:
     ci_text = _read_text(root, ".github/workflows/ci.yml", failures)
     WORKFLOW_POLICY.validate_runner_routing(ci_text, failures)
+    WORKFLOW_POLICY.validate_local_runner_controls(ci_text, failures)
     checkout_refs = re.findall(
         r"^\s*uses:\s*actions/checkout@([0-9a-f]{40})",
         ci_text,
@@ -1328,7 +1329,10 @@ def main(argv: list[str] | None = None) -> int:
                 "checkout_sha": CHECKOUT_SHA,
                 "runner_routes": {
                     "hosted": WORKFLOW_POLICY.HOSTED_RUNNER_LINE.partition("runs-on: ")[2],
-                    "tests_and_builds": WORKFLOW_POLICY.LOCAL_RUNNER_LINE.partition("runs-on: ")[2],
+                    "tests_and_builds": WORKFLOW_POLICY.SELECTABLE_RUNNER_LINE.partition("runs-on: ")[2],
+                    "default": list(WORKFLOW_POLICY.DEFAULT_RUNNER_LABELS),
+                    "local_pull_request_label": WORKFLOW_POLICY.LOCAL_RUNNER_OPT_IN_LABEL,
+                    "local_pull_request_labels": list(WORKFLOW_POLICY.LOCAL_RUNNER_LABELS),
                 },
             },
             sort_keys=True,

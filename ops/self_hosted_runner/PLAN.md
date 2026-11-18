@@ -6,6 +6,8 @@
 
 已实现控制器、宿主安装工具、受限网络配置、VM 模板制作、guest 启动程序、版本锁和 CI 迁移代码。源码位于仓库 `ops/self_hosted_runner/`，部署副本位于 `/data/lzq/github-runner/control/`。本文件同时保存为 `/data/lzq/github-runner/PLAN.md`。
 
+**执行环境默认使用 GitHub 托管；PR 可通过 `ci:local` 标签选择本地。** 已同步 main 的新 MCP 检查，16 个测试/构建 job 定义统一选择环境；不带标签的 PR 和所有 main push 使用 `ubuntu-24.04`。只有带该标签的 PR 将矩阵展开后的 23 个测试/构建 job 交给本地一次性 VM。SHA 解析、ci-gate 和两个发布 job 始终托管。本次选路修改不需要重新安装宿主或重建已部署模板；新增路由的实际 CI 结果单独记入 `VALIDATION.md`，以下 #306 是修改前的历史验收。
+
 **2026-11-18 新模板已部署，CI #306 定向复验后全绿。** 管理员完成统一维护，新模板 `base-69909bf9c1034ce07e6c5d524b850355e41bd6ab63bdf05825ce93476ff2a03d.qcow2` 于北京时间 15:49:23 封存，`apt_quiesce`、smoke 和 seal 均通过，五个运行时核心文件与源码/交付包哈希一致。runner126 使用新 VM 完成 DFT 重跑：16:01:53—16:05:56，282 项测试全通过（30.01 秒），锁定依赖安装、pip check、124,767,101 字节缓存恢复及所有清理步骤成功，无关闭信号或恢复超时。ci-gate 于 16:06:05 成功；[run44220723057 attempt2](https://github.com/lzq390/ZhijuPoly/actions/runs/44220723057) 合计 22 success、2 个 PR 发布任务 skipped，20 个本地 job 均成功且使用不同 runner 身份。19 项沿用首轮成功结果，仅 DFT 由新模板重新执行，不能据此称全部 job 都已在新模板上重跑。宿主 cgroup 采样峰值约 5.244 GiB、OOM 事件为 0；guest OOM 不可见，未记为 0。旧 SIGTERM 的发起者仍未证实。
 
 DFT 使用的 VM 已退出，控制器已补充唯一的新 runner127/VM `facf7db019744f49913257fb35ff128a`，GitHub online、busy=false，控制器与代理 active、NRestarts0；回收和补机已实查。
@@ -89,7 +91,7 @@ backend0的单项重跑 [133881233680](https://github.com/lzq390/ZhijuPoly/actio
 | DNS | `202.38.64.7`，TCP/UDP 53 |
 | GitHub 权限 | 专用 App，仅目标仓库；Administration write、Actions read、Metadata read |
 
-实施前只读盘点：宿主 Ubuntu 24.04 x64，128 逻辑 CPU、约 251 GiB RAM；当时约 192 GiB RAM 可用、`/data` 约 329 GiB 可用。分配 200 GiB 后预计剩余约 129 GiB；安装时重新检查，不以旧测量跳过门槛。34 GiB 上限约占总内存 13.5%，8 vCPU 相当于 128 逻辑 CPU 的 6.25% 调度配额；不是性能保证。模板更新与任务执行不并行。20 个 PR 本地 job 串行执行，冷启动及依赖下载会增加延迟；实际峰值和总耗时以首次完整验收记录为准。
+实施前只读盘点：宿主 Ubuntu 24.04 x64，128 逻辑 CPU、约 251 GiB RAM；当时约 192 GiB RAM 可用、`/data` 约 329 GiB 可用。分配 200 GiB 后预计剩余约 129 GiB；安装时重新检查，不以旧测量跳过门槛。34 GiB 上限约占总内存 13.5%，8 vCPU 相当于 128 逻辑 CPU 的 6.25% 调度配额；不是性能保证。模板更新与任务执行不并行。选择本地时，23 个 PR 测试/构建 job 串行执行，冷启动及依赖下载会增加延迟；实际峰值和总耗时以验收记录为准。
 
 ```text
 /data/lzq/github-runner/
@@ -244,9 +246,23 @@ doctor 不申请/打印 token，App 实际授权与注册是否正确由启动�
 
 ## CI 变更范围
 
-保留唯一 `.github/workflows/ci.yml`。`resolve-sha`、`ci-gate`、`release`、`openscience-release` 保持 `ubuntu-24.04`；其余 14 个 job 定义改为 `[self-hosted, linux, x64, nexpoly-ci-ephemeral]`，矩阵展开后 PR 为 20 个、main push 为 18 个本地 job。
+保留唯一 `.github/workflows/ci.yml`。`resolve-sha`、`ci-gate`、`release`、`openscience-release` 固定为 `ubuntu-24.04`。其余 16 个测试/构建定义读取 hosted SHA 解析任务的固定 JSON 输出：默认 `["ubuntu-24.04"]`，只有 `pull_request` 事件且标签列表精确包含 `ci:local` 时输出 `["self-hosted","linux","x64","nexpoly-ci-ephemeral"]`。标签仅作为 JSON 数据解析，不拼接为命令或任意 runner 标签。
 
-磁盘准备脚本在 self-hosted 分支验证 Ubuntu 24.04、root 所有且不可非特权写的 `/etc/nexpoly-ci-runner/profile` 和至少 32 GiB 空闲，仅允许现有科学镜像构建任务调用；不删除 SDK、不 prune。hosted 分支保留原逻辑。CI policy 精确验证路由、标签、权限、脚本 hash、两个 Buildx 代理选项及前端 `npm test -- --maxWorkers=4`，附 actionlint 自定义标签配置和负测。
+矩阵展开后，PR 有 23 个可选环境的测试/构建 job；main push 有 21 个适用的测试/构建 job，全部托管。main 新增的 confirmed MCP adapter 双能力测试与 MCP 派生镜像检查均保留；ci-gate 仍汇总全部适用结果。两个发布 job 仅 main push 执行，在托管环境从固定提交独立构建。
+
+提 PR 时，在 GitHub 的 Labels 中选择 `ci:local`，也可使用：
+
+```bash
+gh pr create --base main --label ci:local
+# 已有 PR 切到本地；随后提交代码仍沿用此标签。
+gh pr edit 111 --add-label ci:local
+# 切回默认 GitHub 托管。
+gh pr edit 111 --remove-label ci:local
+```
+
+仓库已创建 `ci:local` 标签；添加标签需要相应仓库权限，外部 PR 审批规则保持原样。PR 的 `opened`、`synchronize`、`reopened`、`labeled`、`unlabeled` 事件启动完整 CI。**任何 PR 标签增删都会重跑整套 CI，并由既有 concurrency 取消该 PR 的旧运行**，包括与选路无关的标签；这样每轮 ci-gate 都包含完整必需检查。不要在长任务执行时随意改标签。GitHub 的 Re-run 沿用原运行事件，不用它切换环境；应增删标签触发新运行。选用本地后，runner 不在线时任务排队，不自动回退托管。
+
+磁盘准备脚本在 self-hosted 分支验证 Ubuntu 24.04、root 所有且不可非特权写的 `/etc/nexpoly-ci-runner/profile` 和至少 32 GiB 空闲，仅允许现有科学镜像构建任务调用；不删除 SDK、不 prune。hosted 分支保留原逻辑。两个可选环境的 Buildx 初始化按 `runner.environment` 互斥：托管步骤使用 action 默认配置，本地步骤才注入 guest 专用代理。CI policy 精确验证事件、解析输出、16/4 两组路由、权限、脚本 hash、Buildx 两条路径及前端 `npm test -- --maxWorkers=4`，附 actionlint 自定义标签配置和真实解析器执行测试。
 
 固定 SHA、checkout 断言、Action pin、依赖锁、镜像身份、main-only 发布、digest 验证、PR 权限和外部 PR 审批规则保持现有策略。发布不接收本地构建产物，App 不用于依赖私有镜像鉴权。
 
@@ -259,7 +275,7 @@ doctor 不申请/打印 token，App 实际授权与注册是否正确由启动�
 | actionlint、workflow policy、磁盘脚本、控制器/host/template 测试 | 见交付 `VALIDATION.md` |
 | 唯一 VM / runner 与 cgroup 资源限制 | 11月18日修复前预检为唯一runner104在线空闲，controller/proxy active且NRestarts0；8 CPU/34 GiB/swap0/AppArmor已实测；30个核心文件在仓库、交付包与受保护安装中哈希一致 |
 | 无注册 VM smoke（DNS、代理 HTTPS、Docker、部分隔离检查） | 模板构建已完成并封存；更完整目标矩阵及 CI 容量检查待验收 |
-| 完整 PR 20 个不同身份、main 18 个、本地 ci-gate | CI290的20个本地job使用runner84至103的不同身份；17成功、1失败、2取消，gate未通过；本轮修夹具及frontend预算后由新提交重新验收 |
+| 完整 PR、唯一身份与 ci-gate | 修改前 CI306 attempt2 的20个本地job均成功、身份不同，gate成功；其中19项复用首轮结果、仅DFT使用新模板重跑。新增23项可选路由的结果见 `VALIDATION.md`；main托管发布验收仍待合入后执行 |
 | Docker pull、BuildKit remote Git、GHA cache、apt/pip/npm | CI290的backend/web镜像和OpenScience overlay通过，APT/pip/npm及Docker/BuildKit路径已有成功样本；pip缓存恢复与下载仍有波动，不能标记为持续稳定 |
 | 禁止宿主业务端口、17891/27891、Docker 网段、元数据、IPv6、非白名单 | 已执行两个上游端口、公共直接出口与私网代理拒绝 smoke；其余目标矩阵待完整验收 |
 | 成功、失败、取消、超时、重启均回收；无前任务残留 | CI290各job使用新UUID，结束后补充runner104；MCP摘要记录runner正常退出、service success、OOM计数0；完整磁盘残留与重启矩阵仍待验收 |
@@ -272,7 +288,7 @@ doctor 不申请/打印 token，App 实际授权与注册是否正确由启动�
 本地复验：
 
 ```bash
-python3 -m unittest scripts.tests.test_local_runner_controller scripts.tests.test_local_runner_host scripts.tests.test_local_runner_template scripts.tests.test_local_runner_guest_build scripts.tests.test_local_runner_guest_ordering scripts.tests.test_local_runner_maintenance scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows
+python3 -m unittest scripts.tests.test_local_runner_controller scripts.tests.test_local_runner_host scripts.tests.test_local_runner_template scripts.tests.test_local_runner_guest_build scripts.tests.test_local_runner_guest_ordering scripts.tests.test_local_runner_maintenance scripts.tests.test_ci_runner_selection scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows
 python3 scripts/ci/validate_workflows.py
 actionlint -config-file .github/actionlint.yaml .github/workflows/ci.yml
 ```
@@ -294,7 +310,7 @@ sudo systemctl start nexpoly-runner-controller.service
 
 模板更新需要全局锁空闲、drain 已设置、无活动实例。`drain` 保证不补充 VM；已注册的空闲 runner 为避免删除/分配竞态，会保留到接收一个 job 并完成，可能需要等待后续正常 CI。没有新 job 时不会承诺自动立即 drain 到空。先更新锁文件并按官方发行签名/SHA 审查，重新安装代码快照；不要在未 drain 时修改模板。runner 禁止自动更新，需要定期检查官方 release 和 runner version end-of-life API，按其注册/运行截止日期提前更新，不永久固定当前 runner 版本。
 
-回滚先 drain，待实例为空后停止控制器；同一提交回退 CI 路由、对应校验器/测试、磁盘脚本和 actionlint 配置，恢复 hosted 执行。若 GitHub API 故障导致 cleanup 挂起，保留 journal/overlay，恢复 API 后由控制器完成删除；不要手工清掉 journal 来强行补机。停止控制器不会自动杀死正在执行的 VM，也不会删除 200 GiB 存储；紧急终止需管理员明确停止登记的 `nexpoly-runner-vm@<uuid>.service`，之后让控制器按 journal 收尾。
+单个 PR 回到托管只需移除 `ci:local`，会取消本轮并启动完整托管 CI。停用本地服务时先 drain，待实例为空后停止控制器；默认 PR 和 main 执行不依赖该服务。若需要撤销本功能，同一提交回退 CI 选路和对应校验器/测试。若 GitHub API 故障导致 cleanup 挂起，保留 journal/overlay，恢复 API 后由控制器完成删除；不要手工清掉 journal 来强行补机。停止控制器不会自动杀死正在执行的 VM，也不会删除 200 GiB 存储；紧急终止需管理员明确停止登记的 `nexpoly-runner-vm@<uuid>.service`，之后让控制器按 journal 收尾。
 
 ## 官方参考
 

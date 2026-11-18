@@ -48,11 +48,12 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
         self.assertIn(before, body)
         return ci_text.replace(body, body.replace(before, after, 1), 1)
 
-    def test_ci_contract_accepts_only_the_reviewed_local_routes(self) -> None:
+    def test_ci_contract_accepts_only_the_reviewed_selectable_routes(self) -> None:
         policy = VALIDATOR.WORKFLOW_POLICY
-        for job in policy.LOCAL_RUNNER_JOBS:
+        for job in policy.SELECTABLE_RUNNER_JOBS:
             for replacement in (
                 policy.HOSTED_RUNNER_LINE,
+                policy.LOCAL_RUNNER_LINE,
                 "    runs-on: self-hosted",
                 "    runs-on: [self-hosted, linux, x64]",
                 "    runs-on: [self-hosted, linux, x64, unreviewed]",
@@ -61,7 +62,7 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
             ):
                 with self.subTest(job=job, route=replacement):
                     failures = self._ci_failures(self._replace_ci_job(
-                        job, policy.LOCAL_RUNNER_LINE, replacement))
+                        job, policy.SELECTABLE_RUNNER_LINE, replacement))
                     self.assertTrue(any(job in failure for failure in failures), failures)
 
     def test_ci_contract_keeps_control_and_publishers_on_hosted_runners(self) -> None:
@@ -69,8 +70,34 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
         for job in policy.HOSTED_RUNNER_JOBS:
             with self.subTest(job=job):
                 failures = self._ci_failures(self._replace_ci_job(
-                    job, policy.HOSTED_RUNNER_LINE, policy.LOCAL_RUNNER_LINE))
+                    job, policy.HOSTED_RUNNER_LINE, policy.SELECTABLE_RUNNER_LINE))
                 self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_ci_contract_rejects_runner_event_and_resolver_bypasses(self) -> None:
+        policy = VALIDATOR.WORKFLOW_POLICY
+        ci_text = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text()
+        for changed in (
+            ci_text.replace(", labeled, unlabeled", "", 1),
+            ci_text.replace('if "ci:local" in labels else', 'if labels else', 1),
+            ci_text.replace("runner_labels='[\"ubuntu-24.04\"]'", "runner_labels='[\"self-hosted\"]'", 1),
+            self._replace_ci_job("dft-worker-tests", policy.SELECTABLE_RUNNER_LINE,
+                                 policy.SELECTABLE_RUNNER_LINE + "\n    if: github.event.action != 'unlabeled'"),
+            self._replace_ci_job("confirmed-mcp-adapter-tests", "    needs: resolve-sha", "    needs: []"),
+        ):
+            with self.subTest(change=changed[:100]):
+                self.assertTrue(self._ci_failures(changed))
+
+    def test_ci_contract_enforces_the_two_buildx_environments(self) -> None:
+        policy = VALIDATOR.WORKFLOW_POLICY
+        for job in ("image-build", "openscience-overlay"):
+            for before, after in (
+                ("        if: runner.environment == 'github-hosted'\n", ""),
+                ("        if: runner.environment == 'self-hosted'", "        if: always()"),
+                ("            env.http_proxy=http://10.0.2.2:27892\n", ""),
+            ):
+                with self.subTest(job=job, control=before):
+                    failures = self._ci_failures(self._replace_ci_job(job, before, after))
+                    self.assertTrue(any(job in failure and "Buildx" in failure for failure in failures), failures)
 
     def test_ci_contract_rejects_added_missing_duplicate_jobs_and_duplicate_routes(self) -> None:
         policy = VALIDATOR.WORKFLOW_POLICY
@@ -80,8 +107,8 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
             ci_text + "\n  extra-job:\n    runs-on: ubuntu-24.04\n    steps: []\n",
             ci_text.replace("  dft-worker-tests:\n" + body, "", 1),
             ci_text + "\n  dft-worker-tests:\n" + body,
-            self._replace_ci_job("dft-worker-tests", policy.LOCAL_RUNNER_LINE,
-                                 policy.LOCAL_RUNNER_LINE + "\n" + policy.LOCAL_RUNNER_LINE),
+            self._replace_ci_job("dft-worker-tests", policy.SELECTABLE_RUNNER_LINE,
+                                 policy.SELECTABLE_RUNNER_LINE + "\n" + policy.SELECTABLE_RUNNER_LINE),
         ):
             with self.subTest(change=changed[-100:]):
                 self.assertTrue(self._ci_failures(changed))
@@ -91,10 +118,10 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
         ci_text = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text()
         mutations = [ci_text.replace(
             "permissions:\n  contents: read\n  packages: read", "permissions: write-all", 1)]
-        for job in policy.LOCAL_RUNNER_JOBS:
+        for job in policy.SELECTABLE_RUNNER_JOBS:
             mutations.append(self._replace_ci_job(
-                job, policy.LOCAL_RUNNER_LINE,
-                policy.LOCAL_RUNNER_LINE + "\n    permissions: {packages: write}"))
+                job, policy.SELECTABLE_RUNNER_LINE,
+                policy.SELECTABLE_RUNNER_LINE + "\n    permissions: {packages: write}"))
         for job in policy.PUBLISHING_JOBS:
             mutations.append(self._replace_ci_job(
                 job, "      contents: read", "      contents: write"))
@@ -125,7 +152,10 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
         result_json = json.loads(result.stdout)
         self.assertEqual(result_json["runner_routes"], {
             "hosted": "ubuntu-24.04",
-            "tests_and_builds": "[self-hosted, linux, x64, nexpoly-ci-ephemeral]",
+            "tests_and_builds": "${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}",
+            "default": ["ubuntu-24.04"],
+            "local_pull_request_label": "ci:local",
+            "local_pull_request_labels": ["self-hosted", "linux", "x64", "nexpoly-ci-ephemeral"],
         })
 
     def test_cli_require_committed_still_checks_governed_inputs(self) -> None:

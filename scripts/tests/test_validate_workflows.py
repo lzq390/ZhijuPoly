@@ -59,29 +59,114 @@ class RunnerRoutingPolicyTests(unittest.TestCase):
         policy.validate_local_runner_controls(CI_TEXT, failures)
         policy.validate_actionlint_config(policy.ACTIONLINT_PATH.read_text(), failures)
         self.assertEqual(failures, [])
-        self.assertEqual(len(policy.LOCAL_RUNNER_JOBS), 14)
+        self.assertEqual(len(policy.SELECTABLE_RUNNER_JOBS), 16)
         self.assertEqual(len(policy.HOSTED_RUNNER_JOBS), 4)
 
-    def test_every_local_job_requires_the_dedicated_ephemeral_route(self) -> None:
-        for job in policy.LOCAL_RUNNER_JOBS:
+    def test_every_selectable_job_requires_the_resolved_runner_route(self) -> None:
+        for job in policy.SELECTABLE_RUNNER_JOBS:
             for replacement in (
                 policy.HOSTED_RUNNER_LINE,
+                policy.LOCAL_RUNNER_LINE,
                 "    runs-on: self-hosted",
                 "    runs-on: [self-hosted, linux, x64]",
                 "    runs-on: [self-hosted, linux, x64, nexpoly-ci-persistent]",
                 "    runs-on: ${{ vars.RUNNER }}",
-                policy.LOCAL_RUNNER_LINE + "\n" + policy.LOCAL_RUNNER_LINE,
+                policy.SELECTABLE_RUNNER_LINE + "\n" + policy.SELECTABLE_RUNNER_LINE,
             ):
                 with self.subTest(job=job, replacement=replacement):
-                    changed = self.replace_job(job, policy.LOCAL_RUNNER_LINE, replacement)
+                    changed = self.replace_job(job, policy.SELECTABLE_RUNNER_LINE, replacement)
                     failures: list[str] = []
                     policy.validate_runner_routing(changed, failures)
+                    self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_runner_events_require_full_pr_label_runs_and_main_pushes(self) -> None:
+        trigger = policy.CI_TRIGGER_BLOCK
+        for replacement in (
+            trigger.replace(", labeled", ""), trigger.replace(", unlabeled", ""),
+            trigger.replace("opened, synchronize, reopened", "opened"),
+            trigger.replace("labeled, unlabeled", "labeled, unlabeled, edited"),
+            trigger.replace("  push:\n    branches: [main]", "  push:\n    branches: ['**']"),
+            trigger.replace("  pull_request:", "  pull_request_target:"),
+            trigger + "\n  workflow_dispatch:",
+            trigger + "\n    paths-ignore: ['**']",
+        ):
+            with self.subTest(trigger=replacement):
+                failures: list[str] = []
+                policy.validate_runner_routing(CI_TEXT.replace(trigger, replacement, 1), failures)
+                self.assertTrue(any("event triggers" in failure for failure in failures), failures)
+
+    def test_resolver_requires_hosted_default_exact_pr_opt_in_and_fixed_json(self) -> None:
+        resolver = policy.RESOLVE_SHA_JOB
+        mutations = (
+            ("runner_labels='[\"ubuntu-24.04\"]'", "runner_labels='[\"self-hosted\"]'"),
+            ('if [[ "$EVENT_NAME" == pull_request ]]; then', 'if true; then'),
+            ('if "ci:local" in labels else', 'if any("ci:local" in label for label in labels) else'),
+            ('"nexpoly-ci-ephemeral"]', '"nexpoly-ci-ephemeral", "gpu"]'),
+            ('not isinstance(labels, list)', 'False'),
+            ('any(not isinstance(label, str) for label in labels)', 'False'),
+            ('PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}',
+             'PR_LABELS_JSON: ${{ github.event.pull_request.title }}'),
+            ('[[ "$EVENT_REF" == refs/pull/*/merge ]]', 'true'),
+            ('^[0-9a-f]{40}$', '^[0-9a-f]{7,40}$'),
+            ('runner_labels: ${{ steps.resolve.outputs.runner_labels }}', 'runner_labels: ${{ vars.RUNNER }}'),
+            ('echo "runner_labels=$runner_labels"', 'echo "runner_labels=$PR_LABELS_JSON"'),
+        )
+        for before, after in mutations:
+            with self.subTest(before=before):
+                self.assertIn(before, resolver)
+                changed = CI_TEXT.replace(resolver, resolver.replace(before, after, 1), 1)
+                failures: list[str] = []
+                policy.validate_runner_routing(changed, failures)
+                self.assertTrue(any("resolve-sha must retain" in failure for failure in failures), failures)
+        failures = []
+        policy.validate_runner_routing(CI_TEXT.replace(resolver, resolver +
+            '\n          echo \'runner_labels=["self-hosted"]\' >>"$GITHUB_OUTPUT"', 1), failures)
+        self.assertTrue(any("resolve-sha must retain" in failure for failure in failures), failures)
+
+    def test_selectable_jobs_cannot_skip_labels_or_bypass_resolver_needs(self) -> None:
+        for job in policy.SELECTABLE_RUNNER_JOBS:
+            for before, after in (
+                ("    needs: resolve-sha", "    needs: [resolve-sha, ci-gate]"),
+                (policy.SELECTABLE_RUNNER_LINE, policy.SELECTABLE_RUNNER_LINE +
+                 "\n    if: github.event.action != 'labeled'"),
+                (policy.SELECTABLE_RUNNER_LINE, policy.SELECTABLE_RUNNER_LINE +
+                 "\n    if: contains(github.event.pull_request.labels.*.name, 'ci:local')"),
+            ):
+                with self.subTest(job=job, control=after):
+                    failures: list[str] = []
+                    policy.validate_runner_routing(self.replace_job(job, before, after), failures)
+                    self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_proxy_cannot_escape_the_self_hosted_buildx_branch(self) -> None:
+        for job in policy.SELECTABLE_RUNNER_JOBS:
+            with self.subTest(job=job):
+                failures: list[str] = []
+                policy.validate_runner_routing(self.replace_job(job, policy.SELECTABLE_RUNNER_LINE,
+                    policy.SELECTABLE_RUNNER_LINE + "\n    env:\n      HTTPS_PROXY: http://10.0.2.2:27892"), failures)
+                self.assertTrue(any(job in failure and "proxy" in failure for failure in failures), failures)
+
+    def test_buildx_paths_are_mutually_exclusive_and_hosted_path_has_no_proxy(self) -> None:
+        hosted = "\n".join(policy.CONDITIONAL_HOSTED_BUILDX_SETUP_LINES)
+        local = "\n".join(policy.LOCAL_BUILDX_SETUP_LINES)
+        for job in ("image-build", "openscience-overlay"):
+            for before, after in (
+                (hosted, hosted.replace("        if: runner.environment == 'github-hosted'\n", "")),
+                (hosted, hosted.replace("'github-hosted'", "'self-hosted'")),
+                (local, local.replace("        if: runner.environment == 'self-hosted'\n", "")),
+                (local, local.replace("'self-hosted'", "'github-hosted'")),
+                (hosted, hosted + "\n        with:\n          driver-opts: env.http_proxy=http://10.0.2.2:27892"),
+                (hosted, hosted + "\n" + hosted),
+                (local, ""),
+            ):
+                with self.subTest(job=job, control=after):
+                    failures: list[str] = []
+                    policy.validate_local_runner_controls(self.replace_job(job, before, after), failures)
                     self.assertTrue(any(job in failure for failure in failures), failures)
 
     def test_control_and_publishing_jobs_cannot_move_to_local_runners(self) -> None:
         for job in policy.HOSTED_RUNNER_JOBS:
             with self.subTest(job=job):
-                changed = self.replace_job(job, policy.HOSTED_RUNNER_LINE, policy.LOCAL_RUNNER_LINE)
+                changed = self.replace_job(job, policy.HOSTED_RUNNER_LINE, policy.SELECTABLE_RUNNER_LINE)
                 failures: list[str] = []
                 policy.validate_runner_routing(changed, failures)
                 self.assertTrue(any(job in failure for failure in failures), failures)
@@ -101,10 +186,10 @@ class RunnerRoutingPolicyTests(unittest.TestCase):
     def test_default_and_local_job_token_permissions_cannot_be_elevated(self) -> None:
         cases = [CI_TEXT.replace("permissions:\n  contents: read\n  packages: read",
                                  "permissions: write-all", 1)]
-        for job in policy.LOCAL_RUNNER_JOBS:
+        for job in policy.SELECTABLE_RUNNER_JOBS:
             for value in ("write-all", "{contents: read, packages: write}", "{id-token: write}"):
-                cases.append(self.replace_job(job, policy.LOCAL_RUNNER_LINE,
-                    policy.LOCAL_RUNNER_LINE + "\n    permissions: " + value))
+                cases.append(self.replace_job(job, policy.SELECTABLE_RUNNER_LINE,
+                    policy.SELECTABLE_RUNNER_LINE + "\n    permissions: " + value))
         for changed in cases:
             with self.subTest(changed=changed[:80]):
                 failures: list[str] = []
@@ -170,7 +255,7 @@ class RunnerRoutingPolicyTests(unittest.TestCase):
             with self.subTest(job=job):
                 body = policy.workflow_job_body(CI_TEXT, job, [])
                 step = next(item for item in policy.workflow_step_blocks(body)
-                            if "uses: docker/setup-buildx-action@" in item)
+                            if item.startswith("      - name: Set up Buildx for local runner\n"))
                 value = "\n".join(line.removeprefix("            ") for line in
                                   step.split("          driver-opts: |\n", 1)[1].splitlines())
                 arguments = self.action_driver_opts(value)
@@ -248,8 +333,8 @@ class RunnerRoutingPolicyTests(unittest.TestCase):
             build = next(step for step in policy.workflow_step_blocks(body)
                          if "uses: docker/build-push-action@" in step)
             for before, after in (
-                (policy.LOCAL_RUNNER_LINE,
-                 policy.LOCAL_RUNNER_LINE + "\n    continue-on-error: true"),
+                (policy.SELECTABLE_RUNNER_LINE,
+                 policy.SELECTABLE_RUNNER_LINE + "\n    continue-on-error: true"),
                 (build, build.splitlines()[0] + "\n        continue-on-error: true\n"
                  + "\n".join(build.splitlines()[1:]) + "\n"),
             ):
