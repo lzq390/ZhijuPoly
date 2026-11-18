@@ -158,6 +158,136 @@ export function acceptanceAttempt(inspected, recovery = false) {
     modelErrors: recovery ? inspected.currentModelErrors : inspected.modelErrors }
 }
 
+export function resourceIdentity(raw) {
+  try { const url = new URL(raw); return { origin: url.origin, path: url.pathname } }
+  catch { return { origin: "invalid", path: "invalid" } }
+}
+
+export function diagnosticError(error) {
+  const clean = value => String(value ?? "").replace(/(?:https?|wss?):\/\/[^\s<>"']+/g, raw => {
+    const value = resourceIdentity(raw); return value.origin + value.path
+  }).replace(/(bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[redacted]")
+    .replace(/((?:"(?:authorization|cookie|api[_-]?key|password)"|'(?:authorization|cookie|api[_-]?key|password)')\s*:\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/gi, "$1\"[redacted]\"")
+    .replace(/((?:authorization|cookie|api[_-]?key|password)\s*[:=]\s*)[^\r\n]+/gi, "$1[redacted]")
+  return { name: clean(error?.name || "Error").slice(0, 100), message: clean(error?.message || error).slice(0, 2000),
+    stack: clean(error?.stack).slice(0, 8000) }
+}
+
+export function createBrowserDiagnostics(report, now = Date.now) {
+  const started = now(), data = report.diagnostics = { stage: "initializing", events: [], resourceErrors: [] }
+  let cleanup = false, failure, rejectFailure
+  const failed = new Promise((_, reject) => { rejectFailure = reject })
+  failed.catch(() => {})
+  const append = (list, event) => { if (list.length < 200) list.push({ stage: data.stage, elapsedMs: now() - started,
+    intentionalCleanup: cleanup, ...event }); else data.droppedEvents = (data.droppedEvents ?? 0) + 1 }
+  const event = (type, detail = {}) => append(data.events, { type, ...detail })
+  return {
+    stage(value) { if (failure) throw failure; data.stage = value; event("stage") },
+    beginCleanup() { cleanup = true; event("cleanup_started") },
+    guard(promise) {
+      const operation = Promise.resolve(promise)
+      if (failure) { operation.catch(() => {}); return Promise.reject(failure) }
+      return Promise.race([operation, failed])
+    },
+    assertHealthy() { if (failure) throw failure },
+    routeError(error, request) {
+      event("route_error", { method: request.method(), ...resourceIdentity(request.url()), error: diagnosticError(error) })
+      if (!cleanup && !failure) { failure = error; rejectFailure(error) }
+    },
+    browser(browser) { browser.on("disconnected", () => event("browser_disconnected")) },
+    context(context) { context.on("close", () => event("context_closed")) },
+    page(page) {
+      page.on("close", () => event("page_closed")); page.on("crash", () => event("page_crashed"))
+      page.on("pageerror", error => event("page_error", { error: diagnosticError(error) }))
+      page.on("requestfailed", request => {
+        const reason = request.failure()?.errorText ?? "request_failed"
+        append(data.resourceErrors, { type: "request_failed", method: request.method(), ...resourceIdentity(request.url()),
+          reason: /^net::ERR_[A-Z0-9_]+$/.test(reason) ? reason : "request_failed" })
+      })
+      page.on("response", response => { if (response.status() >= 400) append(data.resourceErrors, {
+        type: "http_error", status: response.status(), method: response.request().method(), ...resourceIdentity(response.url()),
+      }) })
+    },
+  }
+}
+
+/** Attach rejection handlers to both operations before the click can fail. */
+export async function clickAndWaitForResponse(page, predicate, click) {
+  const [response] = await Promise.all([page.waitForResponse(predicate, { timeout: 30000 }), Promise.resolve().then(click)])
+  return response
+}
+
+export function measureCardGeometry(node) {
+  const doc = node.ownerDocument, win = doc.defaultView, rect = node.getBoundingClientRect()
+  const bounds = { left: 0, top: 0, right: win.innerWidth, bottom: win.innerHeight }
+  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+    const style = win.getComputedStyle(parent), box = parent.getBoundingClientRect()
+    if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
+      bounds.top = Math.max(bounds.top, box.top + parent.clientTop)
+      bounds.bottom = Math.min(bounds.bottom, box.top + parent.clientTop + parent.clientHeight)
+    }
+    if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {
+      bounds.left = Math.max(bounds.left, box.left + parent.clientLeft)
+      bounds.right = Math.min(bounds.right, box.left + parent.clientLeft + parent.clientWidth)
+    }
+  }
+  const inside = rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1
+    && rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1
+  const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2
+  const points = [[x, rect.top + 2], [x, rect.bottom - 2], [rect.left + 2, y], [rect.right - 2, y], [x, y]]
+  // Insets avoid rounded corners; the interior grid catches floating chat controls.
+  const insetX = Math.min(16, rect.width / 2), insetY = Math.min(16, rect.height / 2)
+  for (let px = rect.left + insetX; px <= rect.right - insetX; px += 32) {
+    points.push([px, rect.top + 2], [px, rect.bottom - 2])
+    for (let py = rect.top + insetY; py <= rect.bottom - insetY; py += 32) points.push([px, py])
+  }
+  for (let py = rect.top + insetY; py <= rect.bottom - insetY; py += 32) points.push([rect.left + 2, py], [rect.right - 2, py])
+  const visible = inside && points
+    .every(([px, py]) => { const hit = doc.elementFromPoint(px, py); return hit === node || node.contains(hit) })
+  return { rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, bounds,
+    viewport: { width: win.innerWidth, height: win.innerHeight }, visible }
+}
+
+const sameGeometry = (a, b) => a && b && ["x", "y", "width", "height"].every(key => Math.abs(a.rect[key] - b.rect[key]) <= 1)
+  && ["left", "top", "right", "bottom"].every(key => Math.abs(a.bounds[key] - b.bounds[key]) <= 1)
+
+/** A card must fit its nested scrollport before Chromium can capture its pixels. */
+export async function captureResultCard(page, card, filename, { timeoutMs = 10000, now = Date.now,
+  pause = () => page.waitForTimeout(100), onSample = () => {} } = {}) {
+  const width = page.viewportSize().width, deadline = now() + timeoutMs
+  let previous, stable = 0, attempts = 0
+  while (now() < deadline) {
+    await card.scrollIntoViewIfNeeded({ timeout: timeoutMs })
+    await card.evaluate(node => node.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" }))
+    const current = await card.evaluate(measureCardGeometry); onSample(current)
+    assert.equal(current.viewport.width, width, "Card capture must preserve the requested layout width")
+    assert.ok(current.rect.width > 0 && current.rect.height > 0, "Result card has no visible dimensions")
+    assert.ok(current.rect.width <= current.bounds.right - current.bounds.left + 1, "Result card overflows its scrollport width")
+    const missingHeight = current.rect.height - (current.bounds.bottom - current.bounds.top)
+    if (missingHeight > 0) {
+      const height = Math.ceil(current.viewport.height + missingHeight + 200)
+      assert.ok(height <= 8192, "Result card cannot fit within the bounded screenshot viewport")
+      await page.setViewportSize({ width, height }); previous = undefined; stable = 0; continue
+    }
+    stable = sameGeometry(previous, current) ? stable + 1 : 0
+    previous = current
+    if (stable >= 2) {
+      if (!current.visible) {
+        const height = current.viewport.height + 200
+        assert.ok(height <= 8192, "Result card cannot fit within the bounded screenshot viewport")
+        await page.setViewportSize({ width, height }); previous = undefined; stable = 0; continue
+      }
+      attempts++
+      await card.screenshot({ path: filename, animations: "disabled", timeout: timeoutMs })
+      const after = await card.evaluate(measureCardGeometry); onSample(after)
+      if (after.visible && sameGeometry(current, after)) return { viewport: after.viewport, rect: after.rect, bounds: after.bounds, attempts }
+      previous = undefined; stable = 0
+    }
+    await pause()
+  }
+  throw new Error("Result card did not remain fully visible and stable during capture")
+}
+
 const digest = text => createHash("sha256").update(text).digest("hex")
 async function privateJson(filename, value) {
   await writeFile(filename, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 })
@@ -177,37 +307,50 @@ async function main(config) {
   await chmod(config.outputDir, 0o700)
   const marker = config.marker ?? "retrosynthesis-ui-" + randomBytes(6).toString("hex")
   const report = { ok: false, marker, mode: config.sessionUrl ? "readback" : "real_ui", startedAt: new Date().toISOString(), promptRequests: 0 }
+  const diagnostics = createBrowserDiagnostics(report)
   let browser, context, page, promptRequest, unsafePrompt, confirmationBody
   try {
+    diagnostics.stage("launch_browser")
     browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] })
+    diagnostics.browser(browser)
     context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, locale: "zh-CN", serviceWorkers: "block" })
+    diagnostics.context(context)
     await context.route("**/*", async route => {
-      const request = route.request(), url = new URL(request.url())
-      if (["http:", "https:", "ws:", "wss:"].includes(url.protocol) && url.origin !== ORIGIN) return route.abort("blockedbyclient")
-      if (request.method() === "POST" && /\/session\/[^/]+\/(message|prompt_async)$/.test(url.pathname)) {
-        let body
-        try { body = request.postDataJSON() } catch { body = null }
-        report.promptRequests++
-        if (config.sessionUrl || report.promptRequests > 1 || body?.agent !== "research" || !JSON.stringify(body.parts ?? []).includes(marker)) {
-          unsafePrompt = true
-          return route.abort("blockedbyclient")
+      const request = route.request()
+      try {
+        const url = new URL(request.url())
+        if (["http:", "https:", "ws:", "wss:"].includes(url.protocol) && url.origin !== ORIGIN) return await route.abort("blockedbyclient")
+        if (request.method() === "POST" && /\/session\/[^/]+\/(message|prompt_async)$/.test(url.pathname)) {
+          let body
+          try { body = request.postDataJSON() } catch { body = null }
+          report.promptRequests++
+          if (config.sessionUrl || report.promptRequests > 1 || body?.agent !== "research" || !JSON.stringify(body.parts ?? []).includes(marker)) {
+            unsafePrompt = true
+            return await route.abort("blockedbyclient")
+          }
+          promptRequest = { url, body }
         }
-        promptRequest = { url, body }
-      }
-      if (request.method() === "POST" && url.pathname === "/openscience-api/nexpoly/retrosynthesis/draft") {
-        const body = request.postDataJSON()
-        if (config.sessionUrl && body.action !== "get") return route.abort("blockedbyclient")
-        if (body.action === "confirm") {
-          assert.ok(report.confirmationAuthorized, "A form submitted before the explicit confirmation step")
-          confirmationBody = body
-          report.confirmRequests = (report.confirmRequests ?? 0) + 1
+        if (request.method() === "POST" && url.pathname === "/openscience-api/nexpoly/retrosynthesis/draft") {
+          const body = request.postDataJSON()
+          if (config.sessionUrl && body.action !== "get") return await route.abort("blockedbyclient")
+          if (body.action === "confirm") {
+            assert.ok(report.confirmationAuthorized, "A form submitted before the explicit confirmation step")
+            confirmationBody = body
+            report.confirmRequests = (report.confirmRequests ?? 0) + 1
+          }
         }
+        return await route.continue()
+      } catch (error) {
+        diagnostics.routeError(error, request)
+        try { await route.abort("failed") } catch { /* A closed target may already have disposed its route. */ }
       }
-      return route.continue()
     })
     page = await context.newPage()
+    diagnostics.page(page)
+    diagnostics.stage("open_session")
     await page.goto(config.sessionUrl ?? ORIGIN + "/", { waitUntil: "domcontentloaded", timeout: 30000 })
     if (!config.sessionUrl) {
+      diagnostics.stage("submit_initial_prompt")
       const prompt = ["我想做单体逆合成，但还没选定目标分子，也不知道需要填写哪些参数。",
         "请先查询逆合成服务能力，打开空白的目标分子与参数输入卡片。未知目标先留空，我会在卡片中输入后确认。",
         "确认后请只查询这次任务，展示真实前体候选、数量和结构有效性，不要另建任务。",
@@ -247,7 +390,9 @@ async function main(config) {
     let inspected, terminal, accepted = false
     const deadline = Date.now() + config.timeoutMs
     if (!config.sessionUrl) {
+      diagnostics.stage("wait_for_parameter_card")
       while (Date.now() < deadline) {
+        diagnostics.assertHealthy()
         inspected = await readMessages()
         assert.equal(inspected.modelErrors.length, 0, "The initial parameter-card conversation failed")
         assert.ok(!inspected.tools.some(part => part.tool.endsWith("submit_retrosynthesis_generation") || part.tool.endsWith("get_retrosynthesis_job")),
@@ -269,15 +414,18 @@ async function main(config) {
       await form.screenshot({ path: path.join(config.outputDir, "parameters-empty.png") })
       await form.getByRole("textbox", { name: "目标结构或名称", exact: true }).fill("Nc1ccc(N)cc1")
       await form.locator('[data-parameter-name="num_return_sequences"]').fill("3")
-      const saveResponse = page.waitForResponse(response => response.url().endsWith("/nexpoly/retrosynthesis/draft")
-        && response.request().method() === "POST" && response.request().postDataJSON()?.action === "update")
-      await form.getByRole("button", { name: "保存参数", exact: true }).click()
-      const saved = await (await saveResponse).json()
+      diagnostics.stage("save_parameters")
+      const saveResponse = await diagnostics.guard(clickAndWaitForResponse(page,
+        response => response.url().endsWith("/nexpoly/retrosynthesis/draft")
+          && response.request().method() === "POST" && response.request().postDataJSON()?.action === "update",
+        () => form.getByRole("button", { name: "保存参数", exact: true }).click()))
+      const saved = await saveResponse.json()
       assert.equal(saved.ok, true)
       assert.equal(saved.draft.ready, true)
       assert.equal(saved.draft.job_id, null)
       assert.ok(saved.draft.resolved_target.canonical_smiles)
       await privateJson(path.join(config.outputDir, "parameters-saved.json"), saved.draft)
+      diagnostics.stage("restore_saved_parameters")
       await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 })
       const restored = page.locator(`[data-retrosynthesis-draft="${draftId}"]`)
       await restored.waitFor({ state: "visible", timeout: 30000 })
@@ -289,10 +437,13 @@ async function main(config) {
       await restored.screenshot({ path: path.join(config.outputDir, "parameters-ready.png") })
       report.confirmationAuthorized = true
       await privateJson(path.join(config.outputDir, "report.json"), report)
-      const confirmationResponse = page.waitForResponse(response => response.url().endsWith("/nexpoly/retrosynthesis/draft")
-        && response.request().method() === "POST" && response.request().postDataJSON()?.action === "confirm")
-      await page.locator(`[data-retrosynthesis-draft="${draftId}"]`).getByRole("button", { name: "确认并预测", exact: true }).evaluate(node => { node.click(); node.click() })
-      const confirmed = await (await confirmationResponse).json()
+      diagnostics.stage("confirm_parameters")
+      const confirmationResponse = await diagnostics.guard(clickAndWaitForResponse(page,
+        response => response.url().endsWith("/nexpoly/retrosynthesis/draft")
+          && response.request().method() === "POST" && response.request().postDataJSON()?.action === "confirm",
+        () => page.locator(`[data-retrosynthesis-draft="${draftId}"]`).getByRole("button", { name: "确认并预测", exact: true })
+          .evaluate(node => { node.click(); node.click() })))
+      const confirmed = await confirmationResponse.json()
       assert.equal(confirmed.ok, true)
       assert.ok(confirmed.draft.job_id)
       report.confirmedJobId = confirmed.draft.job_id
@@ -301,6 +452,7 @@ async function main(config) {
       assert.equal(report.confirmRequests, 1, "Double clicking must send one confirmation")
       // Simulate a lost response being retried: the original revision must replay
       // the original job and must not append another continuation receipt.
+      diagnostics.stage("verify_confirmation_replay")
       const replayResponse = await context.request.post(ORIGIN + "/openscience-api/nexpoly/retrosynthesis/draft", {
         data: confirmationBody, headers: { Origin: ORIGIN }, timeout: 30000, maxRedirects: 0,
       })
@@ -309,8 +461,10 @@ async function main(config) {
       assert.equal(replay.draft.job_id, confirmed.draft.job_id)
       report.confirmationReplayPreservedJob = true
     }
+    diagnostics.stage("verify_task_readback")
     let idleIncomplete = 0
     while (Date.now() < deadline) {
+      diagnostics.assertHealthy()
       inspected = await readMessages()
       assert.ok(!unsafePrompt, "Unexpected second prompt was blocked")
       const { tools: currentTools, modelErrors } = acceptanceAttempt(inspected, Boolean(config.sessionUrl))
@@ -363,7 +517,18 @@ async function main(config) {
       validCount: output.result.candidates.filter(candidate => candidate.valid_smiles).length }
     report.answer = { source: "model_generated_text", sha256: digest(inspected.text) }
     await privateJson(path.join(config.outputDir, "tool-results.json"), outputs)
-    await card.screenshot({ path: path.join(config.outputDir, "results.png") })
+    async function captureCard(locator, name) {
+      diagnostics.stage("capture_" + name)
+      const entry = { file: name, samples: [] }
+      report.cardCaptures ??= []
+      report.cardCaptures.push(entry)
+      entry.geometry = await diagnostics.guard(captureResultCard(page, locator, path.join(config.outputDir, name), {
+        onSample: sample => { entry.samples.push(sample); if (entry.samples.length > 8) entry.samples.shift() },
+      }))
+    }
+    await captureCard(card, "results.png")
+    await page.setViewportSize({ width: 1440, height: 1050 })
+    diagnostics.stage("verify_result_reload")
     await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 })
     await page.locator(`[data-retrosynthesis-results][data-job-id="${output.job_id}"]`).last().waitFor({ state: "visible", timeout: 30000 })
     const reloaded = await readMessages()
@@ -371,6 +536,7 @@ async function main(config) {
     await page.screenshot({ path: path.join(config.outputDir, "conversation.png"), fullPage: false })
     report.refreshPreservedResults = true
     for (const width of [320, 452, 1440]) {
+      diagnostics.stage("validate_layout_" + width)
       await page.setViewportSize({ width, height: 1050 })
       const reloadedCard = page.locator(`[data-retrosynthesis-results][data-job-id="${output.job_id}"]`).last()
       const metrics = await reloadedCard.locator(".nexpoly-polytao-metric dt, .nexpoly-polytao-metric dd").evaluateAll(nodes => nodes.map(node => ({
@@ -381,20 +547,27 @@ async function main(config) {
       assert.ok(metrics.every(item => item.width >= 80 && item.height <= item.fontSize * 3.3), "The task summary wraps vertically")
       assert.ok(await reloadedCard.locator(".nexpoly-polytao-metric").last().innerText(), "The snapshot query time must remain visible")
       assert.equal(await reloadedCard.locator("details").getAttribute("open"), null)
-      if (width === 452) await reloadedCard.screenshot({ path: path.join(config.outputDir, "results-narrow.png") })
+      if (width === 452) await captureCard(reloadedCard, "results-narrow.png")
     }
+    diagnostics.assertHealthy()
     report.readableTaskSummary = true
     report.ok = true
+    diagnostics.stage("complete")
   } catch (error) {
-    report.failure = { name: error.name, message: error.message }
-    if (page) {
-      try { await page.screenshot({ path: path.join(config.outputDir, "failure.png"), fullPage: false, timeout: 5000 }) } catch { /* Report remains available. */ }
+    report.failure = { ...diagnosticError(error), stage: report.diagnostics.stage }
+    report.failureScreenshot = { status: "unavailable", reason: !page ? "page_not_created" : "page_closed" }
+    if (page && !page.isClosed()) {
+      try {
+        await page.screenshot({ path: path.join(config.outputDir, "failure.png"), fullPage: false, timeout: 5000 })
+        report.failureScreenshot = { status: "captured", file: "failure.png" }
+      } catch (captureError) { report.failureScreenshot = { status: "unavailable", reason: "capture_failed", error: diagnosticError(captureError) } }
     }
   } finally {
+    diagnostics.beginCleanup()
+    try { await context?.close() } catch { /* Preserve the first failure and lifecycle evidence. */ }
+    try { await browser?.close() } catch { /* A crashed browser may already be disconnected. */ }
     report.finishedAt = new Date().toISOString()
     await privateJson(path.join(config.outputDir, "report.json"), report)
-    await context?.close()
-    await browser?.close()
   }
   console.log(JSON.stringify({ ok: report.ok, report: path.join(config.outputDir, "report.json"), sessionUrl: report.sessionUrl, marker }))
   if (!report.ok) process.exitCode = 1
