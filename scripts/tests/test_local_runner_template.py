@@ -579,6 +579,18 @@ class TemplateDownloadTests(unittest.TestCase):
 
 
 class GuestBootstrapTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture_root = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="nexpoly-bootstrap-test-")))
+        self.runner = self.fixture_root / "runner"
+        self.runner.mkdir(mode=0o700)
+        self.runtime = self.fixture_root / "runtime"
+        self.enterContext(mock.patch.object(bootstrap, "RUNNER", self.runner))
+        self.enterContext(mock.patch.object(bootstrap, "RUNTIME", self.runtime))
+        # Bootstrap tests exercise orchestration. Real kernel counters, signal
+        # handlers and service queries are covered by guest diagnostic tests.
+        self.diagnostics = mock.Mock()
+        self.enterContext(mock.patch.object(bootstrap, "GuestDiagnostics", return_value=self.diagnostics))
+
     def payload(self):
         return {"repo_url": "https://github.com/lzq390/ZhijuPoly", "runner_name": "nexpoly-ci-" + "a" * 32, "registration_token": "SECRETBOOTSTRAPVALUE12345", "labels": ["nexpoly-ci-ephemeral"]}
 
@@ -593,24 +605,105 @@ class GuestBootstrapTests(unittest.TestCase):
     def test_token_not_in_arguments_and_removed_before_job_start(self):
         payload = self.payload()
         commands = []
+        diagnostic = self.runner / "_diag"
+        diagnostic.mkdir()
+        (diagnostic / "registration.log").write_text("private registration fixture")
 
         def run(args, **kwargs):
             commands.append((args, dict(kwargs.get("env", {})), kwargs.get("preexec_fn")))
+            if args[0] in {str(self.runner / "config.sh"), str(self.runner / "run.sh")}:
+                self.assertEqual(kwargs.get("cwd"), self.runner)
+            if args[0] == str(self.runner / "run.sh"):
+                self.assertFalse(diagnostic.exists())
+                self.assertFalse(diagnostic.is_symlink())
+                self.assertNotIn("ACTIONS_RUNNER_INPUT_TOKEN", kwargs["env"])
             return subprocess.CompletedProcess(args, 0)
 
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(bootstrap, "RUNTIME", Path(directory)), mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), mock.patch.object(bootstrap, "read_payload", return_value=payload), mock.patch.object(bootstrap.subprocess, "run", side_effect=run), mock.patch.object(bootstrap, "emit") as emit, mock.patch.object(bootstrap, "ensure_user_session"), mock.patch.object(bootstrap, "isolated_registration"), mock.patch("shutil.rmtree"):
+        with mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), \
+                mock.patch.object(bootstrap, "read_payload", return_value=payload), \
+                mock.patch.object(bootstrap.subprocess, "run", side_effect=run), \
+                mock.patch.object(bootstrap, "emit") as emit, \
+                mock.patch.object(bootstrap, "ensure_user_session"), \
+                mock.patch.object(bootstrap, "isolated_registration"):
             bootstrap.register()
+            self.assertFalse(diagnostic.exists())
             self.assertEqual(bootstrap.main(), 0)
         config_args, config_env, config_preexec = commands[0]
+        self.assertEqual(config_args[0], str(self.runner / "config.sh"))
         self.assertIn("--ephemeral", config_args)
         self.assertNotIn("--token", config_args)
         self.assertEqual(config_env["ACTIONS_RUNNER_INPUT_TOKEN"], "SECRETBOOTSTRAPVALUE12345")
         self.assertIs(config_preexec, bootstrap.drop_privileges)
+        self.assertEqual(commands[1][0], [str(self.runner / "run.sh")])
         self.assertIs(commands[1][2], bootstrap.prepare_job_process)
         self.assertNotIn("ACTIONS_RUNNER_INPUT_TOKEN", commands[1][1])
         self.assertEqual(commands[-1][0], ["systemctl", "poweroff", "--no-block"])
         self.assertEqual(payload, {})
         self.assertNotIn("SECRETBOOTSTRAPVALUE12345", str(emit.call_args_list))
+
+    def test_register_rejects_diagnostics_that_cleanup_could_not_remove(self):
+        payload = self.payload()
+        diagnostic = self.runner / "_diag"
+        diagnostic.mkdir()
+        private_log = diagnostic / "registration.log"
+        private_log.write_text("private registration fixture")
+        real_rmtree = shutil.rmtree
+
+        def failed_cleanup(path, *args, **kwargs):
+            # Model rmtree(ignore_errors=True) leaving this directory behind.
+            # All other paths retain real cleanup, including temporary fixtures.
+            if path != diagnostic:
+                return real_rmtree(path, *args, **kwargs)
+
+        with mock.patch.object(bootstrap, "read_payload", return_value=payload), \
+                mock.patch.object(bootstrap.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), \
+                mock.patch.object(shutil, "rmtree", side_effect=failed_cleanup) as cleanup:
+            with self.assertRaisesRegex(RuntimeError, "registration diagnostics were not removed"):
+                bootstrap.register()
+        cleanup.assert_called_once_with(diagnostic, ignore_errors=True)
+        self.assertEqual(private_log.read_text(), "private registration fixture")
+        self.assertEqual(payload, {})
+        self.diagnostics.enable.assert_not_called()
+
+    def test_bootstrap_examples_ignore_existing_external_runner_diagnostics(self):
+        # Simulate the default live-runner path without reading or deleting it.
+        external = self.fixture_root / "external-runner" / "_diag"
+        external.mkdir(parents=True)
+        external_log = external / "listener.log"
+        external_log.write_text("external listener fixture must remain")
+        live_runner = Path("/opt/actions-runner")
+        queries = []
+        original_exists, original_symlink, original_rmtree = Path.exists, Path.is_symlink, shutil.rmtree
+
+        def exists(path):
+            if path.is_relative_to(live_runner):
+                queries.append(path)
+                return True
+            return original_exists(path)
+
+        def is_symlink(path):
+            if path.is_relative_to(live_runner):
+                queries.append(path)
+                return False
+            return original_symlink(path)
+
+        def rmtree(path, *args, **kwargs):
+            self.assertFalse(Path(path).is_relative_to(live_runner), "must not clean the live runner")
+            return original_rmtree(path, *args, **kwargs)
+
+        names = ("test_token_not_in_arguments_and_removed_before_job_start",
+                 "test_ready_user_session_precedes_registration_and_job")
+        suite = unittest.TestSuite(type(self)(name) for name in names)
+        result = unittest.TestResult()
+        with mock.patch.object(Path, "exists", new=exists), \
+                mock.patch.object(Path, "is_symlink", new=is_symlink), \
+                mock.patch.object(shutil, "rmtree", side_effect=rmtree):
+            suite.run(result)
+        self.assertEqual(result.testsRun, 2)
+        self.assertEqual(result.failures, [])
+        self.assertEqual(result.errors, [])
+        self.assertEqual(queries, [])
+        self.assertEqual(external_log.read_text(), "external listener fixture must remain")
 
     def test_job_child_drops_privileges_before_changing_its_umask(self):
         events = []
@@ -669,7 +762,7 @@ class GuestBootstrapTests(unittest.TestCase):
                 os.umask(previous_umask)
 
     def test_failure_event_never_includes_exception_or_token(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(bootstrap, "RUNTIME", Path(directory)), mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), mock.patch.object(bootstrap, "ensure_user_session"), mock.patch.object(bootstrap, "isolated_registration", side_effect=ValueError("SECRET-IN-ERROR")), mock.patch.object(bootstrap.subprocess, "run") as run, mock.patch.object(bootstrap, "emit") as emit:
+        with mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), mock.patch.object(bootstrap, "ensure_user_session"), mock.patch.object(bootstrap, "isolated_registration", side_effect=ValueError("SECRET-IN-ERROR")), mock.patch.object(bootstrap.subprocess, "run") as run, mock.patch.object(bootstrap, "emit") as emit:
             self.assertEqual(bootstrap.main(), 1)
             self.assertNotIn("SECRET-IN-ERROR", str(emit.call_args_list))
             run.assert_called_once_with(["systemctl", "poweroff", "--no-block"], check=False)
@@ -713,9 +806,7 @@ class GuestBootstrapTests(unittest.TestCase):
         self.assertEqual(calls, [("runner", 1001), ("gid", 1001), ("uid", 1001)])
 
     def test_unavailable_user_session_prevents_receiving_registration_credential(self):
-        with tempfile.TemporaryDirectory() as directory, \
-                mock.patch.object(bootstrap, "RUNTIME", Path(directory)), \
-                mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), \
+        with mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), \
                 mock.patch.object(bootstrap, "ensure_user_session", side_effect=TimeoutError), \
                 mock.patch.object(bootstrap, "isolated_registration") as register, \
                 mock.patch.object(bootstrap.subprocess, "run") as run, \
@@ -729,15 +820,13 @@ class GuestBootstrapTests(unittest.TestCase):
         def run(command, **kwargs):
             order.append(command[0])
             return subprocess.CompletedProcess(command, 0)
-        with tempfile.TemporaryDirectory() as directory, \
-                mock.patch.object(bootstrap, "RUNTIME", Path(directory)), \
-                mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), \
+        with mock.patch.object(bootstrap.Path, "read_text", return_value=bootstrap.PROFILE), \
                 mock.patch.object(bootstrap, "ensure_user_session", side_effect=lambda: order.append("session")), \
                 mock.patch.object(bootstrap, "isolated_registration", side_effect=lambda: order.append("registration")), \
                 mock.patch.object(bootstrap.subprocess, "run", side_effect=run), \
                 mock.patch.object(bootstrap, "emit"):
             self.assertEqual(bootstrap.main(), 0)
-        self.assertEqual(order, ["session", "registration", "/opt/actions-runner/run.sh", "systemctl"])
+        self.assertEqual(order, ["session", "registration", str(self.runner / "run.sh"), "systemctl"])
 
     def test_guest_ready_is_emitted_after_opening_receive_port(self):
         order = []

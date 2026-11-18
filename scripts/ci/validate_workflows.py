@@ -1430,6 +1430,19 @@ def validate_backend_tests_budget(
         )
 
 
+def validate_frontend_budget(
+    ci_text: str,
+    failures: list[str],
+) -> None:
+    body = workflow_job_body(ci_text, "frontend", failures)
+    if body is None:
+        return
+    if re.findall(r"(?m)^    timeout-minutes:([^\n]*)$", body) != [" 35"]:
+        failures.append(
+            "frontend must retain exactly one reviewed 35-minute job budget"
+        )
+
+
 def validate_script_tests_budget(
     ci_text: str,
     failures: list[str],
@@ -3224,6 +3237,7 @@ def main() -> int:
     validate_complete_history_checkouts(ci_text, failures)
     validate_script_tests_budget(ci_text, failures)
     validate_backend_tests_budget(ci_text, failures)
+    validate_frontend_budget(ci_text, failures)
     validate_lightweight_backend_tests(ci_text, failures)
     validate_independent_mcp_tests(ci_text, failures)
     validate_polymer_md_script_tests(ci_text, failures)

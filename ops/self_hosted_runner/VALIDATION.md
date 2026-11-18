@@ -295,6 +295,18 @@ backend的241条宿主metrics采样显示内存峰约4.103 GiB、CPU累计316秒
 
 增加workflow policy精确验证唯一的75分钟job字段。4项新增回归覆盖旧40、105及更高值、其他未审阅值、表达式、重复、缺失和伪步级字段，并验证policy CLI拒绝旧配置。最终复验共397项通过：runner相关251项、镜像资源与DFT契约34项、workflow policy112项；actionlint1.7.7、ShellCheck0.10.0及workflow policy检查通过。提交后还需复核`--require-committed`，再推送新head触发完整20个本地job及hosted gate；旧run重跑不会读取新75分钟配置。当前没有将完整CI记为通过。
 
+## 2026-11-18 CI #290 的失败定位与修复
+
+run44045595151/head34cb3f3于北京时间11月17日22:37结束，20个本地job为17成功、1失败、2取消。三个Backend分片、两个镜像构建、OpenScience overlay、DFT/MD、policy、PostgreSQL等任务均通过；ci-gate明确汇总script-tests failure、property-filter-mcp-tests cancelled、frontend cancelled，并非新增独立错误。
+
+script-tests运行2535项/1648.833秒，1 failure、1 error、19 skipped。两项GuestBootstrapTests只隔离RUNTIME而未隔离默认RUNNER，真实self-hosted job存在`/opt/actions-runner/_diag`，因此触发新增的注册诊断清理保护；本地无该目录时原测试会通过。纯临时路径/查询替身复现了同样的两处失败。本次修复测试夹具使用临时RUNNER/RUNTIME，实际清理临时诊断目录，禁止接触live runner日志；生产guard与凭据清理顺序不作调整。
+
+frontend annotation明确超过25分钟期限。188个Vitest文件/2147项测试通过；浏览器安装耗5分59秒、浏览器功能验证8分31秒、两次镜像验证合计4分58秒。最后账户UI四例已输出passed，但随后的browser.close或外层清理是否完成无法确认，不能将被取消的step记为成功。仅将frontend job期限调至35分钟，policy精确限制唯一job级字面量；完整测试、双构建、浏览器与镜像验证、缓存和其他job期限保持原样。
+
+MCP实际运行17分14秒，setup-python被取消，依赖安装和测试均skipped；annotation含cache restore timeout，却无20分钟最大期限信息。GitHub单job日志返回404、完整run日志包也缺该job。管理员提供的实例摘要显示runner_exit=0、unit_stop exited/success、无bootstrap_signal、guest全局及unit OOM计数和delta均0，Docker/user manager仍active；宿主observed_at晚于job API完成约16秒，只能作为收件时间。现有证据不支持提前杀VM或20分钟期限解释，但不足以判定取消发起源；保留该未知项，后续完整CI继续复验。分析摘要保存于`/data/lzq/jobs/runner-ci290-analysis-20261118/`。
+
+本次修复整合验证403项通过（runner相关253项、workflow/镜像资源/DFT契约150项），workflow policy、actionlint1.7.7与集成ShellCheck检查通过。独立harness模拟live runner诊断目录存在时，原两项测试均通过，真实路径查询为0，所有删除调用均限制于临时路径。11月18日推送前预检为唯一runner104在线空闲，控制器与代理active、NRestarts0；仓库、交付包与受保护安装的30个核心文件哈希一致，无需重装或重建。提交后仍须执行`--require-committed`再触发新完整CI；此处未将待运行的CI标记为通过。
+
 ## 复验命令
 
 在仓库根目录：

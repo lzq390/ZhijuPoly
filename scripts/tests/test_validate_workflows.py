@@ -1234,6 +1234,50 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
                 self.assertEqual(policy.main(), 1)
         self.assertTrue(any("75-minute job budget" in str(call) for call in printed.call_args_list))
 
+    def test_frontend_retains_reviewed_budget_and_npm_cache(self) -> None:
+        failures: list[str] = []
+        policy.validate_frontend_budget(CI_TEXT, failures)
+        self.assertEqual(failures, [])
+        body = policy.workflow_job_body(CI_TEXT, "frontend", [])
+        self.assertIn("          cache: npm\n", body)
+        self.assertIn("          cache-dependency-path: frontend/package-lock.json\n", body)
+
+    def test_frontend_budget_rejects_old_and_unreviewed_values(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "frontend", [])
+        for value in ("0", "25", "30", "34", "36", "40", "75", "105", "106", '"35"',
+                      "${{ matrix.timeout }}"):
+            with self.subTest(value=value):
+                changed = CI_TEXT.replace(body, body.replace(
+                    "    timeout-minutes: 35\n", f"    timeout-minutes: {value}\n", 1), 1)
+                failures: list[str] = []
+                policy.validate_frontend_budget(changed, failures)
+                self.assertTrue(any("35-minute job budget" in failure for failure in failures), failures)
+
+    def test_frontend_budget_requires_one_real_job_level_field(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "frontend", [])
+        for replacement in (
+            "", "    # timeout-minutes: 35\n", "        timeout-minutes: 35\n",
+            "    timeout-minutes: 35\n    timeout-minutes: 35\n",
+            "    timeout-minutes: 35\n    timeout-minutes: 75\n",
+        ):
+            with self.subTest(replacement=replacement):
+                changed = CI_TEXT.replace(body, body.replace(
+                    "    timeout-minutes: 35\n", replacement, 1), 1)
+                failures: list[str] = []
+                policy.validate_frontend_budget(changed, failures)
+                self.assertTrue(any("35-minute job budget" in failure for failure in failures), failures)
+
+    def test_workflow_policy_cli_rejects_the_old_frontend_budget(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "frontend", [])
+        changed = CI_TEXT.replace(body, body.replace(
+            "    timeout-minutes: 35\n", "    timeout-minutes: 25\n", 1), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "ci.yml"
+            candidate.write_text(changed)
+            with mock.patch.object(policy, "CI_PATH", candidate), mock.patch("builtins.print") as printed:
+                self.assertEqual(policy.main(), 1)
+        self.assertTrue(any("35-minute job budget" in str(call) for call in printed.call_args_list))
+
     def test_script_tests_keep_fault_injection_budget(self) -> None:
         script_job = CI_TEXT.index("  script-tests:\n")
         timeout = CI_TEXT.index("    timeout-minutes: 40\n", script_job)

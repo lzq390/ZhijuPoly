@@ -1,10 +1,14 @@
 # 本地 GitHub Actions Runner 实施与运维方案
 
-版本：2026-11-17。目标仓库：`lzq390/ZhijuPoly`。
+版本：2026-11-18。目标仓库：`lzq390/ZhijuPoly`。
 
 ## 当前交付状态
 
 已实现控制器、宿主安装工具、受限网络配置、VM 模板制作、guest 启动程序、版本锁和 CI 迁移代码。源码位于仓库 `ops/self_hosted_runner/`，部署副本位于 `/data/lzq/github-runner/control/`。本文件同时保存为 `/data/lzq/github-runner/PLAN.md`。
+
+**2026-11-18 CI #290 分析与修复。** [run44045595151](https://github.com/lzq390/ZhijuPoly/actions/runs/44045595151) 的20个本地任务为17成功、1失败、2取消，ci-gate汇总这三个阻断项。三个Backend分片全部通过，其中shard1用时56分43秒，75分钟预算与pip缓存继续保留。script-tests的两处旧测试使用真实runner的`_diag`目录，触发新的清理保护；本次只隔离测试夹具的RUNNER/RUNTIME，并保留运行时保护检查。frontend的2147项Vitest通过，最后账户UI四例也输出通过，但收尾前触发25分钟总期限；该job改为35分钟并同步精确policy，验证内容与npm缓存保持原样。
+
+MCP在setup-python阶段取消，实际运行17分14秒，小于20分钟上限；缓存恢复超时是已知警告，取消发起源仍不明。该job日志在GitHub缺失；新VM摘要显示runner退出0、service成功、全局及unit OOM计数均0，未见宿主提前杀VM的证据。本次不将它归为20分钟超时，不改变其缓存或期限，新一轮完整CI继续复验并保留诊断。上述修复不改变guest运行时代码，无需重装宿主组件或重建模板；完整验收结果以后续新run为准。
 
 **2026-11-17 完整 CI 复验配置。** 用户选择保留 Backend 的 pip 缓存，将 `backend-tests` 三个矩阵分片的任务上限从40分钟调整为75分钟，并由新提交触发一次完整CI。其余任务期限、8vCPU/32GiB guest资源和宿主105分钟兜底保持原值。新policy精确校验唯一的75分钟任务字段；缓存下载、Python工具下载和测试用时仍需分别记录。此次延长期限不代表网络已恢复稳定，也不改变全部20个本地job及ci-gate的验收要求；旧run重跑会沿用旧40分钟配置。
 
@@ -239,14 +243,14 @@ doctor 不申请/打印 token，App 实际授权与注册是否正确由启动�
 | 验收项 | 当前状态 / 记录内容 |
 | --- | --- |
 | actionlint、workflow policy、磁盘脚本、控制器/host/template 测试 | 见交付 `VALIDATION.md` |
-| 唯一 VM / runner 与 cgroup 资源限制 | 新模板分别由runner82/83的不同VM执行；已回收83，当前唯一runner84在线空闲/唯一VM；8 CPU/34 GiB/swap0/AppArmor已实测，controller active且NRestarts0 |
+| 唯一 VM / runner 与 cgroup 资源限制 | 11月18日修复前预检为唯一runner104在线空闲，controller/proxy active且NRestarts0；8 CPU/34 GiB/swap0/AppArmor已实测；30个核心文件在仓库、交付包与受保护安装中哈希一致 |
 | 无注册 VM smoke（DNS、代理 HTTPS、Docker、部分隔离检查） | 模板构建已完成并封存；更完整目标矩阵及 CI 容量检查待验收 |
-| 完整 PR 20 个不同身份、main 18 个、本地 ci-gate | run43817712995的script单项复验成功；backend0在准备阶段触发40分钟期限；四项旧网络失败未重跑，PR整套CI未通过 |
-| Docker pull、BuildKit remote Git、GHA cache、apt/pip/npm | 新模板APT、六制品和hello-world smoke通过；backend0 Python包下载19分35秒，pip cache hit到pip约10分钟，耗尽job预算；四项网络失败待复验 |
-| 禁止宿主业务端口、27891、Docker 网段、元数据、IPv6、非白名单 | 已执行 27891、公共直接出口与私网代理拒绝 smoke；其余目标矩阵待完整验收 |
-| 成功、失败、取消、超时、重启均回收；无前任务残留 | script成功、backend0被GitHub40分钟期限取消后均已换新UUID；83已回收、84在线空闲；完整磁盘残留与重启矩阵仍待验收 |
+| 完整 PR 20 个不同身份、main 18 个、本地 ci-gate | CI290的20个本地job使用runner84至103的不同身份；17成功、1失败、2取消，gate未通过；本轮修夹具及frontend预算后由新提交重新验收 |
+| Docker pull、BuildKit remote Git、GHA cache、apt/pip/npm | CI290的backend/web镜像和OpenScience overlay通过，APT/pip/npm及Docker/BuildKit路径已有成功样本；pip缓存恢复与下载仍有波动，不能标记为持续稳定 |
+| 禁止宿主业务端口、17891/27891、Docker 网段、元数据、IPv6、非白名单 | 已执行两个上游端口、公共直接出口与私网代理拒绝 smoke；其余目标矩阵待完整验收 |
+| 成功、失败、取消、超时、重启均回收；无前任务残留 | CI290各job使用新UUID，结束后补充runner104；MCP摘要记录runner正常退出、service success、OOM计数0；完整磁盘残留与重启矩阵仍待验收 |
 | 上游断开后无直连、恢复后补机 | 待维护窗口针对专用路径测试；不要随意停共享代理 |
-| CPU/RAM/磁盘/流量/总耗时 | script采样峰3.041 GiB；backend准备阶段241条采样峰4.103 GiB、CPU316秒、读0.561/写2.595 GiB，OOM/KILL0；完整backend与整轮峰值仍待验收 |
+| CPU/RAM/磁盘/流量/总耗时 | 历史script采样峰3.041 GiB、backend准备峰4.103 GiB；CI290 MCP准备阶段峰4.241 GiB、guest OOM计数0；整轮各job峰值仍待汇总，不能以准备阶段代替完整测试峰值 |
 | 现有业务容器、网络与生产目录 | 上线前后对照只读基线；安装不调用宿主 Docker |
 
 资源记录包括 cgroup MemoryPeak/CPUUsageNSec/I/O、overlay 实际分配峰值采样和 elapsed_seconds。`proxy_output_bytes` 减 `proxy_output_bytes_initial` 为专用代理出口字节量估算，包含少量控制请求、请求/响应开销，不能当成纯镜像下载字节。磁盘峰值为 30 秒采样，可能低于瞬时峰值。记录 GitHub PR URL、job ID、VM UUID、起止时间，验收至少覆盖一次完整冷 CI。
