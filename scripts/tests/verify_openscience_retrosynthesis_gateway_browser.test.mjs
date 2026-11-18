@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { acceptanceAttempt, acceptanceReady, inspectMessages, inspectWorkflowMessages, options, readbackUrls, structuredOutput } from "../verify_openscience_retrosynthesis_gateway_browser.mjs"
+import { EventEmitter } from "node:events"
+import { acceptanceAttempt, acceptanceReady, captureResultCard, clickAndWaitForResponse, createBrowserDiagnostics,
+  diagnosticError, inspectMessages, inspectWorkflowMessages, measureCardGeometry, options, readbackUrls,
+  resourceIdentity, structuredOutput } from "../verify_openscience_retrosynthesis_gateway_browser.mjs"
 
 const marker = "retrosynthesis-ui-aabbcc001122"
 const session = "http://127.0.0.1:19111/chat/ses_probe-a"
@@ -186,4 +189,119 @@ test("a pending continuation cannot reuse a prior terminal answer or another ses
   assert.equal(inspected.done, false)
   assert.equal(inspected.currentTools.length, 1, "only the original prepare tool belongs to the current attempt so far")
   assert.doesNotMatch(inspected.text, /Foreign answer/)
+})
+
+test("browser diagnostics distinguish unexpected closure from cleanup and keep resource errors private and bounded", async () => {
+  const report = {}, browser = new EventEmitter(), context = new EventEmitter(), page = new EventEmitter()
+  const diagnostics = createBrowserDiagnostics(report, () => 100)
+  diagnostics.browser(browser); diagnostics.context(context); diagnostics.page(page)
+  diagnostics.stage("confirm_parameters")
+  page.emit("crash"); page.emit("close")
+  const request = { method: () => "GET", url: () => "https://alice:password@example.invalid/asset?token=private-token#secret",
+    failure: () => ({ errorText: "net::ERR_ABORTED" }) }
+  for (let i = 0; i < 205; i++) page.emit("requestfailed", request)
+  page.emit("response", { status: () => 503, url: request.url, request: () => request })
+  diagnostics.beginCleanup(); context.emit("close"); browser.emit("disconnected")
+  assert.equal(report.diagnostics.events.find(event => event.type === "page_crashed").intentionalCleanup, false)
+  assert.equal(report.diagnostics.events.find(event => event.type === "browser_disconnected").intentionalCleanup, true)
+  assert.equal(report.diagnostics.resourceErrors.length, 200)
+  assert.ok(report.diagnostics.droppedEvents >= 5)
+  assert.deepEqual(resourceIdentity(request.url()), { origin: "https://example.invalid", path: "/asset" })
+  assert.doesNotMatch(JSON.stringify(report), /alice|password|private-token|#secret/)
+  const error = new Error("https://alice:password@example.invalid/route?token=private-token Bearer secret-credential")
+  assert.doesNotMatch(JSON.stringify(diagnosticError(error)), /alice|password|private-token|secret-credential/)
+  assert.ok(diagnosticError(error).stack)
+  const structuredError = new Error('wss://alice:private-credential@example.invalid/live?token=private-token '
+    + '{"password":"private-password","api_key":"private-key","cookie":"private-cookie"}')
+  assert.doesNotMatch(JSON.stringify(diagnosticError(structuredError)), /alice|private-/)
+})
+
+test("route errors preserve the first failure and prevent a later mutation stage", async () => {
+  const report = {}, diagnostics = createBrowserDiagnostics(report)
+  diagnostics.stage("save_parameters")
+  const first = new Error("Unauthorized form action")
+  diagnostics.routeError(first, { method: () => "POST", url: () => "http://127.0.0.1:19111/draft?token=secret" })
+  await assert.rejects(diagnostics.guard(Promise.resolve("later")), error => error === first)
+  await assert.rejects(diagnostics.guard(Promise.reject(new Error("Secondary failure"))), error => error === first)
+  assert.throws(() => diagnostics.stage("confirm_parameters"), error => error === first)
+  assert.equal(report.diagnostics.stage, "save_parameters")
+  assert.equal(report.diagnostics.events.at(-1).type, "route_error")
+  assert.doesNotMatch(JSON.stringify(report), /token=secret/)
+})
+
+test("click and response are observed together, preserving click failures without an unhandled pending rejection", async () => {
+  const trace = [], response = { status: 200 }
+  const result = await clickAndWaitForResponse({ waitForResponse: () => { trace.push("wait"); return Promise.resolve(response) } },
+    () => true, () => { trace.push("click") })
+  assert.equal(result, response); assert.deepEqual(trace, ["wait", "click"])
+  let rejectResponse
+  const pending = new Promise((_, reject) => { rejectResponse = reject })
+  const clickError = new Error("Original click failure")
+  await assert.rejects(clickAndWaitForResponse({ waitForResponse: () => pending }, () => true, () => { throw clickError }),
+    error => error === clickError)
+  rejectResponse(new Error("Secondary target closed"))
+  await new Promise(resolve => setImmediate(resolve))
+})
+
+test("card geometry accounts for ancestor clipping and foreground occlusion", () => {
+  const win = { innerWidth: 452, innerHeight: 1050, getComputedStyle: () => ({ overflowY: "auto", overflowX: "hidden" }) }
+  const parent = { parentElement: null, clientTop: 0, clientLeft: 0, clientHeight: 600, clientWidth: 435,
+    getBoundingClientRect: () => ({ top: 100, left: 0 }) }
+  const doc = { defaultView: win, elementFromPoint: () => node }
+  const node = { ownerDocument: doc, parentElement: parent, contains: value => value === node,
+    getBoundingClientRect: () => ({ x: 10, y: 120, left: 10, top: 120, right: 410, bottom: 1020, width: 400, height: 900 }) }
+  assert.equal(measureCardGeometry(node).visible, false)
+  assert.equal(measureCardGeometry(node).bounds.bottom, 700)
+  win.innerHeight = 1600; parent.clientHeight = 1200
+  assert.equal(measureCardGeometry(node).visible, true)
+  doc.elementFromPoint = () => ({ overlay: true })
+  assert.equal(measureCardGeometry(node).visible, false)
+  doc.elementFromPoint = (x, y) => x >= 180 && x <= 240 && y >= 900 && y <= 940 ? { floatingButton: true } : node
+  assert.equal(measureCardGeometry(node).visible, false, "an off-center floating control still obscures the card")
+  doc.elementFromPoint = (x, y) => x >= 80 && x <= 120 && y >= 1007 ? { floatingButtonEdge: true } : node
+  assert.equal(measureCardGeometry(node).visible, false, "a thin overlap near the bottom edge cannot escape the grid")
+})
+
+function captureFixture({ moving = false, moveDuringCapture = false, cardWidth = 435, cardHeight = 1180, footerHeight = 0 } = {}) {
+  let viewport = { width: 452, height: 1050 }, time = 0, calls = 0, offset = 0
+  const captures = [], sizes = [], scrolls = []
+  const page = { viewportSize: () => viewport, setViewportSize: async value => { viewport = value; sizes.push(value) } }
+  const card = { scrollIntoViewIfNeeded: async () => { offset = 0 }, evaluate: async fn => {
+    if (fn !== measureCardGeometry) return fn({ scrollIntoView: options => scrolls.push(options) })
+    calls++
+    return { rect: { x: 0, y: 300 + offset + (moving ? calls % 2 * 3 : 0), width: cardWidth, height: cardHeight },
+      bounds: { left: 0, top: 300, right: viewport.width, bottom: viewport.height - 100 }, viewport,
+      visible: viewport.height - 400 >= cardHeight && 300 + cardHeight <= viewport.height - footerHeight }
+  }, screenshot: async input => { captures.push(input); if (moveDuringCapture && captures.length === 1) offset = 10 } }
+  return { page, card, captures, sizes, scrolls, clock: { now: () => time, pause: async () => { time += 100 } } }
+}
+
+test("card capture fits its nested scrollport while preserving 452px width and retries movement during capture", async () => {
+  const fixture = captureFixture({ moveDuringCapture: true })
+  const result = await captureResultCard(fixture.page, fixture.card, "result.png", { ...fixture.clock, timeoutMs: 2000 })
+  assert.equal(result.viewport.width, 452)
+  assert.ok(result.viewport.height > 1050)
+  assert.ok(result.rect.height <= result.bounds.bottom - result.bounds.top)
+  assert.ok(fixture.sizes.every(viewport => viewport.width === 452))
+  assert.ok(fixture.scrolls.length > 0, "fully intersecting cards must still move away from clipping boundaries")
+  assert.equal(fixture.captures.length, 2, "a moved first screenshot cannot become accepted evidence")
+  assert.ok(fixture.captures.every(input => input.animations === "disabled"))
+})
+
+test("card capture rejects unstable, horizontally clipped or unbounded cards instead of accepting misleading pixels", async () => {
+  const moving = captureFixture({ moving: true })
+  await assert.rejects(captureResultCard(moving.page, moving.card, "moving.png", { ...moving.clock, timeoutMs: 500 }), /stable/)
+  assert.equal(moving.captures.length, 0)
+  const wide = captureFixture({ cardWidth: 500 })
+  await assert.rejects(captureResultCard(wide.page, wide.card, "wide.png", wide.clock), /width/)
+  const tall = captureFixture({ cardHeight: 9000 })
+  await assert.rejects(captureResultCard(tall.page, tall.card, "tall.png", tall.clock), /bounded/)
+})
+
+test("card capture moves fixed footer occlusion outside the card before accepting the screenshot", async () => {
+  const fixture = captureFixture({ footerHeight: 400 })
+  const result = await captureResultCard(fixture.page, fixture.card, "footer.png", fixture.clock)
+  assert.equal(fixture.sizes.length, 2, "fitting the scrollport alone does not clear a foreground footer")
+  assert.ok(result.rect.y + result.rect.height <= result.viewport.height - 400)
+  assert.equal(fixture.captures.length, 1)
 })
