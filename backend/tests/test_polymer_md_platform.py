@@ -146,6 +146,8 @@ def test_activity_inventory_preserves_legacy_and_fails_closed_on_partial_md(monk
                 self.row = {"present": True}
             elif "to_regnamespace('polymer_md')" in statement:
                 self.row = {"present": self.present}
+            elif "to_regnamespace('retrosynthesis')" in statement:
+                self.row = {"present": False}
             else:
                 self.row = {"count": 0}
             return self

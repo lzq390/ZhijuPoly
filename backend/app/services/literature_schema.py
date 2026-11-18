@@ -250,9 +250,13 @@ def _apply_literature_migration(dsn: str, *, backup_receipt: Path,
     entries = validate_migration_manifest_entries(directory)
     canonical = registered_literature_ledger()
     from app.billing_contract import registered_billing_ledger
+    from app.retrosynthesis_contract import registered_retrosynthesis_ledger
     release_ledger = [{"version": entry.version, "checksum": entry.checksum} for entry in entries]
+    # Later releases may package this maintenance command. Their exact known
+    # manifests do not expand its database inputs or its 0024-only target below.
     if (expected_isolation_ledger(LITERATURE_MIGRATION) != canonical
-            or release_ledger not in (canonical, registered_billing_ledger())):
+            or release_ledger not in (canonical, registered_billing_ledger(),
+                                      registered_retrosynthesis_ledger())):
         raise ValueError("Maintenance requires the complete canonical release manifest")
     required = {POLYMER_VERSION: (8, CHECKSUM), LITERATURE_MIGRATION: (9, LITERATURE_MIGRATION_SHA256)}
     sources = {}

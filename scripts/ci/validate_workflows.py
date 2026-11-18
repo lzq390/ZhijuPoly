@@ -694,6 +694,7 @@ OPENSCIENCE_OVERLAY_STEP_HEADERS = (
     "      - name: Install the pinned browser probe package",
     "      - name: Run deterministic overlay patch tests",
     "      - name: Run development MCP overlay tests in Chromium",
+    "      - name: Run confirmed MCP browser verifier contract tests",
     "      - name: Set up Buildx",
     "      - name: Build the governed overlay without publishing",
     "      - name: Verify the governed overlay image",
@@ -1561,6 +1562,75 @@ def validate_independent_mcp_tests(ci_text: str, failures: list[str]) -> None:
         other = workflow_job_body(ci_text, name, failures)
         if other and "requirements-property-filter-mcp" in other:
             failures.append(f"{name} must not install the independent MCP dependency lock")
+
+
+def validate_confirmed_mcp_images(ci_text: str, failures: list[str]) -> None:
+    """Confirmed tools require their isolated SDK tests and actual derived images."""
+    adapter = workflow_job_body(ci_text, "confirmed-mcp-adapter-tests", failures)
+    images = workflow_job_body(ci_text, "mcp-derived-images", failures)
+    gate = workflow_job_body(ci_text, "ci-gate", failures)
+    if any(body is None for body in (adapter, images, gate)):
+        return
+    for job_name, body in (("confirmed-mcp-adapter-tests", adapter), ("mcp-derived-images", images)):
+        for marker in ("    needs: resolve-sha\n", "    runs-on: ubuntu-24.04\n",
+                       "          persist-credentials: false\n",
+                       "          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}\n"):
+            if body.count(marker) != 1:
+                failures.append(f"{job_name} must retain immutable GitHub-hosted execution: {marker.strip()}")
+        if gate.count("      - " + job_name + "\n") != 1:
+            failures.append(f"ci-gate must require {job_name}")
+        for marker in ("continue-on-error:", "    if:", "        if:", "self-hosted"):
+            if marker in body:
+                failures.append(f"{job_name} may not bypass its required checks: {marker}")
+    if adapter.count("capability: [polytao, retrosynthesis]") != 1:
+        failures.append("Confirmed MCP adapter matrix must include PolyTAO and only reviewed capabilities")
+    for marker in ("--require-hashes --only-binary=:all:", '"backend/${CAPABILITY}_mcp_tests" -q',
+                   'docker build -f "Dockerfile.${CAPABILITY}-mcp"'):
+        if adapter.count(marker) != 1:
+            failures.append(f"Confirmed MCP adapters must exercise their locked complete runtime: {marker}")
+    for marker in ('python3 scripts/ci/mcp_base_images.py >> "$GITHUB_ENV"',
+                   'GHCR_TOKEN: ${{ github.token }}', 'docker login ghcr.io --username "$GHCR_USERNAME" --password-stdin',
+                   '--build-arg CAPABILITY_GATEWAY_BASE_IMAGE="$CAPABILITY_GATEWAY_BASE_IMAGE"',
+                   '--build-arg OPENSCIENCE_BASE_IMAGE="$OPENSCIENCE_BASE_IMAGE"',
+                   '--build-arg OPENSCIENCE_UI_BASE_IMAGE="$OPENSCIENCE_UI_BASE_IMAGE"',
+                   '--build-arg OPENSCIENCE_UI_PATCH_IMAGE="$OPENSCIENCE_UI_PATCH_IMAGE"',
+                   "git ls-files 'ops/capability-gateway-dev/*.test.ts'",
+                   'type=bind,source=$PWD/$test_file,target=$target,readonly',
+                   'docker run --rm --network none "${mounts[@]}" nexpoly-ci-capability-gateway bun test "${test_paths[@]}"',
+                   '--entrypoint /bin/sh nexpoly-ci-openscience-mcp-ui', 'test "$(id -u)" = 1001'):
+        if images.count(marker) != 1:
+            failures.append(f"MCP derived images must retain real base-runtime verification: {marker}")
+    backend = workflow_job_body(ci_text, "backend-tests", failures)
+    if backend is not None:
+        steps = [step for step in workflow_step_blocks(backend)
+                 if step.startswith("      - name: Run native retrosynthesis HTTP and MCP SDK contract\n")]
+        if len(steps) != 1:
+            failures.append("Backend shard 0 must require the native retrosynthesis HTTP and MCP SDK contract")
+        else:
+            for marker in ("        if: matrix.shard == 0\n", 'RETROSYNTHESIS_MCP_REQUIRE_NATIVE_TEST: "1"',
+                           "PYTHONPATH: backend:scripts:backend/tests",
+                           "RETROSYNTHESIS_MCP_TEST_SITE_PACKAGES: ${{ runner.temp }}/retrosynthesis-mcp-venv/lib/python3.11/site-packages",
+                           'python -m venv "$RUNNER_TEMP/retrosynthesis-mcp-venv"',
+                           '"$RUNNER_TEMP/retrosynthesis-mcp-venv/bin/python" -m pip install',
+                           "--require-hashes --only-binary=:all: -r backend/requirements-retrosynthesis-mcp-test.lock",
+                           "python -m pytest backend/retrosynthesis_mcp_tests/test_native_contract.py",
+                           "--assert=plain --tb=short -p no:cacheprovider"):
+                if steps[0].count(marker) != 1:
+                    failures.append(f"Native retrosynthesis SDK contract must retain process and dependency separation: {marker}")
+            for marker in ("continue-on-error:", "pytest.skip", "|| true"):
+                if marker in steps[0]:
+                    failures.append("Native retrosynthesis SDK contract cannot skip or ignore failures")
+    overlay = workflow_job_body(ci_text, "openscience-overlay", failures)
+    if overlay is not None and overlay.count("node --test scripts/tests/verify_openscience_*_gateway_browser.test.mjs") != 1:
+        failures.append("Confirmed MCP browser verifier suites must run in the Node 22 browser job")
+    require_ordered_markers(images, (
+        ("immutable checkout", "Assert immutable checkout"),
+        ("reviewed pinned bases", "Validate and resolve reviewed MCP base digests"),
+        ("private package login", "Log in to reviewed private MCP base images"),
+        ("three image builds", "Build all three isolated derived images"),
+        ("actual runtime tests", "Run gateway SDK and audience tests inside its real base runtime"),
+        ("runtime asset permissions", "Verify derived UI assets under the runtime UID"),
+    ), label="MCP derived image CI", failures=failures)
 
 
 def validate_polymer_md_script_tests(ci_text: str, failures: list[str]) -> None:
@@ -3240,6 +3310,7 @@ def main() -> int:
     validate_frontend_budget(ci_text, failures)
     validate_lightweight_backend_tests(ci_text, failures)
     validate_independent_mcp_tests(ci_text, failures)
+    validate_confirmed_mcp_images(ci_text, failures)
     validate_polymer_md_script_tests(ci_text, failures)
     validate_gpu_session_compose_policy(ci_text, failures)
     validate_exact_b_job(ci_text, failures)

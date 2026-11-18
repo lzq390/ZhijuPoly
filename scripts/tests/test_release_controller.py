@@ -6997,7 +6997,18 @@ class ReleaseControllerTests(unittest.TestCase):
             ),
             1,
         )
-        for unsupported in (None, 0, 4, True, 1.0, 2.0, 3.0):
+        v4_jobs = {**v2_jobs, "polymerization_batch": 0, "polymer_md": 2}
+        v5_jobs = {**v4_jobs, "retrosynthesis": 3, "retrosynthesis_in_memory": 4}
+        for version, counts, total in ((4, v4_jobs, 3), (5, v5_jobs, 10)):
+            with self.subTest(active_jobs_schema_version=version):
+                self.assertEqual(
+                    release_controller.validated_active_total(
+                        {"active_jobs_schema_version": version, "active_jobs": counts, "active_total": total},
+                        set(release_controller.ACTIVE_JOB_CATEGORIES_V1),
+                    ),
+                    total,
+                )
+        for unsupported in (None, 0, 6, True, 1.0, 2.0, 3.0, 4.0, 5.0):
             with (
                 self.subTest(active_jobs_schema_version=unsupported),
                 self.assertRaisesRegex(release_controller.ReleaseError, "unsupported"),

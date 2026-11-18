@@ -22,6 +22,7 @@ MONOMER_DFT_ACTIVE_STATUSES = (
     "running",
     "cancel_requested",
 )
+RETROSYNTHESIS_ACTIVE_STATUSES = ("pending", "queued", "running", "unknown")
 POLYMER_MD_ACTIVE_STATUSES = ("pending", "queued", "running", "cancel_requested")
 FULL_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
@@ -227,6 +228,24 @@ def count_active_postgres_jobs(connection: Any) -> ActiveJobSummary:
               OR EXISTS(SELECT FROM polymer_md.stage_runs s WHERE s.job_id=j.job_id AND s.status='running')""",
             (list(POLYMER_MD_ACTIVE_STATUSES),)).fetchone()["count"])
         version = 4
+    retro = connection.execute("""SELECT to_regnamespace('retrosynthesis') IS NOT NULL
+        OR EXISTS(SELECT FROM governance.schema_migrations WHERE version='0026_monomer_retrosynthesis_jobs') AS present""").fetchone()
+    if retro["present"]:
+        from app.retrosynthesis_contract import optional_retrosynthesis_tables
+        from task_usage.retrosynthesis_contract import RETROSYNTHESIS_VERSION, RETROSYNTHESIS_CHECKSUM
+        from .retrosynthesis_schema import validate_retrosynthesis_schema
+        try:
+            optional_retrosynthesis_tables(connection)
+            ledger = connection.execute("SELECT checksum FROM governance.schema_migrations WHERE version=%s", (RETROSYNTHESIS_VERSION,)).fetchone()
+            if ledger is None or ledger["checksum"] != RETROSYNTHESIS_CHECKSUM:
+                raise ValueError("Retrosynthesis migration checksum differs from the reviewed release")
+            validate_retrosynthesis_schema(connection)
+        except ValueError as exc:
+            raise RuntimeError("retrosynthesis deployment schema is invalid") from exc
+        if version != 4:
+            raise RuntimeError("retrosynthesis deployment schema requires the preceding job schemas")
+        counts["retrosynthesis"] = _count_statuses(connection, "retrosynthesis", "jobs", statuses=RETROSYNTHESIS_ACTIVE_STATUSES)
+        version = 5
     return ActiveJobSummary(counts=counts, active_jobs_schema_version=version)
 
 
@@ -245,6 +264,7 @@ def count_in_memory_jobs(app: Any) -> ActiveJobSummary:
         "reverse_design_job_manager",
     )
     polytao_manager = _required_runtime_component(state, "polytao_job_manager")
+    retrosynthesis_manager = _required_runtime_component(state, "retrosynthesis_job_manager")
     gpu_registry = _required_runtime_component(state, "gpu_runtime_registry")
     counts = {
         "inflight_api_writes": _count_inflight_api_writes(inflight_tracker),
@@ -260,6 +280,7 @@ def count_in_memory_jobs(app: Any) -> ActiveJobSummary:
             polytao_manager,
             "PolyTAO job manager",
         ),
+        "retrosynthesis_in_memory": _count_manager_activity(retrosynthesis_manager, "retrosynthesis job manager"),
         "gpu_inference": _count_gpu_inference(gpu_registry),
         "gpu_waiting": _count_gpu_waiting(gpu_registry),
     }
@@ -270,7 +291,12 @@ def aggregate_active_jobs(connection: Any, app: Any | None = None) -> ActiveJobS
     persistent = count_active_postgres_jobs(connection)
     counts = dict(persistent.counts)
     if app is not None:
-        counts.update(count_in_memory_jobs(app).counts)
+        memory_counts = count_in_memory_jobs(app).counts
+        if persistent.active_jobs_schema_version < 5:
+            if memory_counts["retrosynthesis_in_memory"]:
+                raise RuntimeError("retrosynthesis execution requires the durable deployment inventory")
+            memory_counts.pop("retrosynthesis_in_memory")
+        counts.update(memory_counts)
     return ActiveJobSummary(
         counts=counts,
         active_jobs_schema_version=persistent.active_jobs_schema_version,

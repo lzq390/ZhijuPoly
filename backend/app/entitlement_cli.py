@@ -168,7 +168,8 @@ def _database_operation(args, *, policy=None, owner=None):
             previous = row["tier"] if row else "member"
             would_write = row is None or previous != args.tier
             from task_usage.billing_contract import BILLING_VERSION
-            if ledger and ledger[-1]["version"] == BILLING_VERSION:
+            from task_usage.retrosynthesis_contract import RETROSYNTHESIS_VERSION
+            if ledger and ledger[-1]["version"] in {BILLING_VERSION, RETROSYNTHESIS_VERSION}:
                 from task_usage.entitlement_access import resolve_access_tier
                 previous = resolve_access_tier(connection, owner_user_id=owner)
                 account = connection.execute("SELECT override_tier FROM billing.accounts WHERE owner_user_id=%s", (owner,)).fetchone()

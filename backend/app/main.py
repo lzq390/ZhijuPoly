@@ -49,6 +49,7 @@ from app.postgres_preflight import (
     SCHEMA_TARGET_POLYMER_MD,
     SCHEMA_TARGET_LITERATURE,
     SCHEMA_TARGET_BILLING,
+    SCHEMA_TARGET_RETROSYNTHESIS,
     preflight_blockers,
     run_preflight,
 )
@@ -118,6 +119,8 @@ from app.services.monomer_retrosynthesis import (
     warmup_retrosynthesis_runtime,
 )
 from app.services.polytao_jobs import PolytaoJobManager
+from app.services.retrosynthesis_jobs import RetrosynthesisJobManager
+from app.services.retrosynthesis_repository import RetrosynthesisRepository
 from app.services.polytao_runtime import BackendPolytaoRuntime
 from app.services.monomer_md_repository import mark_expired_unclaimed_monomer_md_jobs_failed_postgres
 from app.services.reverse_design_jobs import ReverseDesignJobManager
@@ -173,6 +176,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 _run_database_startup_preflight(api_app, required=required_startup)
                 _mark_expired_monomer_md_jobs_failed(api_app)
                 _fail_interrupted_online_jobs(api_app)
+                if api_app.state.settings.retro_jobs_enabled:
+                    await run_in_threadpool(api_app.state.retrosynthesis_job_manager.start)
             if api_app.state.settings.gpu_broker_enabled:
                 residency_lease = await run_in_threadpool(
                     _acquire_backend_gpu_residency,
@@ -374,6 +379,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_active_jobs=app_settings.polytao_max_active_jobs,
         store=app.state.in_memory_job_store,
     )
+    app.state.retrosynthesis_repository = RetrosynthesisRepository(app_settings.app_postgres_dsn)
+    app.state.retrosynthesis_job_manager = RetrosynthesisJobManager(app, app.state.retrosynthesis_repository)
     app.state.monomer_dft_repository = MonomerDftRepository(
         app_settings.app_postgres_dsn
     )
@@ -726,6 +733,7 @@ def _shutdown_in_process_job_managers(
         api_app.state.conditional_generation_job_manager,
         api_app.state.polytao_job_manager,
         api_app.state.reverse_design_job_manager,
+        api_app.state.retrosynthesis_job_manager,
     )
     for manager in managers:
         manager.stop_accepting()
@@ -755,8 +763,8 @@ def _run_database_startup_preflight(api_app: FastAPI, *, required: bool) -> None
         )
         errors = preflight_blockers(report)
         if (getattr(api_app.state.settings, "polymer_md_enabled", getattr(api_app.state.settings, "polymer_md_dev_enabled", False))
-                and report.get("schema_target") not in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING}):
-            errors.append("Polymer MD requires a validated current 0023/0024/0025 migration boundary")
+                and report.get("schema_target") not in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE, SCHEMA_TARGET_BILLING, SCHEMA_TARGET_RETROSYNTHESIS}):
+            errors.append("Polymer MD requires a validated current 0023/0024/0025/0026 migration boundary")
         api_app.state.auth.assert_application_ready()
     except Exception as exc:
         errors = [f"database preflight failed: {type(exc).__name__}"]

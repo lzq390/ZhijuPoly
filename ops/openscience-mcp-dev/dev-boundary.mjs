@@ -1,14 +1,9 @@
-/** HTTP boundary for the fixed, three-tool development UI; never used upstream. */
+/** HTTP boundary for the isolated development UI; runtime config controls agents and tools. */
 import fs from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const DEFAULT_ROOTS = ["/openscience/files/projects", "/openscience/files/general"]
-export const ALLOWED_TOOL_KEYS = new Set([
-  "nexpoly_property_filter_list_filter_properties",
-  "nexpoly_property_filter_search_polymers",
-  "nexpoly_property_filter_get_property_histogram",
-])
 const SENSITIVE_KEYS = new Set([
   "key", "apikey", "xapikey", "authorization", "proxyauthorization", "password", "secret",
   "clientsecret", "token", "accesstoken", "refreshtoken", "idtoken", "cookie", "setcookie",
@@ -110,19 +105,30 @@ export function forbiddenOperation(method, pathname) {
 }
 
 export function sessionInputAllowed(body) {
-  if (!body || typeof body !== "object") return false
-  if (body.agent !== undefined && body.agent !== "property-filter") return false
-  if (body.tools && Object.entries(body.tools).some(([name, allowed]) => allowed === true && !ALLOWED_TOOL_KEYS.has(name))) return false
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false
+  // Resolve agent names and their grants through the configured upstream registry.
+  // Request-local overrides may restrict those grants, but cannot elevate them.
+  if (body.agent !== undefined && (typeof body.agent !== "string" || !body.agent.trim())) return false
+  if (body.tools !== undefined) {
+    if (!body.tools || typeof body.tools !== "object" || Array.isArray(body.tools)) return false
+    if (Object.values(body.tools).some((allowed) => allowed !== false)) return false
+  }
   if (body.permission !== undefined) {
     if (!Array.isArray(body.permission)) return false
     for (const rule of body.permission) {
-      if (rule.action !== "allow") continue
-      if (rule.permission === "mcp" && ALLOWED_TOOL_KEYS.has(rule.pattern)) continue
-      if (ALLOWED_TOOL_KEYS.has(rule.permission) && rule.pattern === "*") continue
-      return false
+      if (!rule || typeof rule !== "object" || rule.action !== "deny"
+          || typeof rule.permission !== "string" || !rule.permission
+          || typeof rule.pattern !== "string" || !rule.pattern) return false
     }
   }
-  if ((body.parts ?? []).some((part) => ["agent", "subtask"].includes(part.type))) return false
+  if (body.parts !== undefined && !Array.isArray(body.parts)) return false
+  // Only the server bridge can persist an accepted-generation receipt. Client
+  // prompts cannot manufacture synthetic messages or saved MCP tool evidence.
+  if ((body.parts ?? []).some(part => !part || typeof part !== "object" || part.type === "tool"
+      || part.synthetic === true || Object.hasOwn(part.metadata ?? {}, "nexpoly_polytao_receipt")
+      || Object.hasOwn(part.metadata ?? {}, "nexpoly_retrosynthesis_receipt")
+      || Object.hasOwn(part.metadata ?? {}, "nexpoly_polytao_continuation")
+      || Object.hasOwn(part.metadata ?? {}, "nexpoly_retrosynthesis_continuation"))) return false
   return true
 }
 
@@ -136,9 +142,13 @@ function requestDirectory(c) {
 export async function devBoundary(c, next) {
   const pathname = c.req.path
   if (forbiddenOperation(c.req.method, pathname)) {
-    return c.json({ error: "This operation is disabled in the fixed property-filter development UI." }, 403)
+    return c.json({ error: "This operation is disabled in the development UI." }, 403)
   }
   const name = routePath(pathname)
+  if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)
+      && /^\/session\/[^/]+\/message\/[^/]+(?:\/part\/[^/]+)?$/.test(name)) {
+    return c.json({ error: "Saved tool records and confirmation receipts cannot be changed by the development client." }, 403)
+  }
   const fileRoute = name === "/file" || name === "/file/content"
   const promptRoute = c.req.method === "POST" && /^\/session\/[^/]+\/(message|prompt_async)$/.test(name)
   const createSession = c.req.method === "POST" && name === "/session"
@@ -152,10 +162,11 @@ export async function devBoundary(c, next) {
         await workspacePath(directory, filename)
       }
       if (promptRoute || createSession) {
+        await workspacePath(directory, "")
         const raw = await c.req.raw.clone().text()
         const body = raw ? JSON.parse(raw) : {}
         if (!sessionInputAllowed(body)) {
-          return c.json({ error: "Only the property-filter agent and its three read-only MCP permissions are supported." }, 403)
+          return c.json({ error: "Session requests must inherit configured permissions or only restrict them." }, 403)
         }
         for (const part of body.parts ?? []) {
           if (part.type === "file" && typeof part.url === "string" && part.url.startsWith("file:")) {

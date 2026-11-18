@@ -1022,6 +1022,7 @@ def apply_postgres_migrations(
             # Literature admission and operator workflow are a separate layer.
             "0024_literature_projection",
             "0025_membership_subscriptions",
+            "0026_monomer_retrosynthesis_jobs",
         }
         # All private expansions require the separately approved identity and
         # service contracts. Fresh/legacy bootstrap remains bounded at 0017.

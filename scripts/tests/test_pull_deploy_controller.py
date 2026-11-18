@@ -12030,7 +12030,7 @@ class StrictLifecycleEvidenceTests(unittest.TestCase):
 
     def active_payload(self, *, version: int = 1) -> dict[str, object]:
         fields = {1: CONTROLLER.ACTIVE_JOB_FIELDS_V1, 2: CONTROLLER.ACTIVE_JOB_FIELDS_V2,
-                  3: CONTROLLER.ACTIVE_JOB_FIELDS_V3, 4: CONTROLLER.ACTIVE_JOB_FIELDS_V4}[version]
+                  3: CONTROLLER.ACTIVE_JOB_FIELDS_V3, 4: CONTROLLER.ACTIVE_JOB_FIELDS_V4, 5: CONTROLLER.ACTIVE_JOB_FIELDS_V5}[version]
         return {
             "active_jobs_schema_version": version,
             "drain": {
@@ -12050,7 +12050,7 @@ class StrictLifecycleEvidenceTests(unittest.TestCase):
     ) -> dict[str, object]:
         selected = 1 if version is None else version
         fields = {1: CONTROLLER.PERSISTENT_JOB_FIELDS_V1, 2: CONTROLLER.PERSISTENT_JOB_FIELDS_V2,
-                  3: CONTROLLER.PERSISTENT_JOB_FIELDS_V3, 4: CONTROLLER.PERSISTENT_JOB_FIELDS_V4}[selected]
+                  3: CONTROLLER.PERSISTENT_JOB_FIELDS_V3, 4: CONTROLLER.PERSISTENT_JOB_FIELDS_V4, 5: CONTROLLER.PERSISTENT_JOB_FIELDS_V5}[selected]
         payload: dict[str, object] = {
             "drain": {
                 "enabled": False,
@@ -12066,6 +12066,29 @@ class StrictLifecycleEvidenceTests(unittest.TestCase):
         if version is not None:
             payload["active_jobs_schema_version"] = version
         return payload
+
+    def test_retrosynthesis_v5_cannot_hide_unknown_or_queued_work(self) -> None:
+        from scripts import release_controller
+        for category in ("retrosynthesis", "retrosynthesis_in_memory"):
+            payload = self.active_payload(version=5)
+            CONTROLLER.validate_active_jobs_evidence(payload, require_drained=True)
+            self.assertEqual(release_controller.validated_active_total(payload, set()), 0)
+            payload["active_jobs"][category] = 1
+            payload["active_total"] = 1
+            with self.assertRaisesRegex(CONTROLLER.PullDeployError, "zero-work"):
+                CONTROLLER.validate_active_jobs_evidence(payload, require_drained=True)
+            bootstrap = {"active_jobs_schema_version": 5, "ingress_isolated": True,
+                         "active_jobs": payload["active_jobs"], "active_total": 1}
+            self.assertEqual(CONTROLLER._site_helper_contracts.validate_active_jobs(bootstrap)["active_total"], 1)
+            payload["active_jobs"].pop(category)
+            with self.assertRaises(CONTROLLER.PullDeployError):
+                CONTROLLER.validate_active_jobs_evidence(payload, require_drained=True)
+        persistent = self.persistent_payload(version=5)
+        self.assertEqual(release_controller.validated_persistent_active_total(persistent, set()), 0)
+        CONTROLLER.validate_persistent_drain_evidence(persistent)
+        persistent["active_jobs_schema_version"] = 4
+        with self.assertRaises(CONTROLLER.PullDeployError):
+            CONTROLLER.validate_persistent_drain_evidence(persistent)
 
     def test_persistent_jobs_accepts_legacy_v1_and_explicit_v2(self) -> None:
         legacy = self.persistent_payload()

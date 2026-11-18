@@ -8,8 +8,8 @@ import { readFile, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
-export const EXPECTED_BASE_IMAGE = "sha256:41a2b6929bc74a1bf3c0bac54df09f8e5f835954b3ba58dfba81f703b3ffe17a"
-export const EXPECTED_PROMPT_SHA256 = "d9f9a16c6a2710502143942271ce22c49fe7ccfe78694522b5a76d3a48d9866a"
+export const EXPECTED_BASE_IMAGE = "sha256:7e4c055b4641bfcc0d329cbb2b61ef473b89e8435b3505dabc7b2895d11f0435"
+export const EXPECTED_PROMPT_SHA256 = "c6909f7ac353466cbb78c65916dff4343afbf979462b7c9730af3da8d6f1b705"
 export const EXPECTED_SERVER_SHA256 = "e9d7a5a148f60e3f329c981be73502ca5453f0c3136596d8dd986fb442be4fd8"
 export const PATCH_MARKER = "nexpoly-mcp-structured-content-v1"
 
@@ -22,6 +22,31 @@ export const CONTENT_ADAPTER = `        // ${PATCH_MARKER}: preserve structured 
               { type: "text" as const, text: JSON.stringify(result.structuredContent) },
             ]
 `
+
+export const CONVERSATION_ADAPTER = `        // Bind draft ownership to the current server session, never a model-supplied ID.
+        if (["capability_gateway_prepare_polytao_generation", "capability_gateway_get_polytao_draft", "capability_gateway_prepare_monomer_retrosynthesis", "capability_gateway_resolve_retrosynthesis_target", "capability_gateway_get_retrosynthesis_draft", "capability_gateway_get_retrosynthesis_job"].includes(key)) {
+          args = { ...args, conversation_id: input.session.id }
+        }
+`
+
+export const CONVERSATION_SCHEMA_ADAPTER = `      // conversation_id is server context, not a parameter for the model to infer.
+      if (["capability_gateway_prepare_polytao_generation", "capability_gateway_get_polytao_draft", "capability_gateway_prepare_monomer_retrosynthesis", "capability_gateway_resolve_retrosynthesis_target", "capability_gateway_get_retrosynthesis_draft", "capability_gateway_get_retrosynthesis_job"].includes(key)) {
+        const nativeSchema = item.inputSchema.jsonSchema
+        const properties = { ...nativeSchema.properties }
+        delete properties.conversation_id
+        item.inputSchema = jsonSchema({ ...nativeSchema, properties,
+          required: (nativeSchema.required ?? []).filter(name => name !== "conversation_id") })
+      }
+`
+
+export const TRUSTED_USER_PART_ADAPTER = `async (sessionID, text, value, metadataKey) => {
+            const messages = await Session.messages({ sessionID, limit: 1000 })
+            const user = messages.findLast(message => message.info.role === "user")?.info
+            if (!user) throw new Error("No conversation user context")
+            return SessionPrompt.prompt({ sessionID, agent: user.agent, model: user.model,
+              noReply: true, parts: [{ type: "text", synthetic: true, text,
+                metadata: { [metadataKey]: value } }] })
+          }`
 
 const INSERT_ANCHOR = '        const textParts: string[] = []\n        const attachments: MessageV2.FilePart[] = []\n\n        for (const contentItem of result.content) {'
 const RETURN_ANCHOR = '          content: result.content, // directly return content to preserve ordering when outputting to model'
@@ -39,6 +64,10 @@ export function patchPrompt(source, expectedHash = EXPECTED_PROMPT_SHA256) {
     CONTENT_ADAPTER + '\n' + INSERT_ANCHOR.replace("of result.content", "of modelContent"))
   patched = replaceOnce(patched, RETURN_ANCHOR,
     '          content: modelContent, // preserve MCP content and serialized structuredContent for the model')
+  patched = replaceOnce(patched, '        const result = await execute(args, opts)',
+    CONVERSATION_ADAPTER + '\n        const result = await execute(args, opts)')
+  patched = replaceOnce(patched, '    for (const [key, item] of Object.entries(mcp)) {\n',
+    '    for (const [key, item] of Object.entries(mcp)) {\n' + CONVERSATION_SCHEMA_ADAPTER)
   return patched
 }
 
@@ -48,9 +77,34 @@ export function patchServer(source, expectedHash = EXPECTED_SERVER_SHA256) {
     throw new Error("Unexpected OpenScience server source; refusing HTTP boundary patch")
   }
   let patched = replaceOnce(source, 'import { Session } from "../session"',
-    'import { Session } from "../session"\nimport { devBoundary } from "./nexpoly-dev-boundary.mjs"')
+    'import { Session } from "../session"\nimport { SessionPrompt } from "../session/prompt"\nimport { devBoundary, workspacePath } from "./nexpoly-dev-boundary.mjs"\nimport { createPolytaoFormBoundary } from "./polytao-form-bridge.mjs"\nimport { createRetrosynthesisFormBoundary } from "./retrosynthesis-form-bridge.mjs"')
   return replaceOnce(patched, '        .route("/global", GlobalRoutes())',
-    '        .use(devBoundary)\n        .route("/global", GlobalRoutes())')
+    `        .use(devBoundary)
+        .use(createPolytaoFormBoundary({
+          validateDirectory: (directory) => workspacePath(directory, ""),
+          withSession: (directory, fn) => Instance.provide({ directory, init: InstanceBootstrap, fn }),
+          getMessages: async (sessionID) => {
+            await Session.get(sessionID)
+            return Session.messages({ sessionID, limit: 1000 })
+          },
+          assertNotBusy: (sessionID) => SessionPrompt.assertNotBusy(sessionID),
+          persistReceipt: ${TRUSTED_USER_PART_ADAPTER},
+          persistContinuation: ${TRUSTED_USER_PART_ADAPTER},
+          resume: (sessionID) => SessionPrompt.loop(sessionID),
+        }))
+        .use(createRetrosynthesisFormBoundary({
+          validateDirectory: (directory) => workspacePath(directory, ""),
+          withSession: (directory, fn) => Instance.provide({ directory, init: InstanceBootstrap, fn }),
+          getMessages: async (sessionID) => {
+            await Session.get(sessionID)
+            return Session.messages({ sessionID, limit: 1000 })
+          },
+          assertNotBusy: (sessionID) => SessionPrompt.assertNotBusy(sessionID),
+          persistReceipt: ${TRUSTED_USER_PART_ADAPTER},
+          persistContinuation: ${TRUSTED_USER_PART_ADAPTER},
+          resume: (sessionID) => SessionPrompt.loop(sessionID),
+        }))
+        .route("/global", GlobalRoutes())`)
 }
 
 async function main() {

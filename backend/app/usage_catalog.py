@@ -42,6 +42,10 @@ ROUTES = (
         "/api/v1/structure/3d", "/api/v1/structure/2d", "/api/v1/structure/standardize-smiles")),
     *_entries("ocsr", "sync", "POST", ("/api/v1/structure/recognize-image",)),
     *_entries("retrosynthesis", "sync", "POST", ("/api/v1/monomer-retrosynthesis",)),
+    *_entries("retrosynthesis", "native", "POST", ("/api/v1/monomer-retrosynthesis/jobs",)),
+    *_entries(None, "observe", "POST", ("/api/v1/monomer-retrosynthesis/targets/resolve",)),
+    *_entries(None, "observe", "GET", ("/api/v1/monomer-retrosynthesis/status",
+        "/api/v1/monomer-retrosynthesis/jobs/lookup", "/api/v1/monomer-retrosynthesis/jobs/{job_id}")),
     *_entries("polymerization", "sync", "POST", ("/api/v1/monomer-polymerization",)),
     *_entries("batch_preflight", "sync", "POST", (
         "/api/v1/monomer-polymerization/batch/imports",

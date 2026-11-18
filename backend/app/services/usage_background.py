@@ -90,7 +90,7 @@ def begin_background_usage(*, owner_user_id, task_type, task_id, channel, submit
     if not metering_enabled():
         return None
     module = {"tg_reverse": "reverse_design"}.get(task_type, task_type)
-    if module not in {"conditional_generation", "polytao", "reverse_design"} or not task_id:
+    if module not in {"conditional_generation", "polytao", "reverse_design", "retrosynthesis"} or not task_id:
         raise ValueError("Unknown background usage module")
     handle = BackgroundUsage(owner_user_id=owner_user_id, module=module, task_id=task_id,
                              submitted_at=submitted_at, channel=channel)

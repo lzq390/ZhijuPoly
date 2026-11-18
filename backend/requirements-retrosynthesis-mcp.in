@@ -1,0 +1,5 @@
+# Independent Python 3.11 HTTP adapter; no scientific or database dependencies.
+mcp==2.3.0
+pydantic==2.14.2
+httpx2==2.16.0
+uvicorn==0.54.0

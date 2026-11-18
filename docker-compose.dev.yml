@@ -31,6 +31,7 @@ x-dev-backend-env: &dev-backend-env
   GPU_MAX_WAITING_INFERENCES: "8"
   GPU_SYNC_QUEUE_TIMEOUT_SECONDS: "30"
   GPU_ASYNC_QUEUE_TIMEOUT_SECONDS: "600"
+  RETRO_JOBS_ENABLED: "${RETRO_JOBS_ENABLED:-false}"
   RETRO_MODEL_ENABLED: "false"
   RETRO_MODEL_ID: /app/model/reactiont5-retrosynthesis
   RETRO_DEVICE: "cpu"

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "source": "https://github.com/lzq390/ZhijuPoly",
+  "images": {
+    "gateway": {
+      "reference": "ghcr.io/lzq390/zhijupoly-mcp-gateway-base@sha256:fe96acc54de0cdb1c41e00c6781bf13db89935313768d68d87c8a6fa5f0e4ce3",
+      "reviewed_image_id": "sha256:fb7fdd70e46d7544d0816f042bd0a4324cd7a6c1e86a4a4606031f5108199df0"
+    },
+    "backend": {
+      "reference": "ghcr.io/lzq390/zhijupoly-mcp-openscience-backend-base@sha256:a74aa4004fb3a8b2413503022128e7ead799ff75f2f0fdace99a2c343fc824c2",
+      "reviewed_image_id": "sha256:7e4c055b4641bfcc0d329cbb2b61ef473b89e8435b3505dabc7b2895d11f0435"
+    },
+    "ui": {
+      "reference": "ghcr.io/lzq390/zhijupoly-mcp-openscience-ui-base@sha256:db07efc42ffa2e6780818eb00f1a69b21d6c02dbd909d94743c64766840fbf7f",
+      "reviewed_image_id": "sha256:fea8a3c294bb324a98041f8f8354448e6ca5c6502dedc565c4b884994c567bb0"
+    }
+  }
+}

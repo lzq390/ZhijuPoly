@@ -488,6 +488,7 @@ def test_lifespan_job_shutdown_obeys_two_phase_order() -> None:
             conditional_generation_job_manager=Manager("conditional"),
             polytao_job_manager=Manager("polytao"),
             reverse_design_job_manager=Manager("reverse"),
+            retrosynthesis_job_manager=Manager("retrosynthesis"),
             gpu_runtime_registry=Registry(),
         )
     )
@@ -497,16 +498,20 @@ def test_lifespan_job_shutdown_obeys_two_phase_order() -> None:
         "conditional:stop",
         "polytao:stop",
         "reverse:stop",
+        "retrosynthesis:stop",
         "registry:stop",
         "conditional:cancel",
         "polytao:cancel",
         "reverse:cancel",
+        "retrosynthesis:cancel",
         "conditional:wait",
         "polytao:wait",
         "reverse:wait",
+        "retrosynthesis:wait",
         "conditional:close",
         "polytao:close",
         "reverse:close",
+        "retrosynthesis:close",
     ]
 
 

@@ -484,7 +484,13 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, backend)
-                changed = CI_TEXT.replace(backend, backend.replace(marker, "", 1), 1)
+                if marker == "        if: matrix.shard == 0\n":
+                    selected = next(step for step in policy.workflow_step_blocks(backend)
+                                    if step.startswith("      - name: Install locked trajectory analysis test dependencies\n"))
+                    changed_backend = backend.replace(selected, selected.replace(marker, "", 1), 1)
+                else:
+                    changed_backend = backend.replace(marker, "", 1)
+                changed = CI_TEXT.replace(backend, changed_backend, 1)
                 failures: list[str] = []
                 policy.validate_polymer_md_script_tests(changed, failures)
                 self.assertTrue(failures)

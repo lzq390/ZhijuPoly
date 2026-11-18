@@ -1,8 +1,34 @@
 /** Inline display of original read-only tool results in the development UI. */
-import { extractFilterTurns, renderFilterResult } from "./results-view.mjs"
+import { extractFilterTurns, renderFilterResult, extractPolytaoTurns, renderPolytaoResult,
+  extractPolytaoDrafts, renderPolytaoDraft, extractRetrosynthesisDrafts, renderRetrosynthesisDraft,
+  extractRetrosynthesisTurns, renderRetrosynthesisResult } from "./results-view.mjs"
 
 const API_PREFIX = "/openscience-api/"
 const SESSION_ID = /^ses_[A-Za-z0-9_-]+$/
+const DRAFT_ID = /^ptd_[A-Za-z0-9_-]{8,100}$/
+const DRAFT_ACTIONS = new Set(["get", "update", "reference", "cancel", "confirm", "continue"])
+
+/** The browser holds no MCP credential and can address only its current session. */
+export function polytaoDraftBridgeBody(sessionId, directory, action, input) {
+  if (!SESSION_ID.test(sessionId) || !managedDirectory(directory) || !DRAFT_ACTIONS.has(action)
+      || !input || !DRAFT_ID.test(input.draft_id ?? "") || !Number.isSafeInteger(input.revision)
+      || input.revision < 1) throw new TypeError("A current session and draft revision are required")
+  const result = { session_id: sessionId, directory, action, draft_id: input.draft_id, revision: input.revision }
+  for (const name of ["descriptors", "parameters", "reference_smiles"]) {
+    if (Object.hasOwn(input, name)) result[name] = input[name]
+  }
+  return result
+}
+
+export function retrosynthesisDraftBridgeBody(sessionId, directory, action, input) {
+  if (!SESSION_ID.test(sessionId) || !managedDirectory(directory)
+      || !["get", "resolve", "update", "cancel", "confirm", "continue"].includes(action)
+      || !input || !/^rtd_[a-f0-9]{32}$/.test(input.draft_id ?? "") || !Number.isSafeInteger(input.revision)
+      || input.revision < 1) throw new TypeError("A current session and retrosynthesis draft revision are required")
+  const result = { session_id: sessionId, directory, action, draft_id: input.draft_id, revision: input.revision }
+  for (const name of ["target", "parameters"]) if (Object.hasOwn(input, name)) result[name] = input[name]
+  return result
+}
 
 export function sessionFromPath(pathname) {
   const match = /^\/chat\/(ses_[A-Za-z0-9_-]+)\/?$/.exec(pathname)
@@ -52,6 +78,7 @@ export function startResultsUi(win = window, doc = document) {
   const records = new Map()
   const nativePending = new Map()
   const latestIssued = new Map()
+  const draftPanels = new Map()
   let sequence = 0
   let currentSession = null
   let currentContext = null
@@ -67,14 +94,18 @@ export function startResultsUi(win = window, doc = document) {
         || directories.get(sessionId) !== directory || latestIssued.get(key) !== issued) return
     try {
       records.delete(key)
-      records.set(key, { messages, models: extractFilterTurns(messages), updatedAt: Date.now() })
+      records.set(key, { messages, models: [...extractFilterTurns(messages), ...extractPolytaoTurns(messages),
+        ...extractPolytaoDrafts(messages).filter(model => model.draft.conversation_id === sessionId),
+        ...extractRetrosynthesisTurns(messages),
+        ...extractRetrosynthesisDrafts(messages).filter(model => model.draft.conversation_id === sessionId)], updatedAt: Date.now() })
       while (records.size > 5) records.delete(records.keys().next().value)
       scheduleMount()
     } catch { /* An unavailable panel must not break the normal conversation. */ }
   }
 
   // Observe only same-origin API request context. Keep the native arguments,
-  // response and Promise unchanged; no tool calls or prompt requests originate here.
+  // response and Promise unchanged. Explicit form actions use the fixed server
+  // bridge below; passive result polling never submits a task or model prompt.
   win.fetch = function(input, init) {
     const request = sessionRequest(input, init, win.location.origin)
     if (request?.sessionId && request.directory) {
@@ -153,12 +184,51 @@ export function startResultsUi(win = window, doc = document) {
       }
       const signature = JSON.stringify(models)
       if (host._nexpolySignature !== signature) {
-        const fragments = models.map(model => renderFilterResult(doc, model))
+        const fragments = models.map(model => {
+          if (model.kind === "polytao") return renderPolytaoResult(doc, model)
+          if (model.kind === "retrosynthesis") return renderRetrosynthesisResult(doc, model)
+          if (!["polytao-draft", "retrosynthesis-draft"].includes(model.kind)) return renderFilterResult(doc, model)
+          const retro = model.kind === "retrosynthesis-draft"
+          const panelKey = `${key}\0${model.draft.draft_id}`
+          let panel = draftPanels.get(panelKey)
+          if (!panel) {
+            panel = (retro ? renderRetrosynthesisDraft : renderPolytaoDraft)(doc, model, {
+              perform: async (action, input) => {
+                if (sessionFromPath(win.location.pathname) !== sessionId || directories.get(sessionId) !== directory) {
+                  throw new Error("SESSION_CHANGED")
+                }
+                const body = (retro ? retrosynthesisDraftBridgeBody : polytaoDraftBridgeBody)(sessionId, directory, action, input)
+                const address = new URL(`${API_PREFIX}nexpoly/${retro ? "retrosynthesis" : "polytao"}/draft`, win.location.origin)
+                const controller = new AbortController()
+                const timeout = win.setTimeout(() => controller.abort(), 35000)
+                try {
+                  const response = await nativeFetch(address.href, { method: "POST", credentials: "same-origin",
+                    headers: { "content-type": "application/json", "x-openscience-directory": directory },
+                    body: JSON.stringify(body), signal: controller.signal })
+                  const result = await response.json()
+                  if (!response.ok || result?.ok !== true) {
+                    const error = new Error("DRAFT_BRIDGE_FAILED")
+                    error.code = result?.error?.code
+                    throw error
+                  }
+                  return result
+                } finally { win.clearTimeout(timeout) }
+              },
+              onChange: () => scheduleFetch(100),
+            })
+            draftPanels.set(panelKey, panel)
+            // Limit retained detached forms without evicting the current session.
+            if (draftPanels.size > 40) for (const previous of draftPanels.keys()) {
+              if (!previous.startsWith(`${key}\0`)) { draftPanels.delete(previous); break }
+            }
+          } else panel.nexpolySetDraft(model.draft)
+          return panel
+        })
         host.replaceChildren(...fragments)
         host._nexpolySignature = signature
       }
       const response = content.querySelector('[data-slot="session-turn-response"]')
-      const hideJson = models.some(model => model.search || model.histograms?.length)
+      const hideJson = models.some(model => model.search || model.histograms?.length || ["polytao", "retrosynthesis"].includes(model.kind))
         && originalAnswerIsJson(record.messages, turnId)
       if (response) response.classList.toggle("nexpoly-original-answer-hidden", hideJson && host.dataset.originalExpanded !== "true")
       let toggle = host.querySelector("[data-nexpoly-original-toggle]")

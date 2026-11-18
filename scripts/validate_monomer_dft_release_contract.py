@@ -825,6 +825,8 @@ def _validate_current_isolation_resolver(
         profiles.append(("SCHEMA_TARGET_LITERATURE", "literature-0024"))
     if "BILLING_VERSION" in boundary_names:
         profiles.append(("SCHEMA_TARGET_BILLING", "membership-0025"))
+    if "RETROSYNTHESIS_VERSION" in boundary_names:
+        profiles.append(("SCHEMA_TARGET_RETROSYNTHESIS", "retrosynthesis-0026"))
     for name, value in profiles:
         if ast.dump(assignments.get(name, ast.Constant(None))) != expression(repr(value)):
             failures.append(f"Postgres current-isolation schema profile is missing: {name}")
@@ -833,7 +835,8 @@ def _validate_current_isolation_resolver(
     required_targets = {"SCHEMA_TARGET_CURRENT_ISOLATION", "SCHEMA_TARGET_STRUCTURE_LIBRARY"}
     for boundary, target in (("POLYMER_VERSION", "SCHEMA_TARGET_POLYMER_MD"),
                              ("LITERATURE_MIGRATION", "SCHEMA_TARGET_LITERATURE"),
-                             ("BILLING_VERSION", "SCHEMA_TARGET_BILLING")):
+                             ("BILLING_VERSION", "SCHEMA_TARGET_BILLING"),
+                             ("RETROSYNTHESIS_VERSION", "SCHEMA_TARGET_RETROSYNTHESIS")):
         if boundary in boundary_names:
             required_targets.add(target)
     if not required_targets <= target_names:
@@ -847,12 +850,13 @@ def _validate_current_isolation_resolver(
     resolver_source = (
         "SCHEMA_TARGET_STRUCTURE_LIBRARY if applied_migrations and max(applied_migrations) in {"
         + ", ".join(name for name in boundary_names
-                    if name not in {"POLYMER_VERSION", "LITERATURE_MIGRATION", "BILLING_VERSION"})
+                    if name not in {"POLYMER_VERSION", "LITERATURE_MIGRATION", "BILLING_VERSION", "RETROSYNTHESIS_VERSION"})
         + "} else SCHEMA_TARGET_ISOLATION"
     )
     for boundary, target in (("POLYMER_VERSION", "SCHEMA_TARGET_POLYMER_MD"),
                              ("LITERATURE_MIGRATION", "SCHEMA_TARGET_LITERATURE"),
-                             ("BILLING_VERSION", "SCHEMA_TARGET_BILLING")):
+                             ("BILLING_VERSION", "SCHEMA_TARGET_BILLING"),
+                             ("RETROSYNTHESIS_VERSION", "SCHEMA_TARGET_RETROSYNTHESIS")):
         if boundary in boundary_names:
             resolver_source = (f"{target} if applied_migrations and max(applied_migrations) == {boundary} "
                                f"else {resolver_source}")
@@ -888,6 +892,7 @@ def _validate_current_isolation_resolver(
             "boundary != POLYMER_VERSION",
             *(["boundary != LITERATURE_MIGRATION"] if "LITERATURE_MIGRATION" in boundary_names else []),
             *(["boundary != BILLING_VERSION"] if "BILLING_VERSION" in boundary_names else []),
+            *(["boundary != RETROSYNTHESIS_VERSION"] if "RETROSYNTHESIS_VERSION" in boundary_names else []),
         ):
             if expression(required) not in isolation_expressions:
                 failures.append(f"current isolation startup protection is missing: {required}")
@@ -992,7 +997,8 @@ def validate_database_schema_state_contract(
         "            FROM polymer_md.jobs j WHERE status = ANY(%s) OR cleanup_confirmed IS NOT TRUE\n"
         "              OR EXISTS(SELECT FROM polymer_md.stage_runs s WHERE s.job_id=j.job_id AND s.status='running')\"\"\",\n"
         '            (list(POLYMER_MD_ACTIVE_STATUSES),)).fetchone()["count"])',
-        "version = 4\n"
+        "version = 4\n",
+        "version = 5\n"
         "    return ActiveJobSummary(counts=counts, active_jobs_schema_version=version)",
     ):
         if marker not in deployment_control:
@@ -1023,6 +1029,7 @@ def validate_database_schema_state_contract(
         ("0023_polymer_md_jobs", "POLYMER_VERSION"),
         ("0024_literature_projection", "LITERATURE_MIGRATION"),
         ("0025_membership_subscriptions", "BILLING_VERSION"),
+        ("0026_monomer_retrosynthesis_jobs", "RETROSYNTHESIS_VERSION"),
     )
     current_isolation = any(version in versions for version, _name in private_boundaries)
     isolated = current_isolation or any(version in versions for version in isolation_versions)
