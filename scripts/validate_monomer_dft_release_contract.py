@@ -30,10 +30,25 @@ EXPLICIT_EMPTY_CATALOG_ACL_SENTINEL = (
     "<explicit-empty-catalog-acl-array>"
 )
 CHECKOUT_SHA = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
-EXPECTED_RUNNER = "ubuntu-24.04"
 EXPECTED_AIMNET_COMMIT = "9a6c56440349bccbb7ac0630a0622f9c584f894e"
 EXPECTED_AIMNET_TREE = "fd28c0f8bf2d0e513aad24032228927140d6783c"
 PRODUCTION_REPO_ROOT = Path("/data/lzq/gith/nexpoly")
+
+
+def _load_workflow_policy() -> Any:
+    # Anchor the shared policy to this script, including when the CLI runs from
+    # outside the repository and scripts/ is the only local sys.path entry.
+    path = Path(__file__).resolve().parent / "ci/validate_workflows.py"
+    spec = importlib.util.spec_from_file_location("nexpoly_dft_workflow_policy", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("canonical workflow policy is unavailable")
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    return policy
+
+
+WORKFLOW_POLICY = _load_workflow_policy()
+
 
 REQUIRED_PATHS = (
     ".env.monomer-dft.dev.example",
@@ -1209,9 +1224,8 @@ def validate_aimnet_build_contract(root: Path, failures: list[str]) -> None:
 
 def validate_ci_contract(root: Path, failures: list[str]) -> None:
     ci_text = _read_text(root, ".github/workflows/ci.yml", failures)
-    runners = re.findall(r"^\s*runs-on:\s*([^\s#]+)", ci_text, flags=re.MULTILINE)
-    if not runners or any(runner != EXPECTED_RUNNER for runner in runners):
-        failures.append(f"every canonical CI job must run on {EXPECTED_RUNNER}")
+    WORKFLOW_POLICY.validate_runner_routing(ci_text, failures)
+    WORKFLOW_POLICY.validate_local_runner_controls(ci_text, failures)
     checkout_refs = re.findall(
         r"^\s*uses:\s*actions/checkout@([0-9a-f]{40})",
         ci_text,
@@ -1313,7 +1327,13 @@ def main(argv: list[str] | None = None) -> int:
                     GOVERNED_MUTABLE_AUDIT_CATALOG_FINGERPRINT
                 ),
                 "checkout_sha": CHECKOUT_SHA,
-                "runner": EXPECTED_RUNNER,
+                "runner_routes": {
+                    "hosted": WORKFLOW_POLICY.HOSTED_RUNNER_LINE.partition("runs-on: ")[2],
+                    "tests_and_builds": WORKFLOW_POLICY.SELECTABLE_RUNNER_LINE.partition("runs-on: ")[2],
+                    "default": list(WORKFLOW_POLICY.DEFAULT_RUNNER_LABELS),
+                    "local_pull_request_label": WORKFLOW_POLICY.LOCAL_RUNNER_OPT_IN_LABEL,
+                    "local_pull_request_labels": list(WORKFLOW_POLICY.LOCAL_RUNNER_LABELS),
+                },
             },
             sort_keys=True,
         )

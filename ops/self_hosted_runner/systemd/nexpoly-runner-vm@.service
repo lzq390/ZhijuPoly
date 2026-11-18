@@ -1,0 +1,60 @@
+[Unit]
+Description=NexPoly disposable CI VM %i
+Requires=nexpoly-runner-firewall.service nexpoly-runner-proxy.service nexpoly-runner-storage.service
+After=nexpoly-runner-firewall.service nexpoly-runner-proxy.service nexpoly-runner-storage.service
+BindsTo=nexpoly-runner-firewall.service nexpoly-runner-proxy.service
+RequiresMountsFor=@STATE@
+
+[Service]
+Type=simple
+User=nexpoly-vm
+Group=nexpoly-vm
+SupplementaryGroups=kvm
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONNOUSERSITE=1
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE
+ExecStart=/usr/bin/python3 -I -B /usr/local/libexec/nexpoly-runner/host.py run-vm --config /etc/nexpoly-runner/config.toml --instance %i
+RuntimeDirectory=nexpoly-runner-vm-%i
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=no
+TimeoutStopSec=30
+KillMode=control-group
+OOMPolicy=kill
+CPUAccounting=yes
+CPUQuota=@CPU_QUOTA@%
+CPUWeight=20
+MemoryAccounting=yes
+MemoryMax=34G
+MemorySwapMax=0
+IOAccounting=yes
+IOWeight=20
+TasksMax=256
+LimitCORE=0
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+DevicePolicy=closed
+DeviceAllow=/dev/kvm rw
+DeviceAllow=/dev/null rw
+DeviceAllow=/dev/urandom r
+DeviceAllow=/dev/random r
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
+ReadWritePaths=@STATE@/instances/%i /run/nexpoly-runner-vm-%i
+InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/etc/nexpoly-runner/app.pem
+AppArmorProfile=nexpoly-runner-vm
+StandardOutput=journal
+StandardError=journal
+LogNamespace=nexpoly-runner
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100

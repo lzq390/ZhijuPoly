@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import csv
+import io
 import json
 import os
 from pathlib import Path
@@ -9,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts.ci import validate_workflows as policy
 
@@ -43,6 +46,358 @@ PULL_DEPLOY_CONTROLLER_TEXT = (
 ).read_text(encoding="utf-8")
 
 
+class RunnerRoutingPolicyTests(unittest.TestCase):
+    def replace_job(self, name: str, before: str, after: str) -> str:
+        body = policy.workflow_job_body(CI_TEXT, name, [])
+        self.assertIsNotNone(body)
+        self.assertIn(before, body)
+        return CI_TEXT.replace(body, body.replace(before, after, 1), 1)
+
+    def test_reviewed_routes_permissions_and_local_controls_are_valid(self) -> None:
+        failures: list[str] = []
+        policy.validate_runner_routing(CI_TEXT, failures)
+        policy.validate_local_runner_controls(CI_TEXT, failures)
+        policy.validate_actionlint_config(policy.ACTIONLINT_PATH.read_text(), failures)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(policy.SELECTABLE_RUNNER_JOBS), 16)
+        self.assertEqual(len(policy.HOSTED_RUNNER_JOBS), 4)
+
+    def test_every_selectable_job_requires_the_resolved_runner_route(self) -> None:
+        for job in policy.SELECTABLE_RUNNER_JOBS:
+            for replacement in (
+                policy.HOSTED_RUNNER_LINE,
+                policy.LOCAL_RUNNER_LINE,
+                "    runs-on: self-hosted",
+                "    runs-on: [self-hosted, linux, x64]",
+                "    runs-on: [self-hosted, linux, x64, nexpoly-ci-persistent]",
+                "    runs-on: ${{ vars.RUNNER }}",
+                policy.SELECTABLE_RUNNER_LINE + "\n" + policy.SELECTABLE_RUNNER_LINE,
+            ):
+                with self.subTest(job=job, replacement=replacement):
+                    changed = self.replace_job(job, policy.SELECTABLE_RUNNER_LINE, replacement)
+                    failures: list[str] = []
+                    policy.validate_runner_routing(changed, failures)
+                    self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_runner_events_require_full_pr_label_runs_and_main_pushes(self) -> None:
+        trigger = policy.CI_TRIGGER_BLOCK
+        for replacement in (
+            trigger.replace(", labeled", ""), trigger.replace(", unlabeled", ""),
+            trigger.replace("opened, synchronize, reopened", "opened"),
+            trigger.replace("labeled, unlabeled", "labeled, unlabeled, edited"),
+            trigger.replace("  push:\n    branches: [main]", "  push:\n    branches: ['**']"),
+            trigger.replace("  pull_request:", "  pull_request_target:"),
+            trigger + "\n  workflow_dispatch:",
+            trigger + "\n    paths-ignore: ['**']",
+        ):
+            with self.subTest(trigger=replacement):
+                failures: list[str] = []
+                policy.validate_runner_routing(CI_TEXT.replace(trigger, replacement, 1), failures)
+                self.assertTrue(any("event triggers" in failure for failure in failures), failures)
+
+    def test_resolver_requires_hosted_default_exact_pr_opt_in_and_fixed_json(self) -> None:
+        resolver = policy.RESOLVE_SHA_JOB
+        mutations = (
+            ("runner_labels='[\"ubuntu-24.04\"]'", "runner_labels='[\"self-hosted\"]'"),
+            ('if [[ "$EVENT_NAME" == pull_request ]]; then', 'if true; then'),
+            ('if "ci:local" in labels else', 'if any("ci:local" in label for label in labels) else'),
+            ('"nexpoly-ci-ephemeral"]', '"nexpoly-ci-ephemeral", "gpu"]'),
+            ('not isinstance(labels, list)', 'False'),
+            ('any(not isinstance(label, str) for label in labels)', 'False'),
+            ('PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}',
+             'PR_LABELS_JSON: ${{ github.event.pull_request.title }}'),
+            ('[[ "$EVENT_REF" == refs/pull/*/merge ]]', 'true'),
+            ('^[0-9a-f]{40}$', '^[0-9a-f]{7,40}$'),
+            ('runner_labels: ${{ steps.resolve.outputs.runner_labels }}', 'runner_labels: ${{ vars.RUNNER }}'),
+            ('echo "runner_labels=$runner_labels"', 'echo "runner_labels=$PR_LABELS_JSON"'),
+        )
+        for before, after in mutations:
+            with self.subTest(before=before):
+                self.assertIn(before, resolver)
+                changed = CI_TEXT.replace(resolver, resolver.replace(before, after, 1), 1)
+                failures: list[str] = []
+                policy.validate_runner_routing(changed, failures)
+                self.assertTrue(any("resolve-sha must retain" in failure for failure in failures), failures)
+        failures = []
+        policy.validate_runner_routing(CI_TEXT.replace(resolver, resolver +
+            '\n          echo \'runner_labels=["self-hosted"]\' >>"$GITHUB_OUTPUT"', 1), failures)
+        self.assertTrue(any("resolve-sha must retain" in failure for failure in failures), failures)
+
+    def test_selectable_jobs_cannot_skip_labels_or_bypass_resolver_needs(self) -> None:
+        for job in policy.SELECTABLE_RUNNER_JOBS:
+            for before, after in (
+                ("    needs: resolve-sha", "    needs: [resolve-sha, ci-gate]"),
+                (policy.SELECTABLE_RUNNER_LINE, policy.SELECTABLE_RUNNER_LINE +
+                 "\n    if: github.event.action != 'labeled'"),
+                (policy.SELECTABLE_RUNNER_LINE, policy.SELECTABLE_RUNNER_LINE +
+                 "\n    if: contains(github.event.pull_request.labels.*.name, 'ci:local')"),
+            ):
+                with self.subTest(job=job, control=after):
+                    failures: list[str] = []
+                    policy.validate_runner_routing(self.replace_job(job, before, after), failures)
+                    self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_proxy_cannot_escape_the_self_hosted_buildx_branch(self) -> None:
+        for job in policy.SELECTABLE_RUNNER_JOBS:
+            with self.subTest(job=job):
+                failures: list[str] = []
+                policy.validate_runner_routing(self.replace_job(job, policy.SELECTABLE_RUNNER_LINE,
+                    policy.SELECTABLE_RUNNER_LINE + "\n    env:\n      HTTPS_PROXY: http://10.0.2.2:27892"), failures)
+                self.assertTrue(any(job in failure and "proxy" in failure for failure in failures), failures)
+
+    def test_buildx_paths_are_mutually_exclusive_and_hosted_path_has_no_proxy(self) -> None:
+        hosted = "\n".join(policy.CONDITIONAL_HOSTED_BUILDX_SETUP_LINES)
+        local = "\n".join(policy.LOCAL_BUILDX_SETUP_LINES)
+        for job in ("image-build", "openscience-overlay"):
+            for before, after in (
+                (hosted, hosted.replace("        if: runner.environment == 'github-hosted'\n", "")),
+                (hosted, hosted.replace("'github-hosted'", "'self-hosted'")),
+                (local, local.replace("        if: runner.environment == 'self-hosted'\n", "")),
+                (local, local.replace("'self-hosted'", "'github-hosted'")),
+                (hosted, hosted + "\n        with:\n          driver-opts: env.http_proxy=http://10.0.2.2:27892"),
+                (hosted, hosted + "\n" + hosted),
+                (local, ""),
+            ):
+                with self.subTest(job=job, control=after):
+                    failures: list[str] = []
+                    policy.validate_local_runner_controls(self.replace_job(job, before, after), failures)
+                    self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_control_and_publishing_jobs_cannot_move_to_local_runners(self) -> None:
+        for job in policy.HOSTED_RUNNER_JOBS:
+            with self.subTest(job=job):
+                changed = self.replace_job(job, policy.HOSTED_RUNNER_LINE, policy.SELECTABLE_RUNNER_LINE)
+                failures: list[str] = []
+                policy.validate_runner_routing(changed, failures)
+                self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_added_missing_and_duplicate_jobs_are_rejected(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "frontend", [])
+        for changed in (
+            CI_TEXT + "\n  future-job:\n    runs-on: ubuntu-24.04\n    steps: []\n",
+            CI_TEXT.replace("  frontend:\n" + body, "", 1),
+            CI_TEXT + "\n  frontend:\n" + body,
+        ):
+            with self.subTest(changed=changed[-100:]):
+                failures: list[str] = []
+                policy.validate_runner_routing(changed, failures)
+                self.assertTrue(failures)
+
+    def test_default_and_local_job_token_permissions_cannot_be_elevated(self) -> None:
+        cases = [CI_TEXT.replace("permissions:\n  contents: read\n  packages: read",
+                                 "permissions: write-all", 1)]
+        for job in policy.SELECTABLE_RUNNER_JOBS:
+            for value in ("write-all", "{contents: read, packages: write}", "{id-token: write}"):
+                cases.append(self.replace_job(job, policy.SELECTABLE_RUNNER_LINE,
+                    policy.SELECTABLE_RUNNER_LINE + "\n    permissions: " + value))
+        for changed in cases:
+            with self.subTest(changed=changed[:80]):
+                failures: list[str] = []
+                policy.validate_runner_routing(changed, failures)
+                self.assertTrue(any("permissions" in failure for failure in failures), failures)
+        for job in policy.PUBLISHING_JOBS:
+            changed = self.replace_job(job, "      contents: read", "      contents: write")
+            failures = []
+            policy.validate_runner_routing(changed, failures)
+            self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_local_builders_require_all_proxy_options_without_extra_overrides(self) -> None:
+        step = "\n".join(policy.LOCAL_BUILDX_SETUP_LINES)
+        for job in ("image-build", "openscience-overlay"):
+            for replacement in (
+                "\n".join(policy.BUILDX_SETUP_LINES),
+                step.replace("            env.http_proxy=http://10.0.2.2:27892\n", ""),
+                step.replace("            env.https_proxy=http://10.0.2.2:27892\n", ""),
+                step.replace("env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres", "env.no_proxy=*"),
+                step.replace('"env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres"',
+                             "env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres"),
+                step.replace('"env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres"',
+                             'env.no_proxy="localhost,127.0.0.1,::1,postgres,backend,lab-postgres"'),
+                step.replace("10.0.2.2:27892", "127.0.0.1:27891"),
+                step + "\n            network=host",
+                step + "\n        continue-on-error: true",
+            ):
+                with self.subTest(job=job, replacement=replacement):
+                    changed = self.replace_job(job, step, replacement)
+                    failures: list[str] = []
+                    policy.validate_local_runner_controls(changed, failures)
+                    self.assertTrue(any(job in failure for failure in failures), failures)
+
+    @staticmethod
+    def action_driver_opts(value: str) -> list[str]:
+        # Pinned setup-buildx-action context.ts uses toolkit 0.63.0 getInputList
+        # with ignoreComma:true, quote:false. That CSV pass treats quote bytes
+        # literally and rejoins each record, preserving them for Buildx.
+        records = csv.reader(io.StringIO(value), quoting=csv.QUOTE_NONE)
+        return [item.strip() for row in records if (item := ",".join(row)).strip()]
+
+    @staticmethod
+    def buildx_driver_map(arguments: list[str]) -> dict[str, str]:
+        # Buildx 0.31.1 builder.csvToMap calls go-csvvalue.Fields, then SplitN
+        # on '='. For these single-line fields its strict double-quoted CSV
+        # syntax matches csv.reader; commas inside values need whole-field quotes.
+        options = {}
+        for argument in arguments:
+            for field in next(csv.reader([argument], strict=True)):
+                key, separator, value = field.partition("=")
+                if not separator:
+                    raise ValueError(f"invalid value {field!r}, expecting k=v")
+                options[key] = value
+        return options
+
+    def test_local_buildx_proxy_values_survive_both_csv_parsing_layers(self) -> None:
+        expected = {
+            "env.http_proxy": "http://10.0.2.2:27892",
+            "env.https_proxy": "http://10.0.2.2:27892",
+            "env.no_proxy": "localhost,127.0.0.1,::1,postgres,backend,lab-postgres",
+        }
+        for job in ("image-build", "openscience-overlay"):
+            with self.subTest(job=job):
+                body = policy.workflow_job_body(CI_TEXT, job, [])
+                step = next(item for item in policy.workflow_step_blocks(body)
+                            if item.startswith("      - name: Set up Buildx for local runner\n"))
+                value = "\n".join(line.removeprefix("            ") for line in
+                                  step.split("          driver-opts: |\n", 1)[1].splitlines())
+                arguments = self.action_driver_opts(value)
+                self.assertEqual(len(arguments), 3)
+                self.assertEqual(arguments[-1], '"env.no_proxy=' + expected["env.no_proxy"] + '"')
+                self.assertEqual(self.buildx_driver_map(arguments), expected)
+
+    def test_buildx_csv_rejects_unquoted_and_inner_quoted_no_proxy_lists(self) -> None:
+        value = "localhost,127.0.0.1,::1,postgres,backend,lab-postgres"
+        for option in (
+            "env.no_proxy=" + value,
+            'env.no_proxy="' + value + '"',
+            "'env.no_proxy=" + value + "'",
+        ):
+            with self.subTest(option=option):
+                arguments = self.action_driver_opts(option)
+                self.assertEqual(arguments, [option])
+                with self.assertRaises((ValueError, csv.Error)):
+                    self.buildx_driver_map(arguments)
+
+    def test_removing_whole_field_quotes_before_buildx_reproduces_the_failure(self) -> None:
+        quoted = '"env.no_proxy=localhost,127.0.0.1,::1,postgres,backend,lab-postgres"'
+        self.assertIn("env.no_proxy", self.buildx_driver_map(self.action_driver_opts(quoted)))
+        # A CSV pass with its default quote handling would strip these bytes.
+        stripped = [",".join(row) for row in csv.reader([quoted])]
+        with self.assertRaisesRegex(ValueError, "127.0.0.1.*expecting k=v"):
+            self.buildx_driver_map(stripped)
+
+    def test_local_cache_exporter_options_preserve_scope_mode_and_real_image_output(self) -> None:
+        scopes = {
+            "image-build": "ci-${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}",
+            "openscience-overlay": "ci-openscience-ui-overlay-v1",
+        }
+        for job, scope in scopes.items():
+            with self.subTest(job=job):
+                body = policy.workflow_job_body(CI_TEXT, job, [])
+                exports = re.findall(r"^          cache-to: (.*)$", body, re.MULTILINE)
+                self.assertEqual(len(exports), 1)
+                options = dict(field.split("=", 1) for field in next(csv.reader(exports)))
+                self.assertEqual(options, {
+                    "type": "gha", "mode": "max", "scope": scope,
+                    "timeout": "5m", "ignore-error": "true",
+                })
+                self.assertIn("          cache-from: type=gha,scope=" + scope, body)
+                build = next(step for step in policy.workflow_step_blocks(body)
+                             if "uses: docker/build-push-action@" in step)
+                self.assertIn("          push: false\n", build)
+                self.assertIn("          load: true\n", build)
+                self.assertNotIn("continue-on-error:", body)
+
+    def test_local_cache_export_policy_cannot_drift_or_be_removed(self) -> None:
+        for job in ("image-build", "openscience-overlay"):
+            body = policy.workflow_job_body(CI_TEXT, job, [])
+            original = re.findall(r"^          cache-to:.*$", body, re.MULTILINE)[0]
+            for replacement in (
+                "", original.replace(",ignore-error=true", ""),
+                original.replace("ignore-error=true", "ignore-error=false"),
+                original.replace(",timeout=5m", ""),
+                original.replace("timeout=5m", "timeout=0s"),
+                original.replace("timeout=5m", "timeout=30m"),
+                original.replace("mode=max", "mode=min"),
+                original.replace("scope=ci-", "scope=release-"),
+                original + "\n" + original,
+            ):
+                with self.subTest(job=job, replacement=replacement):
+                    changed = self.replace_job(job, original, replacement)
+                    failures: list[str] = []
+                    policy.validate_local_runner_controls(changed, failures)
+                    self.assertTrue(any(job in failure and "cache export" in failure
+                                        for failure in failures), failures)
+
+    def test_only_cache_exports_may_ignore_errors_and_hosted_cache_policy_stays_strict(self) -> None:
+        for job in ("image-build", "openscience-overlay"):
+            body = policy.workflow_job_body(CI_TEXT, job, [])
+            build = next(step for step in policy.workflow_step_blocks(body)
+                         if "uses: docker/build-push-action@" in step)
+            for before, after in (
+                (policy.SELECTABLE_RUNNER_LINE,
+                 policy.SELECTABLE_RUNNER_LINE + "\n    continue-on-error: true"),
+                (build, build.splitlines()[0] + "\n        continue-on-error: true\n"
+                 + "\n".join(build.splitlines()[1:]) + "\n"),
+            ):
+                with self.subTest(job=job, control=before.splitlines()[0]):
+                    failures: list[str] = []
+                    policy.validate_local_runner_controls(self.replace_job(job, before, after), failures)
+                    self.assertTrue(any("only cache export errors" in failure
+                                        for failure in failures), failures)
+            for before, after in (("          load: true", "          load: false"),
+                                  ("          push: false", "          push: true")):
+                with self.subTest(job=job, control=before):
+                    changed = self.replace_job(job, before, after)
+                    failures = []
+                    policy.validate_backend_image_identity_policy(changed, failures)
+                    policy.validate_openscience_release_policy(changed, failures)
+                    self.assertTrue(any(job in failure for failure in failures), failures)
+        for job in policy.PUBLISHING_JOBS:
+            body = policy.workflow_job_body(CI_TEXT, job, [])
+            for export in re.findall(r"^          cache-to:.*$", body, re.MULTILINE):
+                with self.subTest(job=job, export=export):
+                    failures = []
+                    policy.validate_local_runner_controls(
+                        self.replace_job(job, export, export + ",timeout=5m,ignore-error=true"), failures)
+                    self.assertTrue(any(job in failure and "cache export" in failure
+                                        for failure in failures), failures)
+
+    def test_hosted_jobs_and_global_environment_cannot_receive_local_proxy(self) -> None:
+        for job in policy.PUBLISHING_JOBS:
+            changed = self.replace_job(job, "\n".join(policy.BUILDX_SETUP_LINES),
+                                       "\n".join(policy.LOCAL_BUILDX_SETUP_LINES))
+            failures: list[str] = []
+            policy.validate_runner_routing(changed, failures)
+            policy.validate_local_runner_controls(changed, failures)
+            self.assertTrue(any(job in failure for failure in failures), failures)
+        changed = CI_TEXT.replace("env:\n", "env:\n  http_proxy: http://10.0.2.2:27892\n", 1)
+        failures = []
+        policy.validate_runner_routing(changed, failures)
+        self.assertTrue(any("proxy" in failure for failure in failures), failures)
+
+    def test_frontend_worker_limit_cannot_be_removed_or_skip_tests(self) -> None:
+        for replacement in (
+            "npm test", "npm test -- --maxWorkers=8",
+            "npm test -- --maxWorkers=4 --passWithNoTests",
+            "npm test -- --maxWorkers=4 || true",
+        ):
+            with self.subTest(replacement=replacement):
+                changed = self.replace_job("frontend", "npm test -- --maxWorkers=4", replacement)
+                failures: list[str] = []
+                policy.validate_local_runner_controls(changed, failures)
+                self.assertTrue(any("frontend" in failure for failure in failures), failures)
+
+    def test_actionlint_cannot_accept_wildcard_labels_or_ignore_checks(self) -> None:
+        for changed in (
+            "", policy.ACTIONLINT_CONFIG.replace("nexpoly-ci-ephemeral", "'*'"),
+            policy.ACTIONLINT_CONFIG + "    - another-runner\n",
+            policy.ACTIONLINT_CONFIG + "paths:\n  '**':\n    ignore: ['runner-label']\n",
+        ):
+            with self.subTest(changed=changed):
+                failures: list[str] = []
+                policy.validate_actionlint_config(changed, failures)
+                self.assertTrue(failures)
+
+
 class StructuredWorkflowPolicyTests(unittest.TestCase):
     def test_candidate_and_published_images_require_isolation_smoke(self) -> None:
         failures: list[str] = []
@@ -62,6 +417,65 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         failures: list[str] = []
         policy.validate_lightweight_backend_tests(CI_TEXT, failures)
         self.assertEqual(failures, [])
+
+    def test_affected_python_setups_omit_optional_cache_without_changing_other_jobs(self) -> None:
+        for job in ("lightweight-backend-tests", "worker-tests"):
+            with self.subTest(job=job):
+                body = policy.workflow_job_body(CI_TEXT, job, [])
+                setup = [step.rstrip() for step in policy.workflow_step_blocks(body)
+                         if "uses: actions/setup-python@" in step]
+                self.assertEqual(setup, [policy.UNCACHED_PYTHON311_STEP])
+                self.assertNotIn("cache:", setup[0])
+                self.assertNotIn("cache-dependency-path:", setup[0])
+        for job in ("backend-tests", "dft-worker-tests", "property-filter-mcp-tests"):
+            with self.subTest(job=job):
+                other = policy.workflow_job_body(CI_TEXT, job, [])
+                self.assertIn("          cache: pip\n", other)
+
+    def test_lightweight_python_setup_rejects_cache_reintroduction_or_weakened_execution(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "lightweight-backend-tests", [])
+        setup = policy.UNCACHED_PYTHON311_STEP
+        for replacement in (
+            setup + "\n          cache: pip",
+            setup + "\n          cache-dependency-path: server_monitoring/requirements.lock",
+            setup.replace('python-version: "3.11"', 'python-version: "3.12"'),
+            setup.replace("a26af69be951a213d495a4c3e4e4022e16d87065", "0" * 40),
+            setup.replace("        with:", "        continue-on-error: true\n        with:"),
+            setup.replace("        with:", "        if: false\n        with:"),
+        ):
+            with self.subTest(replacement=replacement):
+                failures: list[str] = []
+                policy.validate_lightweight_backend_tests(
+                    CI_TEXT.replace(body, body.replace(setup, replacement, 1), 1), failures)
+                self.assertTrue(any("without pip cache" in failure for failure in failures), failures)
+        for before, after in (
+            ("    timeout-minutes: 10", "    timeout-minutes: 20"),
+            ("--require-hashes", ""),
+            ("-r server_monitoring/requirements.lock", ""),
+        ):
+            with self.subTest(control=before):
+                failures = []
+                policy.validate_lightweight_backend_tests(
+                    CI_TEXT.replace(body, body.replace(before, after, 1), 1), failures)
+                self.assertTrue(failures)
+
+    def test_worker_python_setup_rejects_cache_reintroduction_or_changed_python(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "worker-tests", [])
+        setup = policy.UNCACHED_PYTHON311_STEP
+        for replacement in (
+            setup + "\n          cache: pip",
+            setup + "\n          cache-dependency-path: workers/monomer_md_worker/requirements.lock",
+            setup.replace('python-version: "3.11"', 'python-version: "3.12"'),
+            setup.replace("a26af69be951a213d495a4c3e4e4022e16d87065", "0" * 40),
+            setup.replace("        with:", "        continue-on-error: true\n        with:"),
+            setup.replace("        with:", "        if: false\n        with:"),
+        ):
+            with self.subTest(replacement=replacement):
+                failures: list[str] = []
+                policy.validate_local_runner_controls(
+                    CI_TEXT.replace(body, body.replace(setup, replacement, 1), 1), failures)
+                self.assertTrue(any("worker-tests" in failure and "without pip cache" in failure
+                                    for failure in failures), failures)
 
     def test_lightweight_tests_cannot_leak_into_unittest_or_skip_pytest(self) -> None:
         for pattern in (
@@ -865,6 +1279,96 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
             failures,
         )
 
+    def test_backend_matrix_uses_the_reviewed_job_budget(self) -> None:
+        failures: list[str] = []
+        policy.validate_backend_tests_budget(CI_TEXT, failures)
+        policy.validate_script_tests_budget(CI_TEXT, failures)
+        self.assertEqual(failures, [])
+        body = policy.workflow_job_body(CI_TEXT, "backend-tests", [])
+        self.assertIn("        shard: [0, 1, 2]\n", body)
+        self.assertIn("          cache: pip\n", body)
+        self.assertIn("          cache-dependency-path: backend/requirements-ci.lock\n", body)
+
+    def test_backend_budget_rejects_old_unreviewed_and_host_watchdog_values(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "backend-tests", [])
+        for value in ("0", "40", "74", "76", "105", "106", "180", '"75"',
+                      "${{ matrix.timeout }}"):
+            with self.subTest(value=value):
+                changed = CI_TEXT.replace(body, body.replace(
+                    "    timeout-minutes: 75\n", f"    timeout-minutes: {value}\n", 1), 1)
+                failures: list[str] = []
+                policy.validate_backend_tests_budget(changed, failures)
+                self.assertTrue(any("75-minute job budget" in failure for failure in failures), failures)
+
+    def test_backend_budget_requires_one_real_job_level_field(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "backend-tests", [])
+        for replacement in (
+            "", "    # timeout-minutes: 75\n", "        timeout-minutes: 75\n",
+            "    timeout-minutes: 75\n    timeout-minutes: 75\n",
+            "    timeout-minutes: 75\n    timeout-minutes: 106\n",
+        ):
+            with self.subTest(replacement=replacement):
+                changed = CI_TEXT.replace(body, body.replace(
+                    "    timeout-minutes: 75\n", replacement, 1), 1)
+                failures: list[str] = []
+                policy.validate_backend_tests_budget(changed, failures)
+                self.assertTrue(any("75-minute job budget" in failure for failure in failures), failures)
+
+    def test_workflow_policy_cli_rejects_the_old_backend_budget(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "backend-tests", [])
+        changed = CI_TEXT.replace(body, body.replace(
+            "    timeout-minutes: 75\n", "    timeout-minutes: 40\n", 1), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "ci.yml"
+            candidate.write_text(changed)
+            with mock.patch.object(policy, "CI_PATH", candidate), mock.patch("builtins.print") as printed:
+                self.assertEqual(policy.main(), 1)
+        self.assertTrue(any("75-minute job budget" in str(call) for call in printed.call_args_list))
+
+    def test_frontend_retains_reviewed_budget_and_npm_cache(self) -> None:
+        failures: list[str] = []
+        policy.validate_frontend_budget(CI_TEXT, failures)
+        self.assertEqual(failures, [])
+        body = policy.workflow_job_body(CI_TEXT, "frontend", [])
+        self.assertIn("          cache: npm\n", body)
+        self.assertIn("          cache-dependency-path: frontend/package-lock.json\n", body)
+
+    def test_frontend_budget_rejects_old_and_unreviewed_values(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "frontend", [])
+        for value in ("0", "25", "30", "34", "36", "40", "75", "105", "106", '"35"',
+                      "${{ matrix.timeout }}"):
+            with self.subTest(value=value):
+                changed = CI_TEXT.replace(body, body.replace(
+                    "    timeout-minutes: 35\n", f"    timeout-minutes: {value}\n", 1), 1)
+                failures: list[str] = []
+                policy.validate_frontend_budget(changed, failures)
+                self.assertTrue(any("35-minute job budget" in failure for failure in failures), failures)
+
+    def test_frontend_budget_requires_one_real_job_level_field(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "frontend", [])
+        for replacement in (
+            "", "    # timeout-minutes: 35\n", "        timeout-minutes: 35\n",
+            "    timeout-minutes: 35\n    timeout-minutes: 35\n",
+            "    timeout-minutes: 35\n    timeout-minutes: 75\n",
+        ):
+            with self.subTest(replacement=replacement):
+                changed = CI_TEXT.replace(body, body.replace(
+                    "    timeout-minutes: 35\n", replacement, 1), 1)
+                failures: list[str] = []
+                policy.validate_frontend_budget(changed, failures)
+                self.assertTrue(any("35-minute job budget" in failure for failure in failures), failures)
+
+    def test_workflow_policy_cli_rejects_the_old_frontend_budget(self) -> None:
+        body = policy.workflow_job_body(CI_TEXT, "frontend", [])
+        changed = CI_TEXT.replace(body, body.replace(
+            "    timeout-minutes: 35\n", "    timeout-minutes: 25\n", 1), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "ci.yml"
+            candidate.write_text(changed)
+            with mock.patch.object(policy, "CI_PATH", candidate), mock.patch("builtins.print") as printed:
+                self.assertEqual(policy.main(), 1)
+        self.assertTrue(any("35-minute job budget" in str(call) for call in printed.call_args_list))
+
     def test_script_tests_keep_fault_injection_budget(self) -> None:
         script_job = CI_TEXT.index("  script-tests:\n")
         timeout = CI_TEXT.index("    timeout-minutes: 40\n", script_job)
@@ -1349,7 +1853,8 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         changed = CI_TEXT.replace(identity_step, "", 1)
         cache_marker = (
             "          cache-to: type=gha,mode=max,scope=ci-"
-            "${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}\n"
+            "${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }},"
+            + policy.LOCAL_CACHE_EXPORT_OPTIONS + "\n"
         )
         changed = changed.replace(
             cache_marker,

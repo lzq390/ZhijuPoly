@@ -1,0 +1,45 @@
+[Unit]
+Description=NexPoly disposable GitHub runner controller
+Requires=nexpoly-runner-firewall.service nexpoly-runner-proxy.service nexpoly-runner-storage.service
+After=network-online.target nexpoly-runner-firewall.service nexpoly-runner-proxy.service nexpoly-runner-storage.service
+BindsTo=nexpoly-runner-firewall.service nexpoly-runner-proxy.service
+RequiresMountsFor=@STATE@
+ConditionPathExists=/etc/nexpoly-runner/app.pem
+ConditionPathExists=@STATE@/templates/current.json
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nexpoly-runnerctl --config /etc/nexpoly-runner/config.toml serve
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONNOUSERSITE=1
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE
+Environment=http_proxy=http://127.0.0.1:@PROXY_PORT@
+Environment=https_proxy=http://127.0.0.1:@PROXY_PORT@
+RuntimeDirectory=nexpoly-runner-controller
+RuntimeDirectoryMode=0700
+# Other root operations share this lock directory while the service is stopped.
+# Removing it on a failed start would allow a second lock inode to be created.
+RuntimeDirectoryPreserve=yes
+UMask=0077
+Restart=on-failure
+RestartSec=30
+CPUQuota=50%
+MemoryMax=512M
+MemorySwapMax=0
+LimitCORE=0
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=@STATE@ /run/nexpoly-runner-controller
+RestrictSUIDSGID=yes
+StandardOutput=journal
+StandardError=journal
+LogNamespace=nexpoly-runner
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+# Installation intentionally does not enable or start this unit. Activate only
+# after credentials, template, egress-denial checks and a disposable job pass.
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=NexPoly dedicated storage reservation guard
+RequiresMountsFor=@STATE@
+Before=nexpoly-runner-proxy.service nexpoly-runner-controller.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 -I -B /usr/local/libexec/nexpoly-runner/host.py storage-protect --config /etc/nexpoly-runner/config.toml
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# The helper first proves the loop's exact backing path/size/mount identity.
+# Only that device's discard queue limit may be changed; other queues are untouched.
+ReadWritePaths=@ROOT@/storage.ext4 @STATE@ /sys/devices/virtual/block
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -21,6 +21,53 @@ fi
 STAGING="$(mktemp -d)"
 INDEX_FILE="$STAGING/index.html"
 IMAGE_DIST="$STAGING/image-dist"
+RUNTIME_CONTAINER="$CONTAINER_NAME"
+RUNTIME_ATTEMPTED=0
+VERIFY_STAGE=frontend-build
+
+# Only this isolated nginx server receives empty proxy overrides. Its wget
+# probes are loopback-only and BusyBox ignores NO_PROXY. Build proxies remain.
+readonly -a LOCAL_RUNTIME_PROXY_ARGS=(
+  --env HTTP_PROXY= --env HTTPS_PROXY= --env ALL_PROXY=
+  --env http_proxy= --env https_proxy= --env all_proxy=
+)
+
+runtime_diagnostics() {
+  printf 'Frontend image verification failed at %s (line %s)\n' "$VERIFY_STAGE" "$1" >&2
+  [[ "$RUNTIME_ATTEMPTED" == 1 ]] || return 0
+  /usr/bin/timeout --signal=TERM --kill-after=2s 10s \
+    docker inspect "$RUNTIME_CONTAINER" --format 'status={{.State.Status}} exit={{.State.ExitCode}} health={{json .State.Health}}' >&2 || true
+  /usr/bin/timeout --signal=TERM --kill-after=2s 10s \
+    docker logs --tail 50 "$RUNTIME_CONTAINER" >&2 || true
+}
+
+start_local_candidate() {
+  VERIFY_STAGE=container-start
+  RUNTIME_ATTEMPTED=1
+  /usr/bin/timeout --signal=TERM --kill-after=2s 30s \
+    docker run \
+      --detach \
+      --name "$RUNTIME_CONTAINER" \
+      "${LOCAL_RUNTIME_PROXY_ARGS[@]}" \
+      --add-host backend:127.0.0.1 \
+      --publish 127.0.0.1::80 \
+      "$IMAGE_TAG" >/dev/null
+}
+
+wait_for_local_candidate() {
+  VERIFY_STAGE=container-http-readiness
+  local deadline=$((SECONDS + 30))
+  for _ in {1..30}; do
+    (( SECONDS < deadline )) || break
+    if /usr/bin/timeout --signal=TERM --kill-after=2s 8s \
+      docker exec "$RUNTIME_CONTAINER" wget -T 5 -qO- http://127.0.0.1/ >"$INDEX_FILE" 2>/dev/null; then
+      [[ ! -s "$INDEX_FILE" ]] || return 0
+    fi
+    sleep 1
+  done
+  echo 'Container did not serve a nonempty index before the readiness deadline' >&2
+  return 1
+}
 
 if [[ -n "$EXPECTED_WORKSPACE_URL" && "$EXPECTED_WORKSPACE_URL" != "http://114.214.255.154:9011/" ]]; then
   echo "frontend image smoke accepts only the reviewed production OpenScience URL" >&2
@@ -33,6 +80,8 @@ cleanup() {
   rm -rf -- "$STAGING"
 }
 trap cleanup EXIT
+failure_status=0
+trap 'failure_status=$?; if (( BASH_SUBSHELL == 0 )); then runtime_diagnostics "$LINENO"; exit "$failure_status"; fi' ERR
 
 node --test "$SCRIPT_DIR/verify_frontend_image_assets.test.mjs"
 git -C "$REPO_ROOT" archive --format=tar HEAD | tar -C "$STAGING" -xf -
@@ -52,6 +101,7 @@ docker build \
   "${EDITOR_BUILD_ARGS[@]}" \
   "$STAGING"
 
+VERIFY_STAGE=nginx-permissions
 docker run --rm --add-host backend:127.0.0.1 "$IMAGE_TAG" nginx -t
 docker run --rm --user 101:101 "$IMAGE_TAG" sh -eu -c '
   test -r /etc/nginx/conf.d/default.conf
@@ -60,19 +110,9 @@ docker run --rm --user 101:101 "$IMAGE_TAG" sh -eu -c '
   find /usr/share/nginx/html -type f -exec test -r {} \;
 '
 
-docker run \
-  --detach \
-  --name "$CONTAINER_NAME" \
-  --add-host backend:127.0.0.1 \
-  --publish 127.0.0.1::80 \
-  "$IMAGE_TAG" >/dev/null
-
-for _ in {1..30}; do
-  if docker exec "$CONTAINER_NAME" wget -qO- http://127.0.0.1/ >"$INDEX_FILE" 2>/dev/null; then
-    break
-  fi
-  sleep 1
-done
+start_local_candidate
+wait_for_local_candidate
+VERIFY_STAGE=served-assets
 test -s "$INDEX_FILE"
 docker exec "$CONTAINER_NAME" wget -qO- http://127.0.0.1/structure-editor.json >"$STAGING/structure-editor.json"
 mapfile -t EDITOR_ASSETS < <(node --input-type=module - "$STAGING/structure-editor.json" <<'JS'

@@ -1,0 +1,46 @@
+[Unit]
+Description=NexPoly restricted CI proxy
+Requires=nexpoly-runner-firewall.service nexpoly-runner-storage.service
+After=network-online.target nexpoly-runner-firewall.service nexpoly-runner-storage.service
+BindsTo=nexpoly-runner-firewall.service
+RequiresMountsFor=@STATE@
+
+[Service]
+Type=simple
+User=nexpoly-proxy
+Group=nexpoly-proxy
+ExecStartPre=/usr/sbin/squid -k parse -f /etc/nexpoly-runner/squid.conf
+ExecStart=/usr/sbin/squid -N -f /etc/nexpoly-runner/squid.conf
+# Reinstall/restart applies reviewed configuration changes while no VM is active.
+RuntimeDirectory=nexpoly-runner-proxy
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5
+CPUQuota=50%
+MemoryMax=512M
+MemorySwapMax=0
+TasksMax=64
+LimitNOFILE=8192
+LimitCORE=0
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
+ReadWritePaths=/run/nexpoly-runner-proxy
+InaccessiblePaths=-/run/docker.sock -/etc/nexpoly-runner/app.pem
+StandardOutput=null
+StandardError=journal
+LogNamespace=nexpoly-runner
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+[Install]
+WantedBy=multi-user.target

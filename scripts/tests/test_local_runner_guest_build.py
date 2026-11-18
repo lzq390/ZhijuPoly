@@ -1,0 +1,237 @@
+from __future__ import annotations
+
+from contextlib import ExitStack
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest import mock
+import urllib.error
+
+
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location(
+    "local_runner_guest_build", ROOT / "ops/self_hosted_runner/guest/build.py")
+assert spec and spec.loader
+build = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(build)
+smoke_spec = importlib.util.spec_from_file_location(
+    "local_runner_guest_build_smoke", ROOT / "ops/self_hosted_runner/guest/smoke.py")
+assert smoke_spec and smoke_spec.loader
+smoke = importlib.util.module_from_spec(smoke_spec)
+smoke_spec.loader.exec_module(smoke)
+
+
+class GuestBuildDiagnosticsTests(unittest.TestCase):
+    def setUp(self):
+        self.previous_stage = build.CURRENT_STAGE
+
+    def tearDown(self):
+        build.CURRENT_STAGE = self.previous_stage
+
+    def test_invalid_stage_never_enters_the_event_stream(self):
+        with mock.patch.object(build, "emit") as emit:
+            with self.assertRaises(ValueError):
+                build.stage("https://user:secret@example.com/download?token=secret")
+        emit.assert_not_called()
+
+    def test_failure_events_expose_only_fixed_categories_and_bounded_numbers(self):
+        secret = "https://user:secret@example.com/download?token=secret"
+        cases = [
+            (subprocess.CalledProcessError(100, [secret], secret, secret),
+             {"error_kind": "command_failed", "exit_code": 100}),
+            (subprocess.CalledProcessError(-9, [secret]),
+             {"error_kind": "command_failed", "exit_code": -9}),
+            (subprocess.CalledProcessError(99999, [secret]),
+             {"error_kind": "command_failed"}),
+            (urllib.error.HTTPError(secret, 403, secret, {}, None),
+             {"error_kind": "http_error", "http_status": 403}),
+            (urllib.error.HTTPError(secret, 99999, secret, {}, None),
+             {"error_kind": "http_error"}),
+            (TimeoutError(secret), {"error_kind": "timeout"}),
+            (urllib.error.URLError(TimeoutError(secret)), {"error_kind": "timeout"}),
+            (urllib.error.URLError(secret), {"error_kind": "network_error"}),
+            (PermissionError(secret), {"error_kind": "filesystem_error"}),
+            (ValueError(secret), {"error_kind": "validation_error"}),
+            (RuntimeError(secret), {"error_kind": "validation_error"}),
+            (tarfile.ReadError(secret), {"error_kind": "validation_error"}),
+            (Exception(secret), {"error_kind": "unexpected_error"}),
+        ]
+        build.CURRENT_STAGE = "runner_download"
+        for error, expected in cases:
+            with self.subTest(error=type(error).__name__, expected=expected):
+                with mock.patch.object(build, "emit") as emit:
+                    build.report_failure(error)
+                emit.assert_called_once_with(
+                    "failed", reason="template_build_failed", stage="runner_download", **expected)
+                self.assertNotIn("secret", repr(emit.call_args))
+                self.assertNotIn("https://", repr(emit.call_args))
+
+    def test_invalid_current_stage_is_not_reported(self):
+        build.CURRENT_STAGE = "secret"
+        with mock.patch.object(build, "emit") as emit:
+            build.report_failure(ValueError("secret"))
+        self.assertEqual(emit.call_args.kwargs["stage"], "preflight")
+
+    def test_entrypoint_reports_failed_phase_and_always_powers_off(self):
+        error = subprocess.CalledProcessError(100, ["apt-get", "install"])
+        events = []
+
+        def fail():
+            build.stage("apt_dependencies")
+            raise error
+
+        with mock.patch.object(build, "main", side_effect=fail), \
+                mock.patch.object(build, "emit", side_effect=lambda event, **_: events.append(event)) as emit, \
+                mock.patch.object(build.traceback, "print_exc", side_effect=lambda **_: events.append("traceback")) as trace, \
+                mock.patch.object(build.sys, "stderr") as stderr, \
+                mock.patch.object(build.subprocess, "run", side_effect=lambda *_, **__: events.append("poweroff")) as run:
+            stderr.flush.side_effect = lambda: events.append("flush")
+            with self.assertRaises(SystemExit) as caught:
+                build.entrypoint()
+        self.assertEqual(caught.exception.code, 1)
+        self.assertEqual(events, ["template_stage", "traceback", "flush", "failed", "poweroff"])
+        trace.assert_called_once_with(file=stderr)
+        self.assertEqual(emit.call_args_list, [
+            mock.call("template_stage", stage="apt_dependencies"),
+            mock.call("failed", reason="template_build_failed", stage="apt_dependencies",
+                      error_kind="command_failed", exit_code=100),
+        ])
+        run.assert_called_once_with(["systemctl", "poweroff", "--no-block"], check=False)
+
+    def test_successful_entrypoint_powers_off_without_failure_event(self):
+        with mock.patch.object(build, "main"), mock.patch.object(build, "emit") as emit, \
+                mock.patch.object(build.subprocess, "run") as run:
+            build.entrypoint()
+        emit.assert_not_called()
+        run.assert_called_once_with(["systemctl", "poweroff", "--no-block"], check=False)
+
+    def test_real_preparation_flow_preinstalls_os_browser_dependencies_and_preserves_apt_indexes(self):
+        # Redirect every guest path into a temporary tree. All subprocesses,
+        # downloads, extraction and cleanup remain mocked; no host is prepared.
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            root = Path(directory)
+            config = root / "etc/nexpoly-ci-runner"
+            config.mkdir(parents=True)
+            (config / "build-mode").touch()
+            (root / "etc/os-release").write_text('VERSION_ID="24.04"\n')
+            (config / "software-lock.json").write_text(json.dumps({
+                "docker_apt": {"packages": [{"package": "docker-ce"}]},
+                "buildx": {}, "runner": {"version": "2.338.2"},
+            }))
+            apt_lists = root / "var/lib/apt/lists"
+            apt_lists.mkdir(parents=True)
+            (apt_lists / "ubuntu_InRelease").write_text("release metadata fixture")
+            (apt_lists / "ubuntu_Packages").write_text("package index fixture")
+
+            def guest_path(value):
+                path = Path(value)
+                if path.is_absolute() and not path.is_relative_to(root):
+                    return root / path.relative_to("/")
+                return path
+
+            def downloaded(_artifact, destination):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"mock artifact")
+
+            def remove_guest_tree(path, **kwargs):
+                mapped = guest_path(path)
+                self.assertTrue(mapped.is_relative_to(root))
+                shutil.rmtree(mapped, **kwargs)
+
+            stack.enter_context(mock.patch.object(build, "CONFIG", config))
+            background_check = mock.Mock()
+            smoke_module = SimpleNamespace(**{name: getattr(smoke, name) for name in (
+                "BACKGROUND_APT_TIMERS", "BACKGROUND_APT_UNITS", "APT_PERIODIC_CONFIG", "APT_PERIODIC_POLICY",
+                "NEEDRESTART_CONFIG", "NEEDRESTART_POLICY")},
+                check_background_updates=background_check)
+            stack.enter_context(mock.patch.dict(sys.modules, {
+                "bootstrap": SimpleNamespace(runner_account=mock.Mock()), "smoke": smoke_module}))
+            stack.enter_context(mock.patch.object(build, "Path", side_effect=guest_path))
+            stack.enter_context(mock.patch.object(build.os, "geteuid", return_value=0))
+            stack.enter_context(mock.patch.dict(os.environ))
+            run = stack.enter_context(mock.patch.object(build, "run"))
+            stack.enter_context(mock.patch.object(build, "download", side_effect=downloaded))
+            stack.enter_context(mock.patch.object(build.tarfile, "open"))
+            stack.enter_context(mock.patch.object(build, "shutil", SimpleNamespace(rmtree=remove_guest_tree)))
+            emit = stack.enter_context(mock.patch.object(build, "emit"))
+            build.main()
+            self.assertEqual(
+                [call.kwargs["stage"] for call in emit.call_args_list if call.args == ("template_stage",)],
+                ["preflight", "apt_quiesce", "apt_update", "apt_dependencies", "docker_packages",
+                 "buildx_download", "runner_download", "runner_dependencies",
+                 "guest_configuration", "docker_start", "smoke", "seal"])
+            self.assertEqual(emit.call_args, mock.call(
+                "template_ready", profile="nexpoly-ci-ephemeral-v1",
+                runner_version="2.338.2", smoke_passed=True))
+            # Independent reviewed set: omitting a font/library must not silently
+            # put the package download back into the limited per-job CI budget.
+            expected_browser_packages = {
+                "xvfb", "fonts-noto-color-emoji", "fonts-unifont", "libfontconfig1",
+                "libfreetype6", "xfonts-cyrillic", "xfonts-scalable", "fonts-liberation",
+                "fonts-ipafont-gothic", "fonts-wqy-zenhei", "fonts-tlwg-loma-otf",
+                "fonts-freefont-ttf", "libasound2t64", "libatk-bridge2.0-0t64",
+                "libatk1.0-0t64", "libatspi2.0-0t64", "libcairo2", "libcups2t64",
+                "libdbus-1-3", "libdrm2", "libgbm1", "libglib2.0-0t64", "libnspr4",
+                "libnss3", "libpango-1.0-0", "libx11-6", "libxcb1", "libxcomposite1",
+                "libxdamage1", "libxext6", "libxfixes3", "libxkbcommon0", "libxrandr2",
+            }
+            system_install = next(call.args for call in run.call_args_list
+                                  if call.args[:4] == ("apt-get", "install", "-y", "--no-install-recommends"))
+            self.assertTrue(expected_browser_packages.issubset(system_install[4:]))
+            self.assertIn("python3-pip", system_install[4:])
+            self.assertIn("dbus-user-session", system_install[4:])
+            self.assertEqual(set(build.CHROMIUM_SYSTEM_PACKAGES), expected_browser_packages)
+            run.assert_any_call("apt-get", "clean")
+            mask = mock.call("systemctl", "mask", "apt-daily.timer", "apt-daily-upgrade.timer",
+                             "apt-daily.service", "apt-daily-upgrade.service")
+            stop = mock.call("systemctl", "stop", "apt-daily.timer", "apt-daily-upgrade.timer")
+            self.assertLess(run.call_args_list.index(mask), run.call_args_list.index(stop))
+            self.assertLess(run.call_args_list.index(stop), run.call_args_list.index(mock.call("apt-get", "update")))
+            self.assertFalse(any(call.args[:2] == ("systemctl", "stop") and any(
+                str(value).endswith(".service") for value in call.args[2:]) for call in run.call_args_list))
+            self.assertEqual(background_check.call_args_list, [mock.call(wait_seconds=300), mock.call()])
+            linger = mock.call("loginctl", "enable-linger", "runner")
+            user_manager = mock.call("systemctl", "start", "user@1001.service")
+            smoke_call = mock.call("python3", str(build.HERE / "smoke.py"))
+            self.assertLess(run.call_args_list.index(linger), run.call_args_list.index(user_manager))
+            self.assertLess(run.call_args_list.index(user_manager), run.call_args_list.index(smoke_call))
+            self.assertEqual((apt_lists / "ubuntu_InRelease").read_text(), "release metadata fixture")
+            self.assertEqual((apt_lists / "ubuntu_Packages").read_text(), "package index fixture")
+            proxy_config = root / "etc/apt/apt.conf.d/80-nexpoly-proxy"
+            periodic_config = root / "etc/apt/apt.conf.d/99zz-nexpoly-periodic"
+            content = proxy_config.read_text()
+            self.assertNotIn("AllowInsecure", content)
+            self.assertNotIn("AllowUnauthenticated", content)
+            self.assertNotIn("Verify-Peer", content)
+            # Parse the actual generated syntax without updating/installing or
+            # printing any unrelated host APT configuration.
+            if shutil.which("apt-config"):
+                periodic = subprocess.run([
+                    "apt-config", "-c", str(periodic_config), "shell",
+                    "ENABLE", "APT::Periodic::Enable", "UPDATE", "APT::Periodic::Update-Package-Lists",
+                    "DOWNLOAD", "APT::Periodic::Download-Upgradeable-Packages", "UPGRADE", "APT::Periodic::Unattended-Upgrade",
+                ], check=True, capture_output=True, text=True)
+                self.assertEqual(set(periodic.stdout.splitlines()), {
+                    "ENABLE='0'", "UPDATE='0'", "DOWNLOAD='0'", "UPGRADE='0'"})
+                parsed = subprocess.run([
+                    "apt-config", "-c", str(proxy_config), "shell",
+                    "HTTP", "Acquire::http::Proxy", "HTTPS", "Acquire::https::Proxy",
+                    "RETRIES", "Acquire::Retries", "HTTP_TIMEOUT", "Acquire::http::Timeout",
+                    "HTTPS_TIMEOUT", "Acquire::https::Timeout", "UPDATE_ERRORS", "APT::Update::Error-Mode",
+                ], check=True, capture_output=True, text=True)
+                self.assertEqual(set(parsed.stdout.splitlines()), {
+                    "HTTP='http://10.0.2.2:27892'", "HTTPS='http://10.0.2.2:27892'",
+                    "RETRIES='3'", "HTTP_TIMEOUT='30'", "HTTPS_TIMEOUT='30'", "UPDATE_ERRORS='any'",
+                })
+
+
+if __name__ == "__main__":
+    unittest.main()

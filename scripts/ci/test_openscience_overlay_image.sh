@@ -36,18 +36,68 @@ OLD_CALL='mf("http://114.214.255.154:9001",i!==window)'
 STAGING="$(mktemp -d)"
 BASE_CONTAINER="nexpoly-openscience-base-verify-$$"
 CANDIDATE_CONTAINER="nexpoly-openscience-candidate-verify-$$"
+RUNTIME_CONTAINER="$CANDIDATE_CONTAINER"
+RUNTIME_ATTEMPTED=0
+VERIFY_STAGE=image-pull
+
+# This nginx fixture serves only local health/static probes. BusyBox wget does
+# not honor NO_PROXY; override Docker CLI proxy injection for this container.
+# Pulls and builds retain the operator's Docker client and daemon proxy config.
+readonly -a LOCAL_RUNTIME_PROXY_ARGS=(
+  --env HTTP_PROXY= --env HTTPS_PROXY= --env ALL_PROXY=
+  --env http_proxy= --env https_proxy= --env all_proxy=
+)
+
+runtime_diagnostics() {
+  printf 'OpenScience image verification failed at %s (line %s)\n' "$VERIFY_STAGE" "$1" >&2
+  [[ "$RUNTIME_ATTEMPTED" == 1 ]] || return 0
+  /usr/bin/timeout --signal=TERM --kill-after=2s 10s \
+    docker inspect "$RUNTIME_CONTAINER" --format 'status={{.State.Status}} exit={{.State.ExitCode}} health={{json .State.Health}}' >&2 || true
+  /usr/bin/timeout --signal=TERM --kill-after=2s 10s \
+    docker logs --tail 50 "$RUNTIME_CONTAINER" >&2 || true
+}
+
+create_local_candidate() {
+  VERIFY_STAGE=container-create
+  RUNTIME_ATTEMPTED=1
+  /usr/bin/timeout --signal=TERM --kill-after=2s 30s \
+    docker create --name "$RUNTIME_CONTAINER" "${LOCAL_RUNTIME_PROXY_ARGS[@]}" "$CANDIDATE_IMAGE" >/dev/null
+}
+
+start_local_candidate() {
+  VERIFY_STAGE=container-start
+  /usr/bin/timeout --signal=TERM --kill-after=2s 30s docker start "$RUNTIME_CONTAINER" >/dev/null
+}
+
+wait_for_local_candidate() {
+  VERIFY_STAGE=container-health
+  local health deadline=$((SECONDS + 30))
+  for _ in {1..30}; do
+    (( SECONDS < deadline )) || break
+    health="$(/usr/bin/timeout --signal=TERM --kill-after=2s 5s \
+      docker inspect "$RUNTIME_CONTAINER" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')"
+    [[ "$health" != healthy ]] || return 0
+    [[ "$health" != unhealthy ]] || return 1
+    sleep 1
+  done
+  echo 'Container did not become healthy before the readiness deadline' >&2
+  return 1
+}
 
 cleanup() {
   docker rm --force "$CANDIDATE_CONTAINER" "$BASE_CONTAINER" >/dev/null 2>&1 || true
   rm -rf -- "$STAGING"
 }
 trap cleanup EXIT
+failure_status=0
+trap 'failure_status=$?; if (( BASH_SUBSHELL == 0 )); then runtime_diagnostics "$LINENO"; exit "$failure_status"; fi' ERR
 
 docker pull "$BASE_IMAGE" >/dev/null
 if [[ "$CANDIDATE_IMAGE" == *@sha256:* ]]; then
   docker pull "$CANDIDATE_IMAGE" >/dev/null
 fi
 
+VERIFY_STAGE=image-identity
 test "$(docker image inspect "$CANDIDATE_IMAGE" --format '{{.Config.User}}')" = nginx
 test "$(docker image inspect "$CANDIDATE_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$EXPECTED_REVISION"
 test "$(docker image inspect "$CANDIDATE_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/lzq390/ZhijuPoly"
@@ -61,7 +111,8 @@ test "$(docker image inspect "$CANDIDATE_IMAGE" --format '{{index .Config.Labels
   "sha256:$PARENT_POLICY_SHA256"
 
 docker create --name "$BASE_CONTAINER" "$BASE_IMAGE" >/dev/null
-docker create --name "$CANDIDATE_CONTAINER" "$CANDIDATE_IMAGE" >/dev/null
+create_local_candidate
+VERIFY_STAGE=static-files
 mkdir -p \
   "$STAGING/base" \
   "$STAGING/candidate" \
@@ -94,6 +145,7 @@ done <"$STAGING/base-files"
 
 # Compare the complete effective root filesystems, excluding the reviewed static
 # replacements and nginx cache policy, which is verified separately below.
+VERIFY_STAGE=root-filesystem
 docker export "$BASE_CONTAINER" | tar --no-same-owner -xf - -C "$STAGING/base-rootfs"
 docker export "$CANDIDATE_CONTAINER" | tar --no-same-owner -xf - -C "$STAGING/candidate-rootfs"
 (
@@ -134,6 +186,7 @@ node "$REPOSITORY_ROOT/ops/openscience-static-release/patch-nginx-cache.mjs" \
   "$STAGING/base-rootfs/etc/nginx/nginx.conf" "$STAGING/expected-nginx.conf"
 cmp "$STAGING/expected-nginx.conf" "$STAGING/candidate-rootfs/etc/nginx/nginx.conf"
 
+VERIFY_STAGE=static-policy
 test "$(grep -Fao "$OLD_RESOLVER" "$STAGING/candidate/$PATCHED_BUNDLE" | wc -l)" -eq 0
 test "$(grep -Fao "$NEW_RESOLVER" "$STAGING/candidate/$PATCHED_BUNDLE" | wc -l)" -eq 1
 test "$(grep -Fao "$OLD_CALL" "$STAGING/candidate/$PATCHED_BUNDLE" | wc -l)" -eq 2
@@ -143,19 +196,9 @@ test "$(grep -Fao "/$BASE_BUNDLE" "$STAGING/candidate/$BASE_INDEX" | wc -l)" -eq
 test "$(grep -Fao "/$PATCHED_BUNDLE" "$STAGING/candidate/$BASE_INDEX" | wc -l)" -eq 2
 test "$(grep -R -F -l "index-B2eNxQLj.js" "$STAGING/candidate/assets" | wc -l)" -eq 20
 
-docker start "$CANDIDATE_CONTAINER" >/dev/null
-for _ in {1..30}; do
-  health="$(docker inspect "$CANDIDATE_CONTAINER" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')"
-  if [[ "$health" == healthy ]]; then
-    break
-  fi
-  if [[ "$health" == unhealthy ]]; then
-    docker logs "$CANDIDATE_CONTAINER" >&2
-    exit 1
-  fi
-  sleep 1
-done
-test "$(docker inspect "$CANDIDATE_CONTAINER" --format '{{.State.Health.Status}}')" = healthy
+start_local_candidate
+wait_for_local_candidate
+VERIFY_STAGE=served-assets
 docker exec "$CANDIDATE_CONTAINER" wget -qO- http://127.0.0.1:4454/ | grep -Fq "/$PATCHED_BUNDLE"
 docker exec "$CANDIDATE_CONTAINER" sh -eu -c '
   test "$(stat -c %a /usr/share/nginx/html/index.html)" = 644

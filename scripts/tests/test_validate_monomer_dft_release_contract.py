@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -30,6 +34,136 @@ PREFLIGHT_SPEC.loader.exec_module(PREFLIGHT)
 class MonomerDftReleaseContractTests(unittest.TestCase):
     def test_current_tree_satisfies_release_contract(self) -> None:
         self.assertEqual(VALIDATOR.validate(REPOSITORY_ROOT), [])
+
+    def _ci_failures(self, ci_text: str) -> list[str]:
+        failures: list[str] = []
+        with mock.patch.object(VALIDATOR, "_read_text", return_value=ci_text):
+            VALIDATOR.validate_ci_contract(REPOSITORY_ROOT, failures)
+        return failures
+
+    def _replace_ci_job(self, name: str, before: str, after: str) -> str:
+        ci_text = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text()
+        body = VALIDATOR.WORKFLOW_POLICY.workflow_job_body(ci_text, name, [])
+        self.assertIsNotNone(body)
+        self.assertIn(before, body)
+        return ci_text.replace(body, body.replace(before, after, 1), 1)
+
+    def test_ci_contract_accepts_only_the_reviewed_selectable_routes(self) -> None:
+        policy = VALIDATOR.WORKFLOW_POLICY
+        for job in policy.SELECTABLE_RUNNER_JOBS:
+            for replacement in (
+                policy.HOSTED_RUNNER_LINE,
+                policy.LOCAL_RUNNER_LINE,
+                "    runs-on: self-hosted",
+                "    runs-on: [self-hosted, linux, x64]",
+                "    runs-on: [self-hosted, linux, x64, unreviewed]",
+                "    runs-on: [self-hosted, linux, x64, nexpoly-ci-ephemeral, gpu]",
+                "    runs-on: ${{ vars.RUNNER }}",
+            ):
+                with self.subTest(job=job, route=replacement):
+                    failures = self._ci_failures(self._replace_ci_job(
+                        job, policy.SELECTABLE_RUNNER_LINE, replacement))
+                    self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_ci_contract_keeps_control_and_publishers_on_hosted_runners(self) -> None:
+        policy = VALIDATOR.WORKFLOW_POLICY
+        for job in policy.HOSTED_RUNNER_JOBS:
+            with self.subTest(job=job):
+                failures = self._ci_failures(self._replace_ci_job(
+                    job, policy.HOSTED_RUNNER_LINE, policy.SELECTABLE_RUNNER_LINE))
+                self.assertTrue(any(job in failure for failure in failures), failures)
+
+    def test_ci_contract_rejects_runner_event_and_resolver_bypasses(self) -> None:
+        policy = VALIDATOR.WORKFLOW_POLICY
+        ci_text = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text()
+        for changed in (
+            ci_text.replace(", labeled, unlabeled", "", 1),
+            ci_text.replace('if "ci:local" in labels else', 'if labels else', 1),
+            ci_text.replace("runner_labels='[\"ubuntu-24.04\"]'", "runner_labels='[\"self-hosted\"]'", 1),
+            self._replace_ci_job("dft-worker-tests", policy.SELECTABLE_RUNNER_LINE,
+                                 policy.SELECTABLE_RUNNER_LINE + "\n    if: github.event.action != 'unlabeled'"),
+            self._replace_ci_job("confirmed-mcp-adapter-tests", "    needs: resolve-sha", "    needs: []"),
+        ):
+            with self.subTest(change=changed[:100]):
+                self.assertTrue(self._ci_failures(changed))
+
+    def test_ci_contract_enforces_the_two_buildx_environments(self) -> None:
+        policy = VALIDATOR.WORKFLOW_POLICY
+        for job in ("image-build", "openscience-overlay"):
+            for before, after in (
+                ("        if: runner.environment == 'github-hosted'\n", ""),
+                ("        if: runner.environment == 'self-hosted'", "        if: always()"),
+                ("            env.http_proxy=http://10.0.2.2:27892\n", ""),
+            ):
+                with self.subTest(job=job, control=before):
+                    failures = self._ci_failures(self._replace_ci_job(job, before, after))
+                    self.assertTrue(any(job in failure and "Buildx" in failure for failure in failures), failures)
+
+    def test_ci_contract_rejects_added_missing_duplicate_jobs_and_duplicate_routes(self) -> None:
+        policy = VALIDATOR.WORKFLOW_POLICY
+        ci_text = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text()
+        body = policy.workflow_job_body(ci_text, "dft-worker-tests", [])
+        for changed in (
+            ci_text + "\n  extra-job:\n    runs-on: ubuntu-24.04\n    steps: []\n",
+            ci_text.replace("  dft-worker-tests:\n" + body, "", 1),
+            ci_text + "\n  dft-worker-tests:\n" + body,
+            self._replace_ci_job("dft-worker-tests", policy.SELECTABLE_RUNNER_LINE,
+                                 policy.SELECTABLE_RUNNER_LINE + "\n" + policy.SELECTABLE_RUNNER_LINE),
+        ):
+            with self.subTest(change=changed[-100:]):
+                self.assertTrue(self._ci_failures(changed))
+
+    def test_ci_contract_preserves_read_only_local_tokens_and_exact_checkout_sha(self) -> None:
+        policy = VALIDATOR.WORKFLOW_POLICY
+        ci_text = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text()
+        mutations = [ci_text.replace(
+            "permissions:\n  contents: read\n  packages: read", "permissions: write-all", 1)]
+        for job in policy.SELECTABLE_RUNNER_JOBS:
+            mutations.append(self._replace_ci_job(
+                job, policy.SELECTABLE_RUNNER_LINE,
+                policy.SELECTABLE_RUNNER_LINE + "\n    permissions: {packages: write}"))
+        for job in policy.PUBLISHING_JOBS:
+            mutations.append(self._replace_ci_job(
+                job, "      contents: read", "      contents: write"))
+        for changed in mutations:
+            with self.subTest(change=changed[:80]):
+                failures = self._ci_failures(changed)
+                self.assertTrue(any("permissions" in failure for failure in failures), failures)
+        failures = self._ci_failures(ci_text.replace(VALIDATOR.CHECKOUT_SHA, "0" * 40))
+        self.assertIn("every checkout must use actions/checkout v6.0.2 exact SHA", failures)
+
+    def test_ci_contract_keeps_dft_test_and_committed_validation_steps(self) -> None:
+        ci_text = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text()
+        for marker in (
+            "python -m pytest workers/monomer_dft_worker/tests",
+            "python3 scripts/validate_monomer_dft_release_contract.py --require-committed",
+        ):
+            with self.subTest(marker=marker):
+                failures = self._ci_failures(ci_text.replace(marker, "true"))
+                self.assertIn("canonical CI is missing DFT release control: " + marker, failures)
+
+    def test_standalone_cli_loads_shared_policy_outside_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, str(VALIDATOR_PATH), "--root", str(REPOSITORY_ROOT)],
+                cwd=directory, capture_output=True, text=True, check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result_json = json.loads(result.stdout)
+        self.assertEqual(result_json["runner_routes"], {
+            "hosted": "ubuntu-24.04",
+            "tests_and_builds": "${{ fromJSON(needs.resolve-sha.outputs.runner_labels) }}",
+            "default": ["ubuntu-24.04"],
+            "local_pull_request_label": "ci:local",
+            "local_pull_request_labels": ["self-hosted", "linux", "x64", "nexpoly-ci-ephemeral"],
+        })
+
+    def test_cli_require_committed_still_checks_governed_inputs(self) -> None:
+        with mock.patch.object(VALIDATOR, "validate_committed_inputs") as committed, \
+                mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(VALIDATOR.main(
+                ["--root", str(REPOSITORY_ROOT), "--require-committed"]), 0)
+        committed.assert_called_once_with(REPOSITORY_ROOT.resolve(), [])
 
     def _schema_failures_with_sources(self, replacements):
         original_read_text = VALIDATOR._read_text

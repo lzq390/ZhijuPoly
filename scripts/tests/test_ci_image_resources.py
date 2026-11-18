@@ -51,13 +51,17 @@ class ImageInfrastructurePolicyTests(unittest.TestCase):
                     self.assertTrue(any(job in failure for failure in failures), failures)
 
 
-class HostedRunnerDiskPreparationTests(unittest.TestCase):
+class RunnerDiskPreparationTests(unittest.TestCase):
     def run_script(self, **overrides: str) -> subprocess.CompletedProcess[str]:
         environment = dict(os.environ)
         environment.update({
             "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
             "RUNNER_OS": "Linux", "ImageOS": "ubuntu24", "GITHUB_JOB": "exact-b-bridge",
             "FAKE_DOCKER_ROOT": "/var/lib/docker", "FAKE_FREE_KIB": str(32 * 1024 * 1024),
+            "FAKE_PROFILE_DIRECTORY": "directory:0:755",
+            "FAKE_PROFILE_METADATA": "regular file:0:644",
+            "FAKE_PROFILE": "nexpoly-ci-ephemeral-v1",
+            "FAKE_OS_IDENTITY": "ID=ubuntu\nVERSION_ID=24.04",
         })
         environment.update(overrides)
         # Every command that could mutate machine state is a shell stub. The
@@ -65,6 +69,27 @@ class HostedRunnerDiskPreparationTests(unittest.TestCase):
         harness = r'''
 docker() { printf '%s\n' "$FAKE_DOCKER_ROOT"; }
 sudo() { printf 'SDK_DELETE'; printf ' <%s>' "$@"; printf '\n'; }
+stat() {
+  case "${!#}" in
+    /etc/nexpoly-ci-runner) printf '%s\n' "$FAKE_PROFILE_DIRECTORY" ;;
+    /etc/nexpoly-ci-runner/profile)
+      [[ "$FAKE_PROFILE_METADATA" != missing ]] || return 1
+      printf '%s\n' "$FAKE_PROFILE_METADATA"
+      ;;
+    *) return 1 ;;
+  esac
+}
+cat() {
+  [[ "$1" == /etc/nexpoly-ci-runner/profile ]] || return 1
+  printf '%s\n' "$FAKE_PROFILE"
+}
+awk() {
+  if [[ "${!#}" == /etc/os-release ]]; then
+    printf '%s\n' "$FAKE_OS_IDENTITY"
+  else
+    command awk "$@"
+  fi
+}
 df() {
   if [[ "$1" == -Pk ]]; then
     printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n'
@@ -73,7 +98,7 @@ df() {
     printf 'DISK_REPORT\n'
   fi
 }
-export -f docker sudo df
+export -f docker sudo df stat cat awk
 exec bash "$1"
 '''
         return subprocess.run(
@@ -96,7 +121,7 @@ exec bash "$1"
 
     def test_unapproved_environments_fail_before_cleanup(self) -> None:
         for variable, value in (
-            ("GITHUB_ACTIONS", ""), ("RUNNER_ENVIRONMENT", "self-hosted"),
+            ("GITHUB_ACTIONS", ""), ("RUNNER_ENVIRONMENT", "unknown"),
             ("RUNNER_OS", "Windows"), ("ImageOS", "ubuntu22"),
             ("GITHUB_JOB", "production"), ("FAKE_DOCKER_ROOT", "/custom/docker"),
         ):
@@ -106,11 +131,52 @@ exec bash "$1"
                 self.assertNotIn("SDK_DELETE", result.stdout)
 
     def test_low_or_unreadable_space_is_a_hard_failure(self) -> None:
-        for free in (str(32 * 1024 * 1024 - 1), "", "unknown"):
-            with self.subTest(free=free):
-                result = self.run_script(FAKE_FREE_KIB=free)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("at least 32 GiB", result.stderr)
+        for runner in ("github-hosted", "self-hosted"):
+            for free in (str(32 * 1024 * 1024 - 1), "", "unknown"):
+                with self.subTest(runner=runner, free=free):
+                    result = self.run_script(RUNNER_ENVIRONMENT=runner, FAKE_FREE_KIB=free)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("at least 32 GiB", result.stderr)
+
+    def test_ephemeral_vm_checks_capacity_without_deleting_anything(self) -> None:
+        for job in ("image-build", "exact-b-bridge"):
+            with self.subTest(job=job):
+                result = self.run_script(
+                    RUNNER_ENVIRONMENT="self-hosted", GITHUB_JOB=job, ImageOS="",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.count("DISK_REPORT"), 1)
+                self.assertNotIn("SDK_DELETE", result.stdout)
+
+    def test_ephemeral_vm_rejects_untrusted_profile_os_and_publishing_jobs(self) -> None:
+        cases = (
+            ("FAKE_PROFILE_METADATA", "missing"),
+            ("FAKE_PROFILE_METADATA", "symbolic link:0:777"),
+            ("FAKE_PROFILE_METADATA", "regular file:1000:644"),
+            ("FAKE_PROFILE_METADATA", "regular file:0:664"),
+            ("FAKE_PROFILE_METADATA", "regular file:0:646"),
+            ("FAKE_PROFILE_METADATA", "regular file:0:invalid"),
+            ("FAKE_PROFILE_DIRECTORY", "symbolic link:0:777"),
+            ("FAKE_PROFILE_DIRECTORY", "directory:1000:755"),
+            ("FAKE_PROFILE_DIRECTORY", "directory:0:775"),
+            ("FAKE_PROFILE", ""),
+            ("FAKE_PROFILE", "nexpoly-ci-persistent-v1"),
+            ("FAKE_PROFILE", "nexpoly-ci-ephemeral-v1\nunapproved"),
+            ("FAKE_OS_IDENTITY", "ID=debian\nVERSION_ID=24.04"),
+            ("FAKE_OS_IDENTITY", "ID=ubuntu\nVERSION_ID=22.04"),
+            ("FAKE_OS_IDENTITY", ""),
+            ("GITHUB_JOB", "release"),
+            ("GITHUB_JOB", "openscience-release"),
+            ("GITHUB_JOB", "frontend"),
+            ("GITHUB_ACTIONS", "false"),
+            ("RUNNER_OS", "Windows"),
+            ("FAKE_DOCKER_ROOT", "/data/docker"),
+        )
+        for variable, value in cases:
+            with self.subTest(variable=variable, value=value):
+                result = self.run_script(RUNNER_ENVIRONMENT="self-hosted", **{variable: value})
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertNotIn("SDK_DELETE", result.stdout)
 
 
 if __name__ == "__main__":

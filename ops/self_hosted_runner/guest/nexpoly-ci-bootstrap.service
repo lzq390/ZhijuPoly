@@ -1,0 +1,19 @@
+[Unit]
+Description=Single-job Nexpoly GitHub Actions guest
+After=network-online.target docker.service cloud-final.service user@1001.service
+Wants=network-online.target
+Requires=docker.service cloud-final.service user@1001.service
+ConditionPathExists=!/etc/nexpoly-ci-runner/build-mode
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 /usr/local/lib/nexpoly-ci-runner/bootstrap.py
+ExecStopPost=-/usr/bin/python3 /usr/local/lib/nexpoly-ci-runner/exit_diagnostics.py
+TimeoutStartSec=infinity
+Restart=no
+StandardOutput=journal
+StandardError=journal
+UMask=0077
+
+[Install]
+WantedBy=cloud-init.target
