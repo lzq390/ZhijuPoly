@@ -1,0 +1,13 @@
+# Opt-in extension to the already isolated 19111 project.
+services:
+  capability-gateway-dev:
+    volumes:
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME:?use scripts/openscience_mcp_dev.py}/retrosynthesis-token:/run/capability-gateway/retrosynthesis-token:ro
+      - ${NEXPOLY_OPENSCIENCE_DEV_RUNTIME:?use scripts/openscience_mcp_dev.py}/retrosynthesis-ui-token:/run/capability-gateway/retrosynthesis-ui-token:ro
+    networks:
+      - retrosynthesis-mcp-clients
+
+networks:
+  retrosynthesis-mcp-clients:
+    external: true
+    name: nexpoly_retrosynthesis_mcp_clients_dev

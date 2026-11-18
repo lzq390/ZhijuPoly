@@ -140,3 +140,14 @@
   [data-nexpoly-results] .nexpoly-draft-reference { padding: 11px; }
   [data-nexpoly-results] .nexpoly-draft-actions > .nexpoly-draft-button { flex: 1 1 auto; }
 }
+
+/* Structure previews and candidates remain readable on narrow conversation panels. */
+.nexpoly-retro-preview { display:flex; flex-direction:column; align-items:flex-start; gap:.5rem; min-width:0; }
+.nexpoly-retro-structure { display:block; width:100%; max-width:360px; height:220px; object-fit:contain; background:#fff; border-radius:.5rem; }
+.nexpoly-retro-choices { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr)); gap:1rem; }
+.nexpoly-retro-choice { min-width:0; border:1px solid var(--nexpoly-border,#d6e1ec); border-radius:.5rem; padding:.75rem; }
+.nexpoly-retro-choice button { max-width:100%; overflow-wrap:anywhere; white-space:normal; }
+.nexpoly-retro-form textarea { box-sizing:border-box; width:100%; resize:vertical; font-family:ui-monospace,monospace; }
+.nexpoly-retro-form select { box-sizing:border-box; width:100%; min-height:2.5rem; }
+.nexpoly-retro-candidate { min-width:0; }
+.nexpoly-retrosynthesis .nexpoly-polytao-summary { grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr)); }

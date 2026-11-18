@@ -58,6 +58,14 @@ POLYTAO_TOOL_KEYS = tuple(MCP_NAME + "_" + tool for tool in POLYTAO_TOOLS)
 MODEL_TOOL_KEYS = TOOL_KEYS + POLYTAO_TOOL_KEYS
 POLYTAO_MCP_URL = "http://nexpoly_polytao_mcp_dev-polytao-mcp-1:18111/mcp"
 POLYTAO_CLIENT_NETWORK = "nexpoly_polytao_mcp_clients_dev"
+RETROSYNTHESIS_CLIENT_NETWORK = "nexpoly_retrosynthesis_mcp_clients_dev"
+RETROSYNTHESIS_MCP_URL = "http://nexpoly_retrosynthesis_mcp_dev-retrosynthesis-mcp-1:18211/mcp"
+RETROSYNTHESIS_TOOLS = ("get_retrosynthesis_capabilities", "resolve_retrosynthesis_target", "prepare_monomer_retrosynthesis", "get_retrosynthesis_draft", "get_retrosynthesis_job")
+RETROSYNTHESIS_UI_TOOLS = ("resolve_retrosynthesis_target", "get_retrosynthesis_draft", "update_retrosynthesis_draft", "confirm_monomer_retrosynthesis", "cancel_retrosynthesis_draft")
+RETROSYNTHESIS_PROMPT = """单体逆合成需求先查询 capability_gateway_get_retrosynthesis_capabilities，必要时用 capability_gateway_resolve_retrosynthesis_target 解析 SMILES、本地名称或本人结构库。
+使用 capability_gateway_prepare_monomer_retrosynthesis 展示参数板；目标不明确时澄清，不编造 SMILES。必须等待用户在参数板确认。
+确认回执含 job_id 后，仅调用 capability_gateway_get_retrosynthesis_job 查询同一任务。unknown 表示待核验，不要重新提交。
+该能力返回单步前体候选，target_role 仅作标签，排名不是置信度。"""
 POLYTAO_ACCOUNT_UUID = "9c92c979-970f-4b85-a6db-87b21b85ffb1"
 POLYTAO_BACKEND_URL = "http://nexpoly_dev-backend-1:8000"
 GATEWAY_FILES = {"mcp-token": "/run/capability-gateway/property-filter-token",
@@ -220,7 +228,7 @@ def verify_project_ownership(*, require_ui_overlay: bool = False, allow_legacy_l
         service = labels.get("com.docker.compose.service")
         if (labels.get("com.docker.compose.project") != PROJECT
                 or labels.get("com.docker.compose.project.working_dir") != str(ROOT)
-                or labels.get("com.docker.compose.project.config_files") != str(ROOT / COMPOSE_FILE)
+                or labels.get("com.docker.compose.project.config_files") != ",".join([str(ROOT / COMPOSE_FILE)] + ([str(ROOT / "docker-compose.openscience-retrosynthesis-dev.yml")] if retrosynthesis_enabled() else []))
                 or service not in {"openscience-backend", "openscience-ui", "openscience-dev-backend",
                                    "openscience-dev-ui", GATEWAY_SERVICE, "model-proxy", "model-egress"}):
             raise DevError("Existing OpenScience development project belongs to another checkout or configuration.")
@@ -240,6 +248,9 @@ def verify_project_ownership(*, require_ui_overlay: bool = False, allow_legacy_l
             expected = {destination: str(RUNTIME / name) for name, destination in GATEWAY_FILES.items()}
             actual = {mount.get("Destination"): mount for mount in token_mounts}
             expected_networks = LEGACY_GATEWAY_NETWORKS | {POLYTAO_CLIENT_NETWORK}
+            if retrosynthesis_enabled():
+                expected_networks.add(RETROSYNTHESIS_CLIENT_NETWORK)
+                expected.update({"/run/capability-gateway/retrosynthesis-token": str(RUNTIME / "retrosynthesis-token"), "/run/capability-gateway/retrosynthesis-ui-token": str(RUNTIME / "retrosynthesis-ui-token")})
             legacy = (allow_legacy_layout and not require_ui_overlay
                       and set(actual) == {GATEWAY_FILES["mcp-token"]}
                       and set(attached) == LEGACY_GATEWAY_NETWORKS)
@@ -448,6 +459,10 @@ def parse_jsonc(raw: str) -> dict:
     return value
 
 
+def retrosynthesis_enabled() -> bool:
+    return (RUNTIME / "retrosynthesis-source.json").is_file()
+
+
 def configuration(source: dict) -> dict:
     provider = source.get("provider", {}).get(PROVIDER)
     if not isinstance(provider, dict) or not isinstance(provider.get("options"), dict):
@@ -525,7 +540,8 @@ def configuration(source: dict) -> dict:
     shared_permissions = copy.deepcopy(source.get("permission", {}))
     if not isinstance(shared_permissions, dict):
         raise DevError("Shared global permissions must use the reviewed rule-object format.")
-    shared_permissions.update(dict.fromkeys(MODEL_TOOL_KEYS, "allow"))
+    model_keys = MODEL_TOOL_KEYS + (tuple(MCP_NAME + "_" + tool for tool in RETROSYNTHESIS_TOOLS) if retrosynthesis_enabled() else ())
+    shared_permissions.update(dict.fromkeys(model_keys, "allow"))
     agents = copy.deepcopy(source.get("agent", {}))
     if not isinstance(agents, dict) or not isinstance(agents.get("research", {}), dict):
         raise DevError("Shared agents must use the reviewed agent-object format.")
@@ -533,11 +549,11 @@ def configuration(source: dict) -> dict:
     research_permissions = research.setdefault("permission", {})
     if not isinstance(research_permissions, dict) or not isinstance(research_permissions.get("mcp", {}), dict):
         raise DevError("Shared research permissions must use the reviewed rule-object format.")
-    research_permissions.update(dict.fromkeys(MODEL_TOOL_KEYS, "allow"))
-    research_permissions.setdefault("mcp", {}).update(dict.fromkeys(MODEL_TOOL_KEYS, "allow"))
+    research_permissions.update(dict.fromkeys(model_keys, "allow"))
+    research_permissions.setdefault("mcp", {}).update(dict.fromkeys(model_keys, "allow"))
     if not isinstance(research.get("prompt", ""), str):
         raise DevError("Shared research prompt must be plain text.")
-    research["prompt"] = research.get("prompt", "").rstrip() + "\n\n" + POLYTAO_PROMPT
+    research["prompt"] = research.get("prompt", "").rstrip() + "\n\n" + POLYTAO_PROMPT + ("\n\n" + RETROSYNTHESIS_PROMPT if retrosynthesis_enabled() else "")
     agents["property-filter"] = {"mode": "primary", "model": model, "steps": 8,
                 "description": "NexPoly development database property filtering",
                 "prompt": "Answer polymer property questions using only the three NexPoly property filter tools. "
@@ -624,6 +640,56 @@ def polytao_credentials(directory: Path | None = None) -> dict[str, str]:
     return prepared
 
 
+def retrosynthesis_credentials(directory: Path | None = None) -> dict[str, str]:
+    """Read only the approved account's scoped MCP credentials, never its cookie."""
+    if directory is None:
+        source = json.loads(read_private("retrosynthesis-source.json"))
+        if (set(source) != {"runtime", "account_uuid", "backend_url"}
+                or source["account_uuid"] != POLYTAO_ACCOUNT_UUID
+                or source["backend_url"] != POLYTAO_BACKEND_URL
+                or not isinstance(source["runtime"], str)):
+            raise DevError("Retrosynthesis credential source differs from the approved development identity.")
+        directory = Path(source["runtime"])
+    if not directory.is_absolute() or directory != directory.absolute() or ".." in directory.parts:
+        raise DevError("Retrosynthesis source must use an absolute ordinary runtime path.")
+    for path in (directory, directory / "server"):
+        info = path.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o700):
+            raise DevError("Retrosynthesis source credentials must reside in owner-only ordinary directories.")
+    identity = json.loads(read_private_path(directory / "server/identity.json"))
+    if identity != {"account_uuid": POLYTAO_ACCOUNT_UUID, "backend_url": POLYTAO_BACKEND_URL}:
+        raise DevError("Retrosynthesis source does not identify the authorized development account and backend.")
+    clients = json.loads(read_private_path(directory / "server/clients.json"))
+    if not isinstance(clients, dict) or not isinstance(clients.get("clients"), list):
+        raise DevError("Retrosynthesis scoped clients configuration has an unexpected format.")
+    prepared = {}
+    for file_name, target_name, client_id, owner, tools in (
+            ("client.env", "retrosynthesis-token", "openscience-retrosynthesis-dev", None, RETROSYNTHESIS_TOOLS),
+            ("ui-client.env", "retrosynthesis-ui-token", "openscience-retrosynthesis-dev-ui",
+             "openscience-retrosynthesis-dev", RETROSYNTHESIS_UI_TOOLS)):
+        entries = [line.split("=", 1) for line in read_private_path(directory / file_name).splitlines() if line]
+        if len(entries) != 2 or any(len(entry) != 2 for entry in entries):
+            raise DevError("Retrosynthesis client credentials have an unexpected format.")
+        values = dict(entries)
+        token = values.get("NEXPOLY_MCP_TOKEN", "")
+        if (set(values) != {"NEXPOLY_MCP_URL", "NEXPOLY_MCP_TOKEN"}
+                or values.get("NEXPOLY_MCP_URL") != "http://nexpoly_retrosynthesis_mcp_dev-retrosynthesis-mcp-1:18211/mcp"
+                or not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", token)):
+            raise DevError("Retrosynthesis client must identify the approved loopback endpoint and a valid credential.")
+        matching = [client for client in clients["clients"] if isinstance(client, dict)
+                    and client.get("client_id") == client_id]
+        if (len(matching) != 1 or matching[0].get("owner_client_id") != owner
+                or set(matching[0].get("tools", [])) != set(tools)
+                or not hmac.compare_digest(str(matching[0].get("token_sha256", "")),
+                                           hashlib.sha256(token.encode()).hexdigest())):
+            raise DevError("Retrosynthesis credential does not match its approved client, owner and tool scope.")
+        prepared[target_name] = token + "\n"
+    if hmac.compare_digest(prepared["retrosynthesis-token"], prepared["retrosynthesis-ui-token"]):
+        raise DevError("Retrosynthesis model and UI credentials must be distinct.")
+    return prepared
+
+
 def backend_environment(backend: dict) -> str:
     # The bridge relay reaches host egress only through its private Unix socket.
     # Do not copy any proxy or secret from the shared container.
@@ -660,6 +726,9 @@ def gateway_environment(gateway: dict, token: str) -> str:
                   POLYTAO_MCP_UI_TOKEN_FILE=GATEWAY_FILES["polytao-ui-token"],
                   POLYTAO_GATEWAY_UI_TOKEN_FILE=GATEWAY_FILES["gateway-ui-token"],
                   POLYTAO_MCP_TIMEOUT_MS="30000")
+    values.update(RETROSYNTHESIS_MCP_ENABLED=str(retrosynthesis_enabled()).lower())
+    if retrosynthesis_enabled():
+        values.update(RETROSYNTHESIS_MCP_URL=RETROSYNTHESIS_MCP_URL, RETROSYNTHESIS_MCP_MODEL_TOKEN_FILE="/run/capability-gateway/retrosynthesis-token", RETROSYNTHESIS_MCP_UI_TOKEN_FILE="/run/capability-gateway/retrosynthesis-ui-token", RETROSYNTHESIS_GATEWAY_UI_TOKEN_FILE=GATEWAY_FILES["gateway-ui-token"], RETROSYNTHESIS_MCP_TIMEOUT_MS="30000")
     return "".join(f"{name}={value}\n" for name, value in values.items())
 
 
@@ -667,7 +736,9 @@ def prepared_files(backend: dict) -> dict[str, str]:
     source = parse_jsonc(read_source(SHARED_ROOT / "config/openscience.jsonc").decode("utf-8"))
     model_token, ui_token = gateway_token(), gateway_token("gateway-ui-token")
     upstream = polytao_credentials()
-    credentials = (model_token, ui_token, upstream["polytao-token"].strip(), upstream["polytao-ui-token"].strip())
+    if retrosynthesis_enabled():
+        upstream.update(retrosynthesis_credentials())
+    credentials = (model_token, ui_token, *(value.strip() for value in upstream.values()))
     if len(set(credentials)) != len(credentials):
         raise DevError("Gateway model, UI and upstream credentials must be independent.")
     return {"openscience.json": json.dumps(configuration(source), ensure_ascii=False, indent=2) + "\n",
@@ -677,10 +748,12 @@ def prepared_files(backend: dict) -> dict[str, str]:
             "backend.env": backend_environment(backend)}
 
 
-def setup(*, refresh_baseline: bool = False, polytao_runtime: Path | None = None) -> dict:
+def setup(*, refresh_baseline: bool = False, polytao_runtime: Path | None = None, retrosynthesis_runtime: Path | None = None, disable_retrosynthesis: bool = False) -> dict:
     with operation_lock():
         # Read state after acquiring the lock: another CLI may have started the stack.
         running = verify_project_ownership()
+        if disable_retrosynthesis and retrosynthesis_runtime is not None:
+            raise DevError("Choose enable or disable retrosynthesis, not both")
         snapshot, backend = verify_shared()
         if refresh_baseline and running:
             raise DevError("Stop the development stack before refreshing its shared release baseline.")
@@ -701,6 +774,23 @@ def setup(*, refresh_baseline: bool = False, polytao_runtime: Path | None = None
                             or read_private("polytao-source.json") != source):
                 raise DevError("Stop the development stack before changing the PolyTAO credential source.")
             write_private("polytao-source.json", source)
+        if disable_retrosynthesis:
+            if running:
+                raise DevError("Stop the development stack before disabling retrosynthesis")
+            if retrosynthesis_enabled():
+                read_private("retrosynthesis-source.json")
+                (RUNTIME / "retrosynthesis-source.json").unlink()
+                descriptor = os.open(RUNTIME, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+        if retrosynthesis_runtime is not None:
+            if running:
+                raise DevError("Stop the development stack before enabling retrosynthesis")
+            selected = retrosynthesis_runtime.absolute()
+            retrosynthesis_credentials(selected)
+            write_private("retrosynthesis-source.json", json.dumps({"runtime": str(selected), "account_uuid": POLYTAO_ACCOUNT_UUID, "backend_url": POLYTAO_BACKEND_URL}, sort_keys=True) + "\n")
         for token_name in ("gateway-token", "gateway-ui-token"):
             if not (RUNTIME / token_name).exists():
                 if running:
@@ -730,8 +820,9 @@ def compose(*arguments: str) -> str:
                    if not name.startswith(("COMPOSE_", "NEXPOLY_", "OPENSCIENCE_"))}
     environment.update(NEXPOLY_OPENSCIENCE_DEV_RUNTIME=str(RUNTIME),
                        NEXPOLY_OPENSCIENCE_DEV_UID=str(os.getuid()), NEXPOLY_OPENSCIENCE_DEV_GID=str(os.getgid()))
+    overlays = ["-f", str(ROOT / "docker-compose.openscience-retrosynthesis-dev.yml")] if retrosynthesis_enabled() else []
     return run(["docker", "compose", "--env-file", "/dev/null", "--project-directory", str(ROOT),
-                "-p", PROJECT, "-f", str(ROOT / COMPOSE_FILE), *arguments], env=environment,
+                "-p", PROJECT, "-f", str(ROOT / COMPOSE_FILE), *overlays, *arguments], env=environment,
                diagnostics=f"docker-{arguments[0]}.log" if arguments[0] in {"up", "down"} else None)
 
 
@@ -788,13 +879,19 @@ const model = await rpc(token, 'tools/list', {});
 const ui = await rpc(uiToken, 'tools/list', {});
 const capabilities = await rpc(token, 'tools/call', {name:'get_polytao_capabilities',arguments:{}});
 if (capabilities.isError || !capabilities.structuredContent?.ok) throw new Error('PolyTAO unavailable');
+if (process.env.RETROSYNTHESIS_MCP_ENABLED === "true") {
+ const retro = await rpc(token, "tools/call", {name:"get_retrosynthesis_capabilities",arguments:{}});
+ if (retro.isError || !retro.structuredContent?.ok) throw new Error("Retrosynthesis unavailable");
+}
 console.log(JSON.stringify({model_tools:model.tools.map(t=>t.name), ui_tools:ui.tools.map(t=>t.name)}));
 """
     result = json.loads(compose("exec", "-T", GATEWAY_SERVICE, "bun", "-e", script))
     model, ui = result.get("model_tools", []), result.get("ui_tools", [])
-    if (not isinstance(model, list) or len(model) != len(NATIVE_TOOLS + TOOLS + POLYTAO_TOOLS)
-            or set(model) != set(NATIVE_TOOLS + TOOLS + POLYTAO_TOOLS)
-            or not isinstance(ui, list) or len(ui) != len(POLYTAO_UI_TOOLS) or set(ui) != set(POLYTAO_UI_TOOLS)):
+    expected_model = NATIVE_TOOLS + TOOLS + POLYTAO_TOOLS + (RETROSYNTHESIS_TOOLS if retrosynthesis_enabled() else ())
+    expected_ui = POLYTAO_UI_TOOLS + (RETROSYNTHESIS_UI_TOOLS if retrosynthesis_enabled() else ())
+    if (not isinstance(model, list) or len(model) != len(expected_model)
+            or set(model) != set(expected_model)
+            or not isinstance(ui, list) or len(ui) != len(expected_ui) or set(ui) != set(expected_ui)):
         raise DevError("Development gateway model and UI tool scopes differ from the approved inventory.")
     return {"model_tools": model, "ui_tools": ui}
 
@@ -806,7 +903,13 @@ def main() -> int:
                         help="For setup only: adopt the pinned shared release while the development stack is stopped.")
     parser.add_argument("--polytao-runtime", type=Path,
                         help="For setup only: private runtime of the authorized PolyTAO development MCP.")
+    parser.add_argument("--retrosynthesis-runtime", type=Path, help="For setup only: private runtime of the authorized retrosynthesis MCP")
+    parser.add_argument("--disable-retrosynthesis", action="store_true", help="For setup only: remove the opt-in after stopping the development stack")
     args = parser.parse_args()
+    if args.disable_retrosynthesis and args.action != "setup":
+        parser.error("--disable-retrosynthesis is only supported with setup")
+    if args.retrosynthesis_runtime is not None and args.action != "setup":
+        parser.error("--retrosynthesis-runtime is only supported with setup")
     if args.polytao_runtime is not None and args.action != "setup":
         parser.error("--polytao-runtime is only supported with setup")
     if args.refresh_baseline and args.action != "setup":
@@ -814,7 +917,7 @@ def main() -> int:
     os.umask(0o077)
     try:
         if args.action == "setup":
-            result = setup(refresh_baseline=args.refresh_baseline, polytao_runtime=args.polytao_runtime)
+            result = setup(refresh_baseline=args.refresh_baseline, polytao_runtime=args.polytao_runtime, retrosynthesis_runtime=args.retrosynthesis_runtime, disable_retrosynthesis=args.disable_retrosynthesis)
         elif args.action == "smoke":
             result = smoke()
         elif args.action == "verify-protected":

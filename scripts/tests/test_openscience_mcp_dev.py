@@ -209,6 +209,39 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
             with self.subTest(url=url), self.assertRaises(dev.DevError):
                 dev.configuration(source)
 
+    def test_retrosynthesis_opt_in_extends_research_without_a_new_agent(self):
+        baseline = dev.configuration(self.source())
+        with patch.object(dev, "retrosynthesis_enabled", return_value=True):
+            value = dev.configuration(self.source())
+        self.assertEqual(set(value["agent"]), set(baseline["agent"]))
+        for name in dev.RETROSYNTHESIS_TOOLS:
+            key = dev.MCP_NAME + "_" + name
+            self.assertEqual(value["permission"][key], "allow")
+            self.assertEqual(value["agent"]["research"]["permission"][key], "allow")
+        self.assertIn("必须等待用户", value["agent"]["research"]["prompt"])
+
+    def test_retrosynthesis_uses_fixed_private_upstream_and_separate_tools(self):
+        with patch.object(dev, "retrosynthesis_enabled", return_value=True):
+            value = dict(line.split("=", 1) for line in dev.gateway_environment(self.production_gateway(), "m"*48).splitlines())
+        self.assertEqual(value["RETROSYNTHESIS_MCP_ENABLED"], "true")
+        self.assertEqual(value["RETROSYNTHESIS_MCP_URL"], dev.RETROSYNTHESIS_MCP_URL)
+        self.assertNotEqual(value["RETROSYNTHESIS_MCP_MODEL_TOKEN_FILE"], value["POLYTAO_MCP_MODEL_TOKEN_FILE"])
+        self.assertIn("confirm_monomer_retrosynthesis", dev.RETROSYNTHESIS_UI_TOOLS)
+        self.assertNotIn("confirm_monomer_retrosynthesis", dev.RETROSYNTHESIS_TOOLS)
+
+    def test_retrosynthesis_cannot_be_disabled_on_a_running_stack(self):
+        dev.private_directory()
+        with patch.object(dev, "verify_project_ownership", return_value=True), \
+                patch.object(dev, "verify_shared", return_value=({}, {})):
+            with self.assertRaisesRegex(dev.DevError, "Stop"):
+                dev.setup(disable_retrosynthesis=True)
+
+    def test_retrosynthesis_enable_and_disable_are_mutually_exclusive(self):
+        dev.private_directory()
+        with patch.object(dev, "verify_project_ownership", return_value=False):
+            with self.assertRaisesRegex(dev.DevError, "Choose"):
+                dev.setup(disable_retrosynthesis=True, retrosynthesis_runtime=self.root / "retro")
+
     def test_gateway_environment_uses_independent_auth_and_only_reviewed_connection_values(self):
         source = self.production_gateway()
         before = json.loads(json.dumps(source))
@@ -219,7 +252,7 @@ class OpenScienceDevelopmentTests(unittest.TestCase):
                     "ZHIJU_CAPABILITY_TOKEN", "LISTEN_HOST", "PROPERTY_FILTER_MCP_URL",
                     "PROPERTY_FILTER_MCP_TOKEN_FILE", "PROPERTY_FILTER_MCP_TIMEOUT_MS", "POLYTAO_MCP_ENABLED",
                     "POLYTAO_MCP_URL", "POLYTAO_MCP_MODEL_TOKEN_FILE", "POLYTAO_MCP_UI_TOKEN_FILE",
-                    "POLYTAO_GATEWAY_UI_TOKEN_FILE", "POLYTAO_MCP_TIMEOUT_MS"}
+                    "POLYTAO_GATEWAY_UI_TOKEN_FILE", "POLYTAO_MCP_TIMEOUT_MS", "RETROSYNTHESIS_MCP_ENABLED"}
         self.assertEqual(set(environment), expected)
         self.assertEqual(environment["ZHIJU_CAPABILITY_TOKEN"], token)
         self.assertEqual(environment["LISTEN_HOST"], "0.0.0.0")

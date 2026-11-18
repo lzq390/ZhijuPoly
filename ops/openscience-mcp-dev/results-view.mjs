@@ -1081,3 +1081,373 @@ export function renderPolytaoDraft(document, model, actions) {
   queueMicrotask(reload)
   return root
 }
+
+// Retrosynthesis projects only exact, completed capability-gateway tool outputs.
+const RETRO_TOOLS = new Map(["prepare_monomer_retrosynthesis", "get_retrosynthesis_draft", "get_retrosynthesis_job"]
+  .map(name => ["capability_gateway_" + name, name]))
+const RETRO_DRAFT_ID = /^rtd_[a-f0-9]{32}$/
+const RETRO_STATES = new Set(["pending", "queued", "running", "completed", "failed", "timed_out", "interrupted", "unknown"])
+const RETRO_ROLES = ["auto", "diamine", "dianhydride", "other"]
+const RETRO_DRAFT_STATES = new Set(["editing", "confirmed", "submitted", "submission_unknown", "rejected", "cancelled"])
+const RETRO_STATUS = { pending: "等待派发", queued: "等待 GPU", running: "运行中", completed: "已完成",
+  failed: "失败", timed_out: "排队超时", interrupted: "已中断", unknown: "执行结果待核验" }
+const RETRO_BRIDGE_ERRORS = {
+  INVALID_ARGUMENT: "目标结构或参数未通过校验。请检查 SMILES、来源和数值范围后再保存。",
+  DRAFT_INCOMPLETE: "请先选择并保存一个明确的目标结构。",
+  STRUCTURE_LIBRARY_UNAVAILABLE: "个人结构库当前未启用，请改用 SMILES 或本地名称匹配。",
+  TARGET_SOURCE_UNAVAILABLE: "本地名称数据当前不可用，请改用 SMILES 或个人结构库。",
+  SESSION_EXPIRED: "开发验证账号的登录已过期，请联系操作人员续期后重新载入原草稿。",
+  MODEL_UNAVAILABLE: "逆合成模型或任务服务暂不可用，请稍后重新载入原草稿。",
+  CAPACITY_LIMITED: "当前任务容量已满，请稍后重试原草稿。",
+  PERMISSION_DENIED: "当前授权账号没有此操作权限，请联系操作人员。",
+}
+const RETRO_STAGE = { ...RETRO_STATUS, awaiting_verification: "等待核验", pending: "等待派发", queued: "等待 GPU", waiting_for_gpu: "等待 GPU",
+  loading_model: "加载模型", predicting: "预测前体", processing_results: "处理结果", saving_results: "保存结果" }
+const RETRO_PARAMETERS = { num_return_sequences: { label: "候选数量", minimum: 1, maximum: 10, default: 5 },
+  num_beams: { label: "搜索宽度（Beam）", minimum: 1, maximum: 20, default: 5 },
+  max_new_tokens: { label: "最大生成长度", minimum: 16, maximum: 256, default: 128 } }
+const retroResolutionMessage = message => ({
+  "Select a saved target structure.": "请选择一项个人结构。",
+  "Choose the intended structure or supply SMILES.": "请从候选中选择目标，或提供 SMILES。",
+  "No local exact name match; supply SMILES or select a saved structure.": "本地名称未命中，请提供 SMILES 或选择个人结构。",
+})[message] ?? message
+const roleLabel = role => ({ auto: "自动识别", diamine: "二胺", dianhydride: "二酐", other: "其他" })[role] ?? role
+function validRetroParameters(value) {
+  return object(value) && Object.keys(value).length === 4 && RETRO_ROLES.includes(value.target_role)
+    && Object.entries(RETRO_PARAMETERS).every(([key, spec]) => Number.isSafeInteger(value[key])
+      && value[key] >= spec.minimum && value[key] <= spec.maximum)
+    && value.num_return_sequences <= value.num_beams
+}
+function validRetroResolved(value) {
+  return object(value) && nonempty(value.canonical_smiles) && value.canonical_smiles.length <= 8000
+    && nullableString(value.input_smiles) && RETRO_ROLES.includes(value.inferred_target_role)
+    && nullableString(value.preview_svg) && (value.preview_svg?.length ?? 0) <= 256 * 1024
+    && object(value.source) && ["smiles", "name", "saved_structure"].includes(value.source.type)
+    && nullableString(value.source.label) && nullableString(value.source.record_id)
+}
+export function validRetrosynthesisDraft(value) {
+  return object(value) && value.ok === true && RETRO_DRAFT_ID.test(value.draft_id ?? "")
+    && /^ses_[A-Za-z0-9_-]+$/.test(value.conversation_id ?? "") && positive(value.revision)
+    && RETRO_DRAFT_STATES.has(value.status) && typeof value.ready === "boolean" && typeof value.editable === "boolean"
+    && (value.target == null || object(value.target) && ["smiles", "name", "saved_structure"].includes(value.target.source))
+    && (value.resolved_target == null || validRetroResolved(value.resolved_target))
+    && Array.isArray(value.target_candidates) && value.target_candidates.length <= 20
+    && value.target_candidates.every(validRetroResolved) && nullableString(value.next_cursor)
+    && validRetroParameters(value.parameters) && object(value.parameter_fields)
+    && strings(value.missing_fields) && Array.isArray(value.errors)
+    && value.errors.every(error => object(error) && nonempty(error.field) && string(error.message))
+    && timestamp(value.created_at) && timestamp(value.updated_at) && nullableString(value.job_id)
+    && nullableString(value.submission_error) && (!value.ready || value.resolved_target != null && !value.errors.length)
+}
+function validRetroCandidate(value) {
+  return object(value) && positive(value.rank) && string(value.reactants_smiles)
+    && nullableString(value.canonical_reactants_smiles) && typeof value.valid_smiles === "boolean"
+    && (value.all_reactants_smaller_than_target == null || typeof value.all_reactants_smaller_than_target === "boolean") && nullableString(value.reaction_hint)
+    && Array.isArray(value.reactants) && value.reactants.every(item => object(item)
+      && string(item.input_smiles) && nullableString(item.canonical_smiles) && typeof item.valid_smiles === "boolean"
+      && (item.heavy_atom_count == null || count(item.heavy_atom_count)))
+}
+function validRetroJob(value, input) {
+  if (!object(value) || value.ok !== true || !nonempty(value.job_id) || input.job_id !== value.job_id
+      || !RETRO_STATES.has(value.status) || !timestamp(value.snapshot_at) || !timestamp(value.created_at)
+      || !timestamp(value.updated_at) || !optionalTimestamp(value.started_at) || !optionalTimestamp(value.finished_at)
+      || !nullableString(value.stage) || !nullableString(value.error_code) || !strings(value.warnings)) return false
+  if (value.result == null) return value.status !== "completed"
+  return value.status === "completed" && object(value.result) && nonempty(value.result.canonical_smiles)
+    && Array.isArray(value.result.candidates) && value.result.candidates.length <= 10
+    && value.result.total === value.result.candidates.length && value.result.candidates.every(validRetroCandidate)
+    && new Set(value.result.candidates.map(candidate => candidate.rank)).size === value.result.candidates.length
+}
+export function extractRetrosynthesisDrafts(messages) {
+  if (!Array.isArray(messages)) return []
+  const users = new Set(messages.filter(message => message?.info?.role === "user" && nonempty(message.info.id)).map(message => message.info.id))
+  const drafts = new Map()
+  for (const message of messages) {
+    if (message?.info?.role !== "assistant" || !users.has(message.info.parentID) || !Array.isArray(message.parts)) continue
+    for (const part of message.parts) {
+      const name = RETRO_TOOLS.get(part?.tool)
+      if (part?.type !== "tool" || !["prepare_monomer_retrosynthesis", "get_retrosynthesis_draft"].includes(name)
+          || part.state?.status !== "completed" || !object(part.state.input)) continue
+      const draft = successfulOutput(part)
+      if (!validRetrosynthesisDraft(draft) || part.state.input.draft_id != null && part.state.input.draft_id !== draft.draft_id
+          || part.state.input.conversation_id != null && part.state.input.conversation_id !== draft.conversation_id
+          || message.info.sessionID != null && message.info.sessionID !== draft.conversation_id) continue
+      const previous = drafts.get(draft.draft_id)
+      if (previous && (previous.draft.conversation_id !== draft.conversation_id || previous.draft.revision > draft.revision
+          || previous.draft.revision === draft.revision && Date.parse(previous.draft.updated_at) > Date.parse(draft.updated_at))) continue
+      drafts.set(draft.draft_id, { kind: "retrosynthesis-draft", key: `retrosynthesis-draft:${draft.draft_id}`,
+        turnId: previous?.turnId ?? message.info.parentID, draft })
+    }
+  }
+  return [...drafts.values()]
+}
+export function extractRetrosynthesisTurns(messages) {
+  if (!Array.isArray(messages)) return []
+  const users = new Map(messages.filter(message => message?.info?.role === "user" && nonempty(message.info.id))
+    .map(message => [message.info.id, new Map()]))
+  for (const message of messages) {
+    if (message?.info?.role !== "assistant" || !users.has(message.info.parentID) || !Array.isArray(message.parts)) continue
+    for (const part of message.parts) {
+      if (part?.type !== "tool" || RETRO_TOOLS.get(part.tool) !== "get_retrosynthesis_job"
+          || part.state?.status !== "completed" || !object(part.state.input)) continue
+      const snapshot = successfulOutput(part)
+      if (!validRetroJob(snapshot, part.state.input)) continue
+      const jobs = users.get(message.info.parentID), previous = jobs.get(snapshot.job_id)
+      if (previous && Date.parse(previous.snapshot.snapshot_at) > Date.parse(snapshot.snapshot_at)) continue
+      jobs.set(snapshot.job_id, { kind: "retrosynthesis", key: `retrosynthesis:${message.info.parentID}:${snapshot.job_id}`,
+        turnId: message.info.parentID, jobId: snapshot.job_id, snapshot })
+    }
+  }
+  return [...users.values()].flatMap(jobs => [...jobs.values()])
+}
+function retroPreview(document, target) {
+  const box = element(document, "div", "nexpoly-retro-preview")
+  if (target?.preview_svg) {
+    // An image document does not execute SVG scripts; never put source markup into the page DOM.
+    const image = element(document, "img", "nexpoly-retro-structure")
+    image.alt = "目标分子二维结构"
+    image.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(target.preview_svg)
+    append(box, image)
+  }
+  if (target) append(box, element(document, "code", "nexpoly-smiles", target.canonical_smiles),
+    element(document, "p", "nexpoly-note", `检测角色：${roleLabel(target.inferred_target_role)}${target.source.label ? ` · 来源：${target.source.label}` : ""}`))
+  return box
+}
+export function renderRetrosynthesisResult(document, model) {
+  if (!document?.createElement || model?.kind !== "retrosynthesis" || !validRetroJob(model.snapshot, { job_id: model.jobId })) {
+    throw new TypeError("An extracted retrosynthesis job is required")
+  }
+  const value = model.snapshot, result = value.result
+  const root = element(document, "section", "nexpoly-results nexpoly-retrosynthesis")
+  root.dataset.nexpolyResults = ""; root.dataset.retrosynthesisResults = ""; root.dataset.turnId = model.turnId
+  root.dataset.jobId = value.job_id
+  root.setAttribute("aria-label", "单体逆合成结果")
+  append(root, append(element(document, "header", "nexpoly-results-header"),
+    element(document, "p", "nexpoly-eyebrow", "NEXPOLY · 单体逆合成"), element(document, "h2", "", "单步前体预测结果")))
+  const summary = element(document, "dl", "nexpoly-polytao-summary")
+  for (const [label, text] of [["任务状态", RETRO_STATUS[value.status]], ["执行阶段", RETRO_STAGE[value.stage] ?? value.stage ?? "—"],
+    ["查询时间", new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "long" }).format(new Date(value.snapshot_at))]]) {
+    const metric = element(document, "div", "nexpoly-polytao-metric"); field(document, metric, label, text); append(summary, metric)
+  }
+  append(root, summary, element(document, "p", "nexpoly-semantics", "以下为单步前体预测候选。排名不是置信度；结构有效不代表反应可实现，也不包含完整实验路线或反应条件。"))
+  if (value.status === "unknown") append(root, element(document, "p", "nexpoly-result-issue", "任务曾开始执行，完成结果仍待核验。请继续查询原任务，不要重复提交。"))
+  else if (["pending", "queued", "running"].includes(value.status)) append(root, element(document, "p", "nexpoly-note", "这是最近一次真实查询的快照，可继续查询该任务。"))
+  if (value.error_code) append(root, element(document, "p", "nexpoly-result-issue", `任务状态说明：${value.error_code}`))
+  for (const warning of value.warnings) append(root, element(document, "p", "nexpoly-result-issue", warning))
+  if (result) {
+    append(root, element(document, "p", "nexpoly-note", `目标：${result.canonical_smiles}`),
+      element(document, "p", "nexpoly-note", `用途标签：${roleLabel(result.target_role ?? "auto")} · 检测角色：${roleLabel(result.inferred_target_role ?? "other")}`))
+    if (!result.candidates.length) append(root, element(document, "p", "nexpoly-empty", "任务已完成，本次没有返回前体候选。"))
+    for (const candidate of result.candidates) {
+      const card = element(document, "article", "nexpoly-material nexpoly-retro-candidate")
+      card.dataset.retrosynthesisCandidate = String(candidate.rank)
+      append(card, element(document, "h3", "nexpoly-section-title", `候选 ${candidate.rank}`),
+        element(document, "p", candidate.valid_smiles ? "nexpoly-note" : "nexpoly-result-issue",
+          `结构解析：${candidate.valid_smiles ? "有效" : "无效"} · 前体均小于目标：${candidate.all_reactants_smaller_than_target == null ? "未判断" : candidate.all_reactants_smaller_than_target ? "是" : "否"}`))
+      const smiles = candidate.canonical_reactants_smiles || candidate.reactants_smiles
+      append(card, element(document, "code", "nexpoly-smiles", smiles))
+      const copy = element(document, "button", "nexpoly-copy-smiles", "复制前体 SMILES"), feedback = element(document, "span", "nexpoly-copy-status")
+      copy.type = "button"; feedback.setAttribute("role", "status")
+      copy.addEventListener("click", async () => {
+        try { await document.defaultView.navigator.clipboard.writeText(smiles); feedback.textContent = "已复制" }
+        catch { feedback.textContent = "复制失败，请手动复制。" }
+      })
+      append(card, copy, feedback)
+      for (const [index, item] of candidate.reactants.entries()) append(card, element(document, "p", "nexpoly-note",
+        `前体 ${index + 1}：${item.canonical_smiles || item.input_smiles}（${item.valid_smiles ? "有效" : "无效"}）`))
+      if (candidate.reaction_hint) append(card, element(document, "p", "nexpoly-note", candidate.reaction_hint))
+      append(root, card)
+    }
+  }
+  const details = element(document, "details", "nexpoly-provenance"), task = element(document, "dl", "nexpoly-provenance-data")
+  append(details, element(document, "summary", "", "任务详情")); field(document, task, "任务编号", value.job_id)
+  return append(root, append(details, task))
+}
+
+export function renderRetrosynthesisDraft(document, model, actions) {
+  if (!document?.createElement || model?.kind !== "retrosynthesis-draft" || !validRetrosynthesisDraft(model.draft)
+      || typeof actions?.perform !== "function") throw new TypeError("An extracted retrosynthesis draft and bridge are required")
+  let draft = model.draft, busy = false, syncing = true, stale = false, dirty = false, beamsTouched = false, continuation = null
+  let noticeText = "正在恢复最新草稿……", candidates = [], nextCursor = null, targetDirty = false
+  const touchedParameters = new Set()
+  const root = element(document, "section", "nexpoly-results nexpoly-retro-form")
+  root.dataset.nexpolyResults = ""; root.dataset.retrosynthesisDraft = draft.draft_id; root.dataset.turnId = model.turnId
+  root.setAttribute("aria-label", "单体逆合成参数")
+  append(root, append(element(document, "header", "nexpoly-results-header"), element(document, "p", "nexpoly-eyebrow", "NEXPOLY · 单体逆合成"),
+    element(document, "h2", "", "确认目标单体与预测参数")), element(document, "p", "nexpoly-note", "可输入 SMILES、匹配本地名称或选择授权账号的个人结构。解析和保存均不会启动推理；确认后提交一次。"))
+  const status = element(document, "p", "nexpoly-draft-status"), notice = element(document, "p", "nexpoly-draft-notice")
+  status.setAttribute("role", "status"); notice.setAttribute("role", "status"); append(root, status, notice)
+  const form = element(document, "form", "nexpoly-draft-form")
+  form.addEventListener("submit", event => event.preventDefault()); append(root, form)
+  const sourceLabel = element(document, "label", "nexpoly-draft-field", "目标来源"), source = element(document, "select", "nexpoly-draft-input")
+  source.setAttribute("aria-label", "目标来源")
+  for (const [value, text] of [["smiles", "SMILES"], ["name", "本地名称"], ["saved_structure", "个人结构库"]]) {
+    const option = element(document, "option", "", text); option.value = value; append(source, option)
+  }
+  append(form, append(sourceLabel, source))
+  const targetLabel = element(document, "label", "nexpoly-draft-field", "目标结构或名称"), target = element(document, "textarea", "nexpoly-draft-input")
+  target.setAttribute("aria-label", "目标结构或名称"); target.rows = 3; target.maxLength = 8000; target.spellcheck = false
+  const targetHelp = element(document, "p", "nexpoly-draft-help"), preview = element(document, "div", "nexpoly-retro-preview-host")
+  const resolveButton = element(document, "button", "nexpoly-draft-button", "解析 / 搜索结构"), moreButton = element(document, "button", "nexpoly-draft-button", "更多结构")
+  resolveButton.type = moreButton.type = "button"
+  const choices = element(document, "div", "nexpoly-retro-choices"); choices.setAttribute("aria-label", "目标候选")
+  append(form, append(targetLabel, target), targetHelp, resolveButton, choices, moreButton, preview)
+  const roleBox = element(document, "label", "nexpoly-draft-field", "用途标签"), role = element(document, "select", "nexpoly-draft-input")
+  role.setAttribute("aria-label", "用途标签")
+  for (const value of RETRO_ROLES) { const option = element(document, "option", "", roleLabel(value)); option.value = value; append(role, option) }
+  append(form, append(roleBox, role), element(document, "p", "nexpoly-draft-help", "用途标签不约束模型生成；检测角色来自目标结构。"))
+  const fields = new Map(), basic = element(document, "div", "nexpoly-draft-grid"), advanced = element(document, "details", "nexpoly-draft-advanced")
+  append(advanced, element(document, "summary", "", "高级预测参数（已有默认值）"))
+  for (const [name, spec] of Object.entries(RETRO_PARAMETERS)) {
+    const label = element(document, "label", "nexpoly-draft-field", spec.label), input = element(document, "input", "nexpoly-draft-input")
+    input.type = "text"; input.inputMode = "numeric"; input.maxLength = 10; input.dataset.parameterName = name; input.setAttribute("aria-label", spec.label)
+    fields.set(name, input); append(name === "num_return_sequences" ? basic : advanced, append(label, input))
+    input.addEventListener("input", () => {
+      touchedParameters.add(name)
+      if (name === "num_beams") beamsTouched = Boolean(input.value.trim())
+      if (name === "num_return_sequences" && !beamsTouched) {
+        const checked = polytaoNumericInput(input.value, { type: "integer", ...spec })
+        if (!checked.error && checked.value != null) fields.get("num_beams").value = String(Math.max(5, checked.value))
+      }
+      changed()
+    })
+  }
+  append(form, basic, advanced, element(document, "p", "nexpoly-draft-help", "生成长度以模型词元计。候选数量是上限，实际返回可能较少。"))
+  const buttons = element(document, "div", "nexpoly-draft-actions"), saveButton = element(document, "button", "nexpoly-draft-button", "保存参数"),
+    confirmButton = element(document, "button", "nexpoly-draft-button nexpoly-draft-primary", "确认并预测"),
+    cancelButton = element(document, "button", "nexpoly-draft-button", "取消草稿"),
+    reloadButton = element(document, "button", "nexpoly-draft-button", "重新载入已保存参数"),
+    continueButton = element(document, "button", "nexpoly-draft-button", "继续查询结果"),
+    recoverButton = element(document, "button", "nexpoly-draft-button", "重试原提交")
+  for (const button of [saveButton, confirmButton, cancelButton, reloadButton, continueButton, recoverButton]) { button.type = "button"; append(buttons, button) }
+  const errors = element(document, "p", "nexpoly-result-issue"), receipt = element(document, "p", "nexpoly-note")
+  append(form, errors, buttons); append(root, receipt)
+  function targetInput(cursor) {
+    const text = target.value.trim()
+    if (source.value === "smiles") return text ? { source: "smiles", smiles: text } : null
+    if (source.value === "name") return text ? { source: "name", name: text } : null
+    if (target.dataset.recordId && !targetDirty) return { source: "saved_structure", record_id: target.dataset.recordId }
+    return { source: "saved_structure", query: text, limit: 20, ...(cursor ? { cursor } : {}) }
+  }
+  function parameters() {
+    const result = { target_role: role.value }, problems = []
+    for (const [name, input] of fields) {
+      const checked = polytaoNumericInput(input.value, { type: "integer", ...RETRO_PARAMETERS[name] })
+      result[name] = checked.value ?? RETRO_PARAMETERS[name].default
+      if (checked.error) problems.push(`${RETRO_PARAMETERS[name].label}：${checked.error}`)
+    }
+    if (!fields.get("num_beams").value.trim() && !beamsTouched) result.num_beams = Math.max(5, result.num_return_sequences)
+    if (result.num_return_sequences > result.num_beams) problems.push("搜索宽度不能小于候选数量。")
+    return { values: result, problems }
+  }
+  function changed(targetChanged = false) {
+    dirty = true
+    if (targetChanged) { targetDirty = true; candidates = []; nextCursor = null; choices.replaceChildren(); target.dataset.recordId = "" }
+    noticeText = "参数尚未保存，确认时会先校验并保存。"; refresh()
+  }
+  target.addEventListener("input", () => changed(true)); source.addEventListener("change", () => changed(true)); role.addEventListener("change", () => { touchedParameters.add("target_role"); dirty = true; refresh() })
+  function refresh() {
+    const checked = parameters(), locked = busy || syncing || stale || !draft.editable || draft.status !== "editing"
+    root.dataset.draftRevision = String(draft.revision); root.dataset.draftStatus = draft.status; root.dataset.draftDirty = String(dirty)
+    root.setAttribute("aria-busy", String(busy || syncing))
+    status.textContent = `${DRAFT_STATUS_LABEL[draft.status] ?? draft.status} · ${dirty ? "有未保存的修改" : `已保存第 ${draft.revision} 版`}`
+    notice.textContent = noticeText; notice.hidden = !noticeText
+    for (const input of [source, target, role, ...fields.values()]) input.disabled = locked
+    targetHelp.textContent = source.value === "saved_structure" ? "搜索当前授权原生账号的个人结构；选择一项后保存。" : source.value === "name"
+      ? "仅匹配本地名称数据。多个结构需要选择；未命中时请提供 SMILES。" : "输入一个完整、确定的目标分子 SMILES。"
+    resolveButton.disabled = locked || !targetInput(); saveButton.disabled = locked || checked.problems.length > 0
+    confirmButton.disabled = locked || checked.problems.length > 0 || (!dirty && !draft.ready) || !targetInput()
+    cancelButton.disabled = locked; reloadButton.disabled = busy || syncing
+    moreButton.hidden = !nextCursor; moreButton.disabled = locked
+    continueButton.hidden = !draft.job_id || draft.status !== "submitted"; continueButton.disabled = busy || syncing
+    recoverButton.hidden = !["confirmed", "submission_unknown"].includes(draft.status) || Boolean(draft.job_id); recoverButton.disabled = busy || syncing
+    errors.textContent = checked.problems.join(" ") || draft.errors.map(error => retroResolutionMessage(error.message)).join(" "); errors.hidden = !errors.textContent
+    receipt.textContent = draft.job_id ? `任务已接受：${draft.job_id}。${continuation?.status === "failed" ? "可点击继续查询结果。" : "将在原对话中查询结果。"}`
+      : draft.status === "submission_unknown" ? "提交回执待核查。点击“重试原提交”会先查询任务；若仍未查到，将使用已冻结的相同参数和幂等键再次发送。不会自动重试或生成新键。" : ""
+    if (draft.status === "confirmed" && !draft.job_id) receipt.textContent = "确认参数已冻结。点击“重试原提交”会先查询任务，必要时以相同参数和幂等键发送；页面不会自动重试。"
+    receipt.hidden = !receipt.textContent
+  }
+  function adopt(next, force = false) {
+    if (!validRetrosynthesisDraft(next) || next.draft_id !== draft.draft_id || next.conversation_id !== draft.conversation_id) throw new Error("INVALID_DRAFT_RESPONSE")
+    if (!force && (next.revision < draft.revision || next.revision === draft.revision && Date.parse(next.updated_at) < Date.parse(draft.updated_at))) return
+    if (!force && dirty && next.editable) { if (next.revision > draft.revision) { stale = true; noticeText = "草稿已在其他位置更新，请重新载入。"; refresh() } return }
+    draft = next; dirty = false; targetDirty = false; stale = false
+    beamsTouched = (draft.explicit_parameters ?? []).includes("num_beams"); touchedParameters.clear()
+    source.value = draft.target?.source ?? "smiles"
+    target.value = draft.target?.smiles ?? draft.target?.name ?? draft.target?.query ?? draft.resolved_target?.source.label ?? draft.resolved_target?.canonical_smiles ?? ""
+    target.dataset.recordId = draft.target?.record_id ?? ""
+    role.value = draft.parameters.target_role
+    for (const [name, input] of fields) input.value = String(draft.parameters[name])
+    candidates = draft.target_candidates; nextCursor = draft.next_cursor
+    preview.replaceChildren(retroPreview(document, draft.resolved_target)); showCandidates(); refresh()
+  }
+  function showCandidates() {
+    choices.replaceChildren()
+    for (const candidate of candidates) {
+      const card = element(document, "div", "nexpoly-retro-choice"), choose = element(document, "button", "nexpoly-draft-button", `选择 ${candidate.source.label || candidate.canonical_smiles}`)
+      choose.type = "button"; choose.disabled = busy || syncing || !draft.editable
+      choose.addEventListener("click", () => run(async () => {
+        const chosen = candidate.source.type === "saved_structure" && candidate.source.record_id
+          ? { source: "saved_structure", record_id: candidate.source.record_id } : { source: "smiles", smiles: candidate.canonical_smiles }
+        await perform("update", { target: chosen, parameters: parameterPatch() }); noticeText = "已选择并保存目标结构，请核对后确认。"
+      }))
+      append(choices, append(card, retroPreview(document, candidate), choose))
+    }
+  }
+  async function perform(action, extra = {}) {
+    const response = await actions.perform(action, { draft_id: draft.draft_id, revision: draft.revision, ...extra })
+    if (response?.ok !== true) { const error = new Error("DRAFT_BRIDGE_FAILED"); error.code = response?.error?.code; throw error }
+    if (action === "resolve") {
+      const resolution = response.resolution
+      if (!object(resolution) || resolution.ok !== true || !Array.isArray(resolution.candidates)
+          || !resolution.candidates.every(validRetroResolved) || resolution.target != null && !validRetroResolved(resolution.target)) throw new Error("INVALID_RESOLUTION")
+      candidates = resolution.candidates; nextCursor = resolution.next_cursor ?? null
+      preview.replaceChildren(retroPreview(document, resolution.target)); showCandidates()
+      noticeText = retroResolutionMessage(resolution.message) || (resolution.target ? "目标已解析，请保存或确认预测。" : "请选择一个结构，或提供更明确的 SMILES。")
+      return resolution
+    }
+    if (!validRetrosynthesisDraft(response.draft)) throw new Error("INVALID_DRAFT_RESPONSE")
+    continuation = response.continuation ?? null; adopt(response.draft, true); return response.draft
+  }
+  async function run(operation) {
+    if (busy || syncing) return
+    busy = true; refresh()
+    try { await operation() }
+    catch (error) {
+      stale = !["INVALID_ARGUMENT", "DRAFT_INCOMPLETE", "STRUCTURE_LIBRARY_UNAVAILABLE", "TARGET_SOURCE_UNAVAILABLE", "CAPACITY_LIMITED"].includes(error?.code)
+      noticeText = RETRO_BRIDGE_ERRORS[error?.code] ?? BRIDGE_ERROR_LABEL[error?.code]
+        ?? "操作回执尚未确认。请重新载入并核对状态；页面不会自动重复提交。"
+    }
+    finally { busy = false; showCandidates(); refresh() }
+  }
+  function parameterPatch() {
+    const values = parameters().values
+    return Object.fromEntries([...touchedParameters].map(name => [name, name !== "target_role" && !fields.get(name).value.trim() ? null : values[name]]))
+  }
+  async function save() {
+    const checked = parameters(); if (checked.problems.length) return null
+    const next = await perform("update", { target: targetInput(), parameters: parameterPatch() })
+    noticeText = next.ready ? "目标和参数已保存，等待确认预测。" : "草稿已保存，请先选择或补充明确目标。"; return next
+  }
+  saveButton.addEventListener("click", () => run(save))
+  resolveButton.addEventListener("click", () => run(() => perform("resolve", { target: targetInput() })))
+  moreButton.addEventListener("click", () => run(() => perform("resolve", { target: targetInput(nextCursor) })))
+  confirmButton.addEventListener("click", () => run(async () => {
+    const next = dirty ? await save() : draft
+    if (!next?.ready || !next.editable || next.status !== "editing") return
+    await perform("confirm"); noticeText = "任务已提交，正在原对话中查询。"; actions.onChange?.()
+  }))
+  cancelButton.addEventListener("click", () => run(async () => { await perform("cancel"); noticeText = "草稿已取消，未创建任务。" }))
+  continueButton.addEventListener("click", () => run(async () => { await perform("continue"); noticeText = "已请求查询原任务。"; actions.onChange?.() }))
+  recoverButton.addEventListener("click", () => run(async () => { await perform("confirm"); noticeText = "已重试原提交，参数和幂等键保持一致。"; actions.onChange?.() }))
+  async function reload() {
+    if (busy) return
+    syncing = true; refresh()
+    try { await perform("get"); noticeText = draft.editable ? "已恢复保存参数，确认后才会启动预测。" : "已恢复草稿与任务回执。" }
+    catch { stale = true; noticeText = "暂时无法读取最新草稿，请重新载入。" }
+    finally { syncing = false; showCandidates(); refresh() }
+  }
+  reloadButton.addEventListener("click", reload)
+  root.nexpolySetDraft = next => { try { adopt(next) } catch { /* Reject unrelated saved output. */ } }
+  adopt(draft, true); queueMicrotask(reload); return root
+}
