@@ -22,6 +22,11 @@ spec = importlib.util.spec_from_file_location(
 assert spec and spec.loader
 build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
+smoke_spec = importlib.util.spec_from_file_location(
+    "local_runner_guest_build_smoke", ROOT / "ops/self_hosted_runner/guest/smoke.py")
+assert smoke_spec and smoke_spec.loader
+smoke = importlib.util.module_from_spec(smoke_spec)
+smoke_spec.loader.exec_module(smoke)
 
 
 class GuestBuildDiagnosticsTests(unittest.TestCase):
@@ -142,7 +147,13 @@ class GuestBuildDiagnosticsTests(unittest.TestCase):
                 shutil.rmtree(mapped, **kwargs)
 
             stack.enter_context(mock.patch.object(build, "CONFIG", config))
-            stack.enter_context(mock.patch.dict(sys.modules, {"bootstrap": SimpleNamespace(runner_account=mock.Mock())}))
+            background_check = mock.Mock()
+            smoke_module = SimpleNamespace(**{name: getattr(smoke, name) for name in (
+                "BACKGROUND_APT_TIMERS", "BACKGROUND_APT_UNITS", "APT_PERIODIC_CONFIG", "APT_PERIODIC_POLICY",
+                "NEEDRESTART_CONFIG", "NEEDRESTART_POLICY")},
+                check_background_updates=background_check)
+            stack.enter_context(mock.patch.dict(sys.modules, {
+                "bootstrap": SimpleNamespace(runner_account=mock.Mock()), "smoke": smoke_module}))
             stack.enter_context(mock.patch.object(build, "Path", side_effect=guest_path))
             stack.enter_context(mock.patch.object(build.os, "geteuid", return_value=0))
             stack.enter_context(mock.patch.dict(os.environ))
@@ -154,7 +165,7 @@ class GuestBuildDiagnosticsTests(unittest.TestCase):
             build.main()
             self.assertEqual(
                 [call.kwargs["stage"] for call in emit.call_args_list if call.args == ("template_stage",)],
-                ["preflight", "apt_update", "apt_dependencies", "docker_packages",
+                ["preflight", "apt_quiesce", "apt_update", "apt_dependencies", "docker_packages",
                  "buildx_download", "runner_download", "runner_dependencies",
                  "guest_configuration", "docker_start", "smoke", "seal"])
             self.assertEqual(emit.call_args, mock.call(
@@ -179,14 +190,23 @@ class GuestBuildDiagnosticsTests(unittest.TestCase):
             self.assertIn("dbus-user-session", system_install[4:])
             self.assertEqual(set(build.CHROMIUM_SYSTEM_PACKAGES), expected_browser_packages)
             run.assert_any_call("apt-get", "clean")
+            mask = mock.call("systemctl", "mask", "apt-daily.timer", "apt-daily-upgrade.timer",
+                             "apt-daily.service", "apt-daily-upgrade.service")
+            stop = mock.call("systemctl", "stop", "apt-daily.timer", "apt-daily-upgrade.timer")
+            self.assertLess(run.call_args_list.index(mask), run.call_args_list.index(stop))
+            self.assertLess(run.call_args_list.index(stop), run.call_args_list.index(mock.call("apt-get", "update")))
+            self.assertFalse(any(call.args[:2] == ("systemctl", "stop") and any(
+                str(value).endswith(".service") for value in call.args[2:]) for call in run.call_args_list))
+            self.assertEqual(background_check.call_args_list, [mock.call(wait_seconds=300), mock.call()])
             linger = mock.call("loginctl", "enable-linger", "runner")
             user_manager = mock.call("systemctl", "start", "user@1001.service")
-            smoke = mock.call("python3", str(build.HERE / "smoke.py"))
+            smoke_call = mock.call("python3", str(build.HERE / "smoke.py"))
             self.assertLess(run.call_args_list.index(linger), run.call_args_list.index(user_manager))
-            self.assertLess(run.call_args_list.index(user_manager), run.call_args_list.index(smoke))
+            self.assertLess(run.call_args_list.index(user_manager), run.call_args_list.index(smoke_call))
             self.assertEqual((apt_lists / "ubuntu_InRelease").read_text(), "release metadata fixture")
             self.assertEqual((apt_lists / "ubuntu_Packages").read_text(), "package index fixture")
             proxy_config = root / "etc/apt/apt.conf.d/80-nexpoly-proxy"
+            periodic_config = root / "etc/apt/apt.conf.d/99zz-nexpoly-periodic"
             content = proxy_config.read_text()
             self.assertNotIn("AllowInsecure", content)
             self.assertNotIn("AllowUnauthenticated", content)
@@ -194,6 +214,13 @@ class GuestBuildDiagnosticsTests(unittest.TestCase):
             # Parse the actual generated syntax without updating/installing or
             # printing any unrelated host APT configuration.
             if shutil.which("apt-config"):
+                periodic = subprocess.run([
+                    "apt-config", "-c", str(periodic_config), "shell",
+                    "ENABLE", "APT::Periodic::Enable", "UPDATE", "APT::Periodic::Update-Package-Lists",
+                    "DOWNLOAD", "APT::Periodic::Download-Upgradeable-Packages", "UPGRADE", "APT::Periodic::Unattended-Upgrade",
+                ], check=True, capture_output=True, text=True)
+                self.assertEqual(set(periodic.stdout.splitlines()), {
+                    "ENABLE='0'", "UPDATE='0'", "DOWNLOAD='0'", "UPGRADE='0'"})
                 parsed = subprocess.run([
                     "apt-config", "-c", str(proxy_config), "shell",
                     "HTTP", "Acquire::http::Proxy", "HTTPS", "Acquire::https::Proxy",

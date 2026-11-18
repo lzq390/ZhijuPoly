@@ -307,12 +307,35 @@ MCP实际运行17分14秒，setup-python被取消，依赖安装和测试均skip
 
 本次修复整合验证403项通过（runner相关253项、workflow/镜像资源/DFT契约150项），workflow policy、actionlint1.7.7与集成ShellCheck检查通过。独立harness模拟live runner诊断目录存在时，原两项测试均通过，真实路径查询为0，所有删除调用均限制于临时路径。11月18日推送前预检为唯一runner104在线空闲，控制器与代理active、NRestarts0；仓库、交付包与受保护安装的30个核心文件哈希一致，无需重装或重建。提交后仍须执行`--require-committed`再触发新完整CI；此处未将待运行的CI标记为通过。
 
+## 2026-11-18 CI #306 的 DFT 服务中断与模板维护
+
+[run44220723057](https://github.com/lzq390/ZhijuPoly/actions/runs/44220723057)/head `7aea83b` 的 20 个本地 job 已全部结束，19 成功、1 失败。脚本 2559 项/1708.215 秒、19 skipped，原两个 GuestBootstrapTests 明确通过；frontend 的 2147 项 Vitest、最终生产镜像账户 UI 四例及后续清理均成功；MCP 的锁定依赖安装、134 项测试及 6 项验收测试成功。MCP 的可选 pip 缓存恢复超时未阻止安装和测试，随后成功保存新缓存。Production 0005 于北京时间 14:30:47—14:32:08 成功运行，先前排队显示来自旧列表状态。完整 run 的失败仅为 DFT 及依赖它的 ci-gate，两个发布任务在 PR 上正常跳过。
+
+DFT job `134521642404` 使用 runner122、VM `f3d209a9add8497082039f56bfa73f35`。Python 3.12.16 安装成功，124,767,101 字节 pip 缓存仍在传输至 33.6% 时 runner 收到关闭信号。依赖安装与 Worker pytest 均未开始，不能将此次失败归为测试断言、缓存恢复超时或 35 分钟任务期限。
+
+管理员导出的 VM 摘要与控制器 journal 按同一宿主时钟对照：14:26:26 已收到 bootstrap SIGTERM15 和 unit_stop killed/15，14:27:12 才记录 vm_stopping/github_job_completed，14:29:12 才由宿主 PID1 终止 QEMU，14:29:14 完成回收。初次信号早于控制器回收约 46 秒；回收不是最初中断原因。guest 全局与 unit OOM 计数及 delta 均为 0，QEMU 内存峰 4.57 GiB。`service_result=success` 不代表自然退出，也不提供发起者。APT 升级 activating/unattended-upgrades active 只是状态快照，不能据此证明 needrestart。
+
+当前实现未保留普通 job VM 的 guest journal，实例盘和运行时串口已正常删除，无法继续追溯本轮信号发送者。安全分析摘要及证据索引位于 `/data/lzq/jobs/runner-ci306-analysis-20261118/`。本次在新模板中限制后台自动更新，并补充受界限约束的服务事务元数据，属于消除未受控后台行为和改进诊断，不宣称已证实旧 SIGTERM 的根因。
+
+整合验证共 **423 项通过**：runner 全部 273 项（13.226 秒），workflow/镜像资源/DFT 契约 150 项（13.490 秒）。新增回归包含真实子进程的 POSIX/flock 锁占用、Perl 有效 needrestart 策略及冲突拒绝、64 KiB 实际管道上限、诊断共享 2 秒预算、查询/解析失败仍保留退出证据，以及注册前不查询、未知/恶意字段不转发。workflow policy、DFT `--require-committed`、actionlint 1.7.7、ShellCheck 0.10.0、Python 语法和 diff 检查通过，独立复核无阻断项。未执行宿主 APT、服务变更或部署；真实新模板及 DFT 复验仍待管理员维护。
+
+管理员随后执行 `sudo bash /data/lzq/github-runner/control/maintain-runner.sh` 成功，输出保存在 `/home/devuser/nexpoly-runner-maintenance-dft.log`。旧 runner125 经派单核验和正常关机退役；安装及代理/防火墙验收通过，六个锁定制品均第 1 次尝试校验成功，`apt_quiesce`、smoke、seal 通过。新模板 `base-69909bf9c1034ce07e6c5d524b850355e41bd6ab63bdf05825ce93476ff2a03d.qcow2` 于北京时间 15:49:23 封存，controller/build/exit_diagnostics/smoke/template 五个核心文件在源码、control 和受保护安装中 SHA256 一致。runner126/VM `fa0ad51db6234667a53f46baed5a1d95` 在线，实际 AppArmor enforce、KVM 8 CPU/32 GiB、宿主 34 GiB/swap0 均通过只读验收。维护末尾的即时 status 曾显示 paused=true/instance=null，控制器随后已处理 resume 并补充了该 VM，不能把该瞬时输出误判为维护失败。
+
+通过 GitHub 插件只重跑该 run 的失败项；attempt2 保持 head `7aea83b`，其余成功项由 GitHub 复用（job ID 复制、原执行时间与 runner 身份保留）。DFT 新 job [134662267111](https://github.com/lzq390/ZhijuPoly/actions/runs/44220723057/job/134662267111) 于北京时间 16:01:53—16:05:56 成功，共 4 分 03 秒；Python、124,767,101 字节 pip 缓存恢复、`--require-hashes` 锁定依赖安装和 `pip check` 均成功，Worker pytest 实际 collected=282、passed=282，耗时 30.01 秒，0 failed/error/skipped。缓存命中到完整恢复约 63.7 秒。11 个实际步骤全部 success，post Python/checkout、job-completed hook 与 orphan cleanup 均完成，无 runner shutdown、取消、缓存恢复超时或错误，仅有 Node 弃用警告。
+
+host cgroup 每 5 秒采样共 32 次，覆盖 16:03:33—16:06:08 的有效窗口；内核 MemoryPeak 记录 5,630,296,064 字节（5.244 GiB），已采样 max/oom/oom_kill 与 CPU 节流均为 0。guest OOM 不可读，未记为 0；采样不能代替最后几秒的最终回收资源摘要。16:06:13 旧 VM/cgroup 已退出，随后出现新的唯一 VM `facf7db019744f49913257fb35ff128a`，证明控制器已完成旧实例回收并开始补机。控制器和代理 active、NRestarts0。
+
+新 [ci-gate job134664184311](https://github.com/lzq390/ZhijuPoly/actions/runs/44220723057/job/134664184311) 于北京时间 16:06:00—16:06:05 成功，实际日志为 `all applicable CI jobs succeeded`。run44220723057 attempt2 completed/success：22 success、2 个 PR 发布任务 skipped，无失败或取消。20 个本地 job 均成功，20 个不同 runner 身份；其中只有 DFT 使用本次新模板重新执行。后续唯一 runner127 对应上述新 VM，GitHub online、busy=false，旧 runner126 已删除，回收与补机完成。结果与安全摘要保存在 `/data/lzq/jobs/runner-ci306-analysis-20261118/`。此次复验没有证明旧 SIGTERM 发起者，亦不替代 main 托管发布及其余未执行的故障注入验收。
+
+后续同类修复需经统一维护入口重建模板，不能仅安装后使用旧镜像。安装或模板验收失败不会 resume；末尾 resume 后若 start/status 失败，需检查实际状态，不能假定已自动恢复 drain。
+
 ## 复验命令
 
 在仓库根目录：
 
 ```bash
-python3 -m unittest scripts.tests.test_local_runner_controller scripts.tests.test_local_runner_host scripts.tests.test_local_runner_template scripts.tests.test_local_runner_guest_build scripts.tests.test_local_runner_guest_download scripts.tests.test_local_runner_template_download_diagnostics scripts.tests.test_local_runner_guest_ordering scripts.tests.test_local_runner_guest_diagnostics scripts.tests.test_local_runner_maintenance scripts.tests.test_local_runner_runner_maintenance scripts.tests.test_local_runner_retirement scripts.tests.test_local_runner_upstream scripts.tests.test_local_runner_diagnostics scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows scripts.tests.test_validate_monomer_dft_release_contract -q
+python3 -m unittest discover -s scripts/tests -p 'test_local_runner*.py' -q
+python3 -m unittest scripts.tests.test_ci_image_resources scripts.tests.test_validate_workflows scripts.tests.test_validate_monomer_dft_release_contract -q
 python3 scripts/ci/validate_workflows.py
 python3 scripts/validate_monomer_dft_release_contract.py --require-committed
 actionlint -config-file .github/actionlint.yaml .github/workflows/ci.yml

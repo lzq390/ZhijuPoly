@@ -6,6 +6,16 @@
 
 已实现控制器、宿主安装工具、受限网络配置、VM 模板制作、guest 启动程序、版本锁和 CI 迁移代码。源码位于仓库 `ops/self_hosted_runner/`，部署副本位于 `/data/lzq/github-runner/control/`。本文件同时保存为 `/data/lzq/github-runner/PLAN.md`。
 
+**2026-11-18 新模板已部署，CI #306 定向复验后全绿。** 管理员完成统一维护，新模板 `base-69909bf9c1034ce07e6c5d524b850355e41bd6ab63bdf05825ce93476ff2a03d.qcow2` 于北京时间 15:49:23 封存，`apt_quiesce`、smoke 和 seal 均通过，五个运行时核心文件与源码/交付包哈希一致。runner126 使用新 VM 完成 DFT 重跑：16:01:53—16:05:56，282 项测试全通过（30.01 秒），锁定依赖安装、pip check、124,767,101 字节缓存恢复及所有清理步骤成功，无关闭信号或恢复超时。ci-gate 于 16:06:05 成功；[run44220723057 attempt2](https://github.com/lzq390/ZhijuPoly/actions/runs/44220723057) 合计 22 success、2 个 PR 发布任务 skipped，20 个本地 job 均成功且使用不同 runner 身份。19 项沿用首轮成功结果，仅 DFT 由新模板重新执行，不能据此称全部 job 都已在新模板上重跑。宿主 cgroup 采样峰值约 5.244 GiB、OOM 事件为 0；guest OOM 不可见，未记为 0。旧 SIGTERM 的发起者仍未证实。
+
+DFT 使用的 VM 已退出，控制器已补充唯一的新 runner127/VM `facf7db019744f49913257fb35ff128a`，GitHub online、busy=false，控制器与代理 active、NRestarts0；回收和补机已实查。
+
+**2026-11-18 CI #306 首轮：19/20 个本地任务通过，DFT 被 guest 服务停止中断。** [run44220723057](https://github.com/lzq390/ZhijuPoly/actions/runs/44220723057) 使用 head `7aea83b`，脚本、前端、MCP 三个旧阻断均已通过；Production 0005 于北京时间 14:30:47—14:32:08 成功执行，当前无剩余排队任务。DFT 在 Python 安装完成、pip 缓存恢复期间收到 SIGTERM，依赖安装与测试尚未开始；ci-gate 明确只汇总该项失败。
+
+管理员导出的同一宿主时间线显示：14:26:26 已收到 guest bootstrap SIGTERM/服务停止诊断，14:27:12 控制器才以 `github_job_completed` 请求回收，14:29:12 才终止 QEMU。可排除控制器正常回收作为最初中断原因；guest OOM 计数为 0，QEMU 内存峰约 4.57 GiB，未触发任务或宿主期限。服务停止发起者仍未知，旧 guest journal 已随增量盘删除。APT 后台升级当时处于 activating，现有模板未禁用相关定时器，属于候选路径而非已证实根因。
+
+本次修复将一次性 guest 的后台 APT 更新集中到模板维护阶段：早期阻止自动启动，有界等待已有事务结束，并在 smoke 中验证自动更新策略。显式 `apt-get update/install` 继续可用。新增限量服务事务诊断，只留存固定服务、结构化事件分类和单调时间，不保留原始 journal 或凭据。管理员已通过统一维护入口重新安装程序、重建模板并完成上述 DFT/gate 定向复验；交付代码和离线检查不能代替其他尚未执行的故障场景验收。
+
 **2026-11-18 CI #290 分析与修复。** [run44045595151](https://github.com/lzq390/ZhijuPoly/actions/runs/44045595151) 的20个本地任务为17成功、1失败、2取消，ci-gate汇总这三个阻断项。三个Backend分片全部通过，其中shard1用时56分43秒，75分钟预算与pip缓存继续保留。script-tests的两处旧测试使用真实runner的`_diag`目录，触发新的清理保护；本次只隔离测试夹具的RUNNER/RUNTIME，并保留运行时保护检查。frontend的2147项Vitest通过，最后账户UI四例也输出通过，但收尾前触发25分钟总期限；该job改为35分钟并同步精确policy，验证内容与npm缓存保持原样。
 
 MCP在setup-python阶段取消，实际运行17分14秒，小于20分钟上限；缓存恢复超时是已知警告，取消发起源仍不明。该job日志在GitHub缺失；新VM摘要显示runner退出0、service成功、全局及unit OOM计数均0，未见宿主提前杀VM的证据。本次不将它归为20分钟超时，不改变其缓存或期限，新一轮完整CI继续复验并保留诊断。上述修复不改变guest运行时代码，无需重装宿主组件或重建模板；完整验收结果以后续新run为准。
@@ -213,6 +223,10 @@ VM 启动前显示串口日志完整路径；guest 会通过事件通道显示 `
 安装器与控制器/模板更新共享全局锁，下载中也拒绝重装，避免安装重启代理而中断传输。需要更新程序时，先等当前命令结束或在其终端正常 Ctrl+C，再重新安装；控制器的 runtime directory 保留到重启，防止退出时移除其他操作仍在使用的锁。
 
 模板预装系统 Python、Git、ShellCheck、PostgreSQL 16 客户端、Docker/Buildx/Compose 及官方 Chromium 系统库、字体与工具。保留签名 APT 索引，每台 VM 的 apt update 仍重新校验发行信息；不预装浏览器二进制。Compose 与三个 Docker 基础包同由官方签名 APT 元数据和 SHA256 锁定，安装后 hold；smoke 检查 Compose CLI、网络隔离和 hello-world 拉取运行。Python 3.11、Node 22、Go 1.24 仍由 workflow setup actions 安装。guest 无应用依赖、注册身份或跨 job 可写缓存。模板构建先执行不含注册材料的 smoke 检查，失败不封存。源码更新后要重新执行安装器快照再更新模板；修改 `control/` 不会悄悄改变 root 服务。
+
+一次性 guest 的 `apt-daily`、`apt-daily-upgrade` 两组 timer/service 永久 mask，APT Periodic 关闭。只停止 timer，不杀已开始的升级或删除锁；`apt_quiesce` 阶段最多等待 300 秒让既有事务结束，控制台每 30 秒记录等待进度，超时拒绝构建。封存前删除两份固定的持久 timer 时间戳；不修改宿主自动更新配置。`needrestart` 在 guest 内采用 list-only，不在 job 的显式 APT 安装后自动重启 runner 依赖服务；包维护脚本的必要启动不受该策略阻止。smoke 验证有效 APT 配置、永久 mask/空闲状态、真实锁，以及 Perl 合并后的 needrestart 策略。更新云镜像、系统依赖和工具时统一维护、重建并验收模板。
+
+服务退出诊断在注册清理后启用，最多读取本次 boot 的 64 条/64 KiB 固定 journal 元数据，过滤注册前事件，输出最多 16 条固定服务/事务分类和单调时间。未知事务保持 unknown；`needrestart_observed` 仅表示相关进程有记录，不证明其发送了信号。查询与原有状态检查共用约 2 秒预算，失败仍保留原有退出诊断；不读取 MESSAGE、环境或 runner `_diag`，也不将 guest 提示用作任务完成依据。普通 job 的完整 guest journal 仍不保留。
 
 ### 4. 配置 App 后启用控制器
 

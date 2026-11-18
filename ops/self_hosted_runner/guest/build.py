@@ -32,7 +32,7 @@ CHROMIUM_SYSTEM_PACKAGES = (
     "libnss3", "libpango-1.0-0", "libx11-6", "libxcb1", "libxcomposite1",
     "libxdamage1", "libxext6", "libxfixes3", "libxkbcommon0", "libxrandr2",
 )
-STAGES = frozenset({"preflight", "apt_update", "apt_dependencies", "docker_packages",
+STAGES = frozenset({"preflight", "apt_quiesce", "apt_update", "apt_dependencies", "docker_packages",
                     "buildx_download", "runner_download", "runner_dependencies",
                     "guest_configuration", "docker_start", "smoke", "seal"})
 CURRENT_STAGE = "preflight"
@@ -209,6 +209,19 @@ def main() -> None:
         raise RuntimeError("Ubuntu 24.04 is required")
     from bootstrap import runner_account
     runner_account()
+    from smoke import (BACKGROUND_APT_TIMERS, BACKGROUND_APT_UNITS, APT_PERIODIC_CONFIG,
+                       APT_PERIODIC_POLICY, NEEDRESTART_CONFIG, NEEDRESTART_POLICY,
+                       check_background_updates)
+    stage("apt_quiesce")
+    write(APT_PERIODIC_CONFIG, APT_PERIODIC_POLICY)
+    # Only needrestart's optional automatic service restarts are deferred;
+    # package maintainer scripts may still start services required by CI tools.
+    write(NEEDRESTART_CONFIG, NEEDRESTART_POLICY)
+    # Mask future activation first. Stop only timers: never interrupt an
+    # already running upgrade/dpkg transaction from the initial cloud image.
+    run("systemctl", "mask", *BACKGROUND_APT_UNITS)
+    run("systemctl", "stop", *BACKGROUND_APT_TIMERS)
+    check_background_updates(wait_seconds=300)
     CONFIG.chmod(0o755)
     lock = json.loads((CONFIG / "software-lock.json").read_text())
     env_lines = []
@@ -283,6 +296,9 @@ def main() -> None:
         if (Path("/opt/actions-runner") / filename).exists():
             raise RuntimeError("template contains an already registered runner")
     run("apt-get", "clean")
+    check_background_updates()
+    for timer in BACKGROUND_APT_TIMERS:
+        (Path("/var/lib/systemd/timers") / ("stamp-" + timer)).unlink(missing_ok=True)
     # Keep signed APT indexes so each fresh VM revalidates existing metadata
     # instead of downloading every index again. apt-get clean removes .debs;
     # all job writes still live only in that VM's disposable overlay.

@@ -35,15 +35,25 @@ PROXY_HEALTH_USER_AGENT = "nexpoly-runner-health/1.0"
 MAX_GUEST_DIAGNOSTICS = 64
 GUEST_UNIT_STATES = frozenset({"active", "inactive", "activating", "deactivating", "failed", "reloading", "unknown"})
 GUEST_DIAGNOSTIC_ENUMS = {
-    "reason": frozenset({"runner_started", "runner_exit", "bootstrap_signal", "unit_stop"}),
+    "reason": frozenset({"runner_started", "runner_exit", "bootstrap_signal", "unit_stop", "unit_history"}),
     **{key: GUEST_UNIT_STATES for key in (
         "docker_state", "user_manager_state", "cloud_final_state", "apt_daily_state",
         "apt_upgrade_state", "unattended_upgrades_state")},
     "system_state": frozenset({"initializing", "starting", "running", "degraded", "maintenance", "stopping", "offline", "unknown"}),
     "service_exit_kind": frozenset({"exited", "killed", "dumped", "unknown"}),
     "service_result": frozenset({"success", "resources", "timeout", "exit-code", "signal", "core-dump", "watchdog", "start-limit-hit", "oom-kill", "exec-condition", "protocol", "unknown"}),
+    "history_status": frozenset({"ok", "timeout", "truncated", "unavailable", "baseline_unavailable"}),
+    "history_source": frozenset({"systemd", "needrestart"}),
+    "source_unit": frozenset({"bootstrap", "docker", "user_manager", "cloud_final", "apt_daily",
+                               "apt_upgrade", "unattended_upgrades", "shutdown", "poweroff", "reboot", "halt", "unknown"}),
+    "unit_transition": frozenset({"starting", "started", "stopping", "stopped", "failed", "needrestart_observed"}),
+    "systemd_job_type": frozenset({"start", "stop", "reload", "restart", "try-restart",
+                                    "reload-or-start", "try-reload", "verify-active", "nop", "unknown"}),
+    "systemd_job_result": frozenset({"done", "canceled", "timeout", "failed", "dependency", "skipped",
+                                      "invalid", "assert", "unsupported", "collected", "once", "frozen", "unknown"}),
 }
 GUEST_DIAGNOSTIC_INTS = {"exit_code": (-255, 255), "signal": (1, 64),
+                         "history_event_count": (0, 16), "systemd_job_id": (0, 2 ** 63 - 1),
                          **{key: (0, 2 ** 63 - 1) for key in (
                              "oom_kill_count", "oom_kill_delta", "unit_oom_kill_count",
                              "unit_oom_kill_delta", "uptime_ms")}}
@@ -67,6 +77,15 @@ def guest_diagnostic(event: dict) -> dict | None:
             return None
     for key, (lower, upper) in GUEST_DIAGNOSTIC_INTS.items():
         if key in event and (type(event[key]) is not int or not lower <= event[key] <= upper):
+            return None
+    if event["reason"] == "unit_history":
+        if not {"history_source", "source_unit", "unit_transition", "uptime_ms"} <= set(event):
+            return None
+        if event["history_source"] == "systemd":
+            if event["source_unit"] == "unknown" or event["unit_transition"] == "needrestart_observed":
+                return None
+        elif (event["unit_transition"] != "needrestart_observed"
+              or {"systemd_job_id", "systemd_job_type", "systemd_job_result"} & set(event)):
             return None
     return dict(event)
 

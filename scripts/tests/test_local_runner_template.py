@@ -84,7 +84,11 @@ class RunnerTemplateTests(unittest.TestCase):
             data = json.loads(user.read_text().split("\n", 1)[1])
             self.assertEqual(json.loads(meta.read_text())["instance-id"], "abc123")
             self.assertFalse(data["ssh_pwauth"])
-            self.assertEqual(data["bootcmd"], [["cloud-init-per", "once", "nexpoly-runner-group", "groupadd", "--gid", "1001", "runner"]])
+            self.assertEqual(data["bootcmd"], [
+                ["systemctl", "mask", "apt-daily.timer", "apt-daily-upgrade.timer", "apt-daily.service", "apt-daily-upgrade.service"],
+                ["systemctl", "stop", "apt-daily.timer", "apt-daily-upgrade.timer"],
+                ["cloud-init-per", "once", "nexpoly-runner-group", "groupadd", "--gid", "1001", "runner"],
+            ])
             self.assertEqual(data["users"], [{"name": "runner", "uid": 1001, "primary_group": "runner",
                                               "no_user_group": True, "shell": "/bin/bash", "lock_passwd": True}])
             self.assertEqual(data["runcmd"], [["python3", "/usr/local/lib/nexpoly-ci-runner/build.py"]])
@@ -924,6 +928,7 @@ class GuestSmokeHealthTests(unittest.TestCase):
         opener.open.return_value.__enter__.return_value.status = 200
         build = stack.enter_context(mock.patch.object(smoke.urllib.request, "build_opener", return_value=opener))
         stack.enter_context(mock.patch.object(smoke.Path, "is_file", return_value=True))
+        stack.enter_context(mock.patch.object(smoke, "check_background_updates"))
         stack.enter_context(mock.patch.object(smoke, "check_runtime_tools"))
         stack.enter_context(mock.patch.object(smoke.Path, "read_text", return_value=json.dumps({
             "smoke_image": {"reference": "hello-world@sha256:" + "a" * 64}})))

@@ -46,7 +46,7 @@ DOWNLOAD_CHUNK_BYTES = 256 * 1024
 BUILD_LOG_BYTES = 8 * 1024 ** 2
 BUILD_LOG_COUNT = 32
 BUILD_LOG_MAX_AGE = 7 * 24 * 3600
-BUILD_STAGES = frozenset({"preflight", "apt_update", "apt_dependencies", "docker_packages",
+BUILD_STAGES = frozenset({"preflight", "apt_quiesce", "apt_update", "apt_dependencies", "docker_packages",
                           "buildx_download", "runner_download", "runner_dependencies",
                           "guest_configuration", "docker_start", "smoke", "seal"})
 BUILD_ERROR_KINDS = frozenset({"command_failed", "http_error", "timeout", "network_error",
@@ -432,7 +432,13 @@ def render_seed(lock: dict, output_dir: Path, instance_id: str = "nexpoly-templa
     ])
     # bootcmd precedes users_groups. Pin the primary group as well as the UID;
     # useradd's next free GID need not match an explicitly selected UID.
-    data = {"bootcmd": [["cloud-init-per", "once", "nexpoly-runner-group", "groupadd", "--gid", "1001", "runner"]],
+    # Persistent cloud-image timers can fire before runcmd. Mask future service
+    # activation before stopping only the timers; build.py waits for any already
+    # running package transaction to finish, and never kills an active upgrade.
+    timers = ["apt-daily.timer", "apt-daily-upgrade.timer"]
+    data = {"bootcmd": [["systemctl", "mask", *timers, "apt-daily.service", "apt-daily-upgrade.service"],
+                        ["systemctl", "stop", *timers],
+                        ["cloud-init-per", "once", "nexpoly-runner-group", "groupadd", "--gid", "1001", "runner"]],
             "users": [{"name": "runner", "uid": 1001, "primary_group": "runner",
                        "no_user_group": True, "shell": "/bin/bash", "lock_passwd": True}],
             "ssh_pwauth": False, "disable_root": True,
@@ -644,7 +650,8 @@ def build_template(config: object, lock_path: Path = DEFAULT_LOCK) -> dict:
                             if event.get("event") == "template_stage":
                                 stage = event.get("stage")
                                 if isinstance(stage, str) and stage in BUILD_STAGES and stage != last_stage:
-                                    print(f"Guest template stage: {stage}", file=sys.stderr, flush=True)
+                                    description = " (wait up to 300 seconds for existing APT activity; do not interrupt dpkg)" if stage == "apt_quiesce" else ""
+                                    print(f"Guest template stage: {stage}{description}", file=sys.stderr, flush=True)
                                     last_stage = stage
                             if event.get("event") == "template_download":
                                 progress = guest_download_progress(event)
