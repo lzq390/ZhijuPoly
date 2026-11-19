@@ -95,8 +95,96 @@ def container(stack, *args):
     return cid
 
 
+ADAPTER_IMAGES = {
+    "polytao": "sha256:72eca12668d3ee9d03969d2711c750067431c26c31f95811eb9ec5c3ec7d862d",
+    "retrosynthesis": "sha256:afc71c6ba92bb8595d177f04c33fb01dcf26ad9d40f9f6c19dc67c536e0fa5ed",
+}
+
+
+def start_adapters(stack, state, transport, api_socket, cred, deploy, verify):
+    endpoints, evidence = {}, {}
+    for name, image in ADAPTER_IMAGES.items():
+        ipc = transport / ("m3-" + name)
+        ipc.mkdir(mode=0o700)
+        journal = state / "m3-adapters" / name
+        journal.mkdir(mode=0o700, parents=True, exist_ok=True)
+        ingress = cred / ("m3-" + name + "-ingress")
+        secret(ingress)
+        verification = []
+        if verify:
+            evidence[name] = str(ipc / "retry.json")
+            verification = [
+                "-e",
+                "M3_ADAPTER_VERIFY_DROP_RECEIPT=1",
+                "-e",
+                "M3_ADAPTER_VERIFY_EVIDENCE=/ipc/retry.json",
+                "-e",
+                "M3_ADAPTER_SUBMITS_PER_MINUTE=1",
+            ]
+        cid = container(
+            stack,
+            "--label",
+            "org.nexpoly.m2.deployment=" + deploy,
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--tmpfs",
+            "/tmp:rw,nosuid,size=32m",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
+            "--memory",
+            "384m",
+            "--cpus",
+            "1",
+            *mount(ipc, "/ipc", True),
+            *mount(journal, "/journal", True),
+            *mount(api_socket, "/authority"),
+            *mount(ROOT / "backend", "/app/backend"),
+            *mount(ROOT / "task_usage", "/app/task_usage"),
+            *mount(ingress, "/ingress"),
+            *mount(cred / ("m3-" + name + "-service"), "/service"),
+            "-e",
+            "M3_ADAPTER=" + name,
+            "-e",
+            "M3_ADAPTER_INGRESS_FILE=/ingress",
+            "-e",
+            "M3_ADAPTER_AUTHORITY_FILE=/service",
+            "-e",
+            "M3_AUTHORITY_SOCKET=/authority/auth.sock",
+            "-e",
+            "M3_ADAPTER_STATE_DIR=/journal",
+            "-e",
+            "PYTHONPATH=/app/backend:/app",
+            "-e",
+            "PYTHONDONTWRITEBYTECODE=1",
+            *verification,
+            "--entrypoint",
+            "python",
+            image,
+            "-m",
+            "uvicorn",
+            "app.auth.openscience_m3_adapters:create_app",
+            "--factory",
+            "--uds",
+            "/ipc/adapter.sock",
+            "--no-access-log",
+            "--no-proxy-headers",
+        )
+
+        def ready():
+            if run("docker", "inspect", "--format", "{{.State.Running}}", cid) != "true":
+                raise RuntimeError(f"Private {name} adapter exited during startup")
+            return (ipc / "adapter.sock").is_socket()
+
+        wait(ready, name + " scoped adapter")
+        endpoints[name] = {"socket": str(ipc / "adapter.sock"), "ingress_file": str(ingress)}
+    return endpoints, evidence
+
+
 def run_stack(args, stack):
     local_engine()
+    if args.m3_adapters and not args.m3_gateway_image:
+        raise ValueError("--m3-adapters requires the reviewed --m3-gateway-image")
     if args.verify:
         if args.verify.exists():
             raise FileExistsError(f"Choose a new verification output: {args.verify}")
@@ -271,7 +359,7 @@ def run_stack(args, stack):
         "--tmpfs",
         "/tmp:rw,nosuid,size=128m",
         "--memory",
-        "2g",
+        "6g" if args.m3_adapters else "2g",
         "--cpus",
         "2",
         "--user",
@@ -326,6 +414,12 @@ def run_stack(args, stack):
             USAGE_METERING_ENABLED="true",
         )
         policy = ROOT / "config/examples/entitlements-example-v1.json"
+        if args.m3_adapters:
+            policy_data = json.loads(policy.read_bytes())
+            policy_data["version"] = "dev-m1-adapters-v1"
+            policy_data["tiers"]["member"]["pools"].update(generation=50, chemistry_small=50)
+            policy = transport / "adapter-policy.json"
+            file(policy, json.dumps(policy_data), 0o444)
         common += mount(policy, "/m3policy.json")
         artifacts = state / "m3-artifacts"
         artifacts.mkdir(mode=0o700, exist_ok=True)
@@ -335,6 +429,28 @@ def run_stack(args, stack):
             *mount(ROOT / "workers/monomer_dft_worker", "/app/workers/monomer_dft_worker"),
             *mount(artifacts, "/m3artifacts", True),
         ]
+        if args.m3_adapters:
+            env.update(
+                OPENSCIENCE_M3_ADAPTERS_ENABLED="1",
+                OMP_NUM_THREADS="1",
+                MKL_NUM_THREADS="1",
+                OPENBLAS_NUM_THREADS="1",
+                HF_HUB_OFFLINE="1",
+                CUDA_VISIBLE_DEVICES="",
+            )
+            for name in ADAPTER_IMAGES:
+                adapter_key = cred / ("m3-" + name + "-service")
+                secret(adapter_key)
+                dest = "/m3-" + name + "-key"
+                m3_api.extend(mount(adapter_key, dest))
+                env["M3_" + name.upper() + "_AUTHORITY_FILE"] = dest
+            for name in ("polytao", "reactiont5-retrosynthesis"):
+                m3_api.extend(mount(model.parent / name, "/m3adapter-models/" + name))
+            m3_api.extend(
+                mount(
+                    model.parent.parent / "ASSET-MANIFEST.json", "/m3adapter-models/ASSET-MANIFEST.json"
+                )
+            )
         overlay = transport / "m3"
         overlay.mkdir()
         generations = overlay / "generations"
@@ -342,7 +458,7 @@ def run_stack(args, stack):
         generations.chmod(0o755)
         m3_api += mount(generations, "/m3generations")
         runpy.run_path(str(ROOT / "ops/openscience-m3-dev/workspace.py"))["prepare"](
-            overlay / "code", args.registry
+            overlay / "code", args.registry, args.m3_adapters
         )
         manager_env["OPENSCIENCE_M3_OVERLAY"] = str(overlay)
         peer_dir = transport / "gateway"
@@ -421,7 +537,11 @@ def run_stack(args, stack):
             args.m3_gateway_image,
         )
         wait(lambda: (peer_dir / "gateway.sock").is_socket(), "isolated capability gateway")
-        if args.verify:
+        if args.m3_adapters:
+            tool_config["adapters"], adapter_evidence = start_adapters(
+                stack, state, transport, api_socket, cred, deploy, args.verify
+            )
+        if args.verify and not args.m3_adapters:
             retry_evidence = transport / "retry.json"
             replay = transport / "retry.sock"
             launch(
@@ -623,6 +743,14 @@ http {{
     }
     if args.m3_gateway_image:
         ready.update(gateway=gateway, gateway_image=args.m3_gateway_image)
+        if args.m3_adapters:
+            ready.update(
+                adapter_images=ADAPTER_IMAGES,
+                model_manifest_sha256=hashlib.sha256(
+                    (model.parent.parent / "ASSET-MANIFEST.json").read_bytes()
+                ).hexdigest(),
+                adapter_retry_evidence=adapter_evidence,
+            )
         if retry_evidence:
             ready["retry_evidence"] = str(retry_evidence)
     info = state / "running.json"
@@ -638,7 +766,9 @@ http {{
                     ROOT
                     / "scripts/ci"
                     / (
-                        "verify_openscience_m3.mjs"
+                        "verify_openscience_m3_adapters.mjs"
+                        if args.m3_adapters
+                        else "verify_openscience_m3.mjs"
                         if args.m3_gateway_image
                         else "verify_openscience_m2_browser.mjs"
                     )
@@ -671,6 +801,11 @@ def main():
         default=Path(
             "/data/lzq/nexpoly-assets/releases/ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2/model/rf_Glass transition temperature_exp.pkl"
         ),
+    )
+    parser.add_argument(
+        "--m3-adapters",
+        action="store_true",
+        help="Enable private PolyTAO and retrosynthesis MCP adapters",
     )
     args = parser.parse_args()
     os.umask(0o077)

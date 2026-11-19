@@ -53,6 +53,10 @@ def workspace_extensions(dsn):
             "AND attname='workspace_generation' AND NOT attisdropped",
             "0004_workspace_generation.sql",
         ),
+        (
+            "SELECT to_regclass('openscience_m3.operations_draft')",
+            "0005_adapter_scopes.sql",
+        ),
     )
     with psycopg.connect(dsn, autocommit=True) as conn:
         # Each extension script owns its transaction. This session lock spans them

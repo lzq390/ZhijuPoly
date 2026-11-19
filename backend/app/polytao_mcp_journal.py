@@ -265,6 +265,19 @@ class SubmissionJournal:
                        (state, job_id, error_code, utc_now(), draft_id))
             return self._find_draft(db, client_id, account_uuid, conversation_id, draft_id)
 
+    def recover_submission(self, client_id: str, account_uuid: str, key: str, *,
+                           job_id: str, job_status: str) -> None:
+        """Repair an uncertain submission using its native, owner-scoped receipt."""
+        with self._transaction() as db:
+            cursor = db.execute(
+                """UPDATE submissions SET state='accepted', job_id=?, job_status=?, error_code=NULL, updated_at=?
+                   WHERE client_id=? AND account_uuid=? AND idempotency_key=?
+                     AND (state IN ('dispatching', 'outcome_unknown') OR (state='accepted' AND job_id=?))""",
+                (job_id, job_status, utc_now(), client_id, account_uuid, key, job_id),
+            )
+            if cursor.rowcount != 1:
+                raise JournalError("No matching submission can recover this receipt")
+
     def close(self) -> None:
         if self.lock_fd is not None:
             os.close(self.lock_fd)

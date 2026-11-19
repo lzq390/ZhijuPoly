@@ -41,7 +41,7 @@ class WorkspaceAuthenticationMiddleware(AuthenticationMiddleware):
             and (
                 scope["path"] in INTERNAL_ROUTES
                 or (
-                    hasattr(scope["app"].state, "openscience_m3") and scope["path"] in {m3.ISSUE, m3.EXCHANGE}
+                    hasattr(scope["app"].state, "openscience_m3") and scope["path"] in {m3.ISSUE, m3.EXCHANGE, m3.ADAPTER_CONTEXT, m3.ADAPTER_EXCHANGE}
                 )
             )
             and scope.get("client") is None

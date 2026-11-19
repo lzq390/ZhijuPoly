@@ -1,6 +1,7 @@
 """Native NexPoly routes for the isolated OpenScience six-tool development pilot."""
 
 from contextlib import asynccontextmanager
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -85,3 +86,8 @@ def install_native(app: FastAPI) -> None:
     }
     for router in (monomer_polymerization.router, monomer_dft.router):
         app.router.routes.extend(route for route in router.routes if route.endpoint in allowed)
+
+    if os.environ.get("OPENSCIENCE_M3_ADAPTERS_ENABLED") == "1":
+        from .openscience_m3_adapter_native import install_adapter_native
+
+        install_adapter_native(app)

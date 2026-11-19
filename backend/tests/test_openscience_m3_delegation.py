@@ -41,9 +41,19 @@ def test_real_login_delegation_scope_replay_expiration_and_logout(monkeypatch, t
     for user in ("test-user-a", "test-user-b"):
         (tmp_path / user).write_text("a" * 64)
 
+    monkeypatch.setenv("OPENSCIENCE_M3_ADAPTERS_ENABLED", "1")
+    service_headers = {}
+    for name in ("polytao", "retrosynthesis"):
+        secret = uuid4().hex
+        credential = tmp_path / (name + "-service")
+        credential.write_text(secret)
+        monkeypatch.setenv("M3_" + name.upper() + "_AUTHORITY_FILE", str(credential))
+        service_headers[name] = {"Authorization": "Bearer " + secret}
+
     # The probe exposes the native middleware's canonical owner and idempotency key.
     # Separate E2E exercises the six real routes, workers and entitlement accounting.
     def install_probe(app):
+        @app.post("/api/v1/conditional-generation/polytao/jobs")
         @app.post("/api/v1/predict")
         async def predict(request: Request):
             identity = current_identity()
@@ -99,7 +109,9 @@ def test_real_login_delegation_scope_replay_expiration_and_logout(monkeypatch, t
                     "X-CSRF-Token": session["csrf_token"],
                     "X-Session-Context": session["session_id"],
                 }
-                ticket = (await client.post("/api/v1/openscience/workspace-ticket", headers=private)).json()
+                ticket = (
+                    await client.post("/api/v1/openscience/workspace-ticket", headers=private)
+                ).json()
                 handoff = await trusted.post(
                     "/internal/openscience/tickets/redeem",
                     headers=router,
@@ -114,7 +126,8 @@ def test_real_login_delegation_scope_replay_expiration_and_logout(monkeypatch, t
                 return handoff.json()["agent_session"], private, session
 
             token_a, private_a, user_a = await sign("a", a)
-            token_b, private_b, _ = await sign("b", b)
+            token_b, private_b, user_b = await sign("b", b)
+            user_b_id = user_b["user"]["id"]
             first = {
                 "agent_session": token_a,
                 "agent_origin": agent,
@@ -131,6 +144,72 @@ def test_real_login_delegation_scope_replay_expiration_and_logout(monkeypatch, t
             def issue(args):
                 return trusted.post(ISSUE, headers=router, json=args)
 
+            # Every hop independently authenticates the calling adapter. The last hop
+            # additionally checks the login on the prepare call and the exact draft revision.
+            prepare = {**first, "tool": "prepare_polytao_generation", "operation_id": str(uuid4())}
+            assert (await issue(prepare)).status_code == 200
+            draft_id = "ptd_" + uuid4().hex
+            form = {
+                **first,
+                "channel": "ui",
+                "confirmed": True,
+                "operation_id": str(uuid4()),
+                "tool": "confirm_polytao_generation",
+                "draft_id": draft_id,
+                "revision": 2,
+            }
+            assert (await issue({**form, "channel": "model"})).status_code == 403
+            op_token = (await issue(form)).json()["operation_token"]
+            context = {"tool": form["tool"], "arguments_sha256": sha, "operation_token": op_token}
+            poly, retro = service_headers["polytao"], service_headers["retrosynthesis"]
+            assert (
+                await trusted.post(delegation.ADAPTER_CONTEXT, headers=retro, json=context)
+            ).status_code == 403
+            assert (await trusted.post(delegation.ADAPTER_CONTEXT, headers=poly, json=context)).json()[
+                "login_id"
+            ] == user_a["session_id"]
+            native_route = "/api/v1/conditional-generation/polytao/jobs"
+            stable = delegation.adapters.draft_key(user_a["user"]["id"], draft_id, 2)
+            exchange_form = {
+                **context,
+                "method": "POST",
+                "path": native_route,
+                "request_sha256": sha,
+                "idempotency_key": stable,
+            }
+
+            async def exchange_adapter(data, headers=poly):
+                return await trusted.post(delegation.ADAPTER_EXCHANGE, headers=headers, json=data)
+
+            assert (await exchange_adapter(exchange_form, retro)).status_code == 403
+            assert (
+                await exchange_adapter({**exchange_form, "idempotency_key": "a" * 64})
+            ).status_code == 403
+            wrong_login = (
+                await issue({**form, "agent_session": token_b, "operation_id": str(uuid4())})
+            ).json()["operation_token"]
+            assert (
+                await exchange_adapter(
+                    {
+                        **exchange_form,
+                        "operation_token": wrong_login,
+                        "idempotency_key": delegation.adapters.draft_key(user_b_id, draft_id, 2),
+                    }
+                )
+            ).status_code == 403
+            native_token = (await exchange_adapter(exchange_form)).json()["access_token"]
+
+            async def use_adapter(headers):
+                return await trusted.post(
+                    native_route,
+                    headers={**headers, "X-OpenScience-Delegation": native_token},
+                    content=payload,
+                )
+
+            assert (await use_adapter(retro)).status_code == 403
+            assert (await use_adapter(gateway)).status_code == 403
+            assert (await use_adapter(poly)).json()["key"] == stable
+            assert (await use_adapter(poly)).status_code == 401
             assert (await trusted.post(ISSUE, headers=gateway, json=first)).status_code == 403
             assert (await issue({k: v for k, v in first.items() if k != "turn_id"})).status_code == 422
             assert (await issue({**first, "tool": "dft_job_submit"})).status_code == 403

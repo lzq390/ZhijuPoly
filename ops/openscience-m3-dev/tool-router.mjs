@@ -4,6 +4,8 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { chmod, readFile } from "node:fs/promises";
 import { once } from "node:events";
 
+import { connectAdapters, modelAdapter } from "./adapter-router.mjs";
+
 const names = new Set([
   "predict_polymer_properties",
   "polymerize_monomers",
@@ -52,6 +54,7 @@ async function unix(socketPath, method, path, headers, payload) {
 }
 export async function toolRouter(config, auth, validate) {
   const ingress = (await readFile(config.ingress_file, "utf8")).trim();
+  const adapters = config.adapters ? await connectAdapters(config.adapters, unix) : null;
   const turns = new Map(),
     approvals = new Map(),
     servers = [];
@@ -105,6 +108,18 @@ export async function toolRouter(config, auth, validate) {
     if (!t || t.page.owner !== user) throw deny(401, "workspace_turn_required");
     const data = JSON.parse(await bytes(req, 16384));
     await original(t);
+    if (req.url === "/form") {
+      const form = t.form;
+      if (
+        !adapters ||
+        !form ||
+        data.tool !== form.tool ||
+        JSON.stringify(ordered(data.arguments)) !== JSON.stringify(ordered(form.args))
+      )
+        throw deny(403, "form_action_mismatch");
+      return adapterCall(t, form, "ui");
+    }
+    if (t.form) throw deny(403, "form_audience_mismatch");
     if (
       data.session !== t.session ||
       !/^msg_[a-zA-Z0-9_-]{1,120}$/.test(data.turn) ||
@@ -120,11 +135,12 @@ export async function toolRouter(config, auth, validate) {
         result.tools.some((x) => !names.has(x.name))
       )
         throw deny(502, "unexpected_tool_catalog");
+      if (adapters) result.tools.push(...(await adapters.catalog()));
       return result;
     }
     if (
       !["/prepare", "/call"].includes(req.url) ||
-      !names.has(data.tool) ||
+      (!names.has(data.tool) && !(adapters && modelAdapter(data.tool))) ||
       !/^[A-Za-z0-9_-]{1,128}$/.test(data.call) ||
       !data.arguments ||
       Array.isArray(data.arguments) ||
@@ -138,6 +154,17 @@ export async function toolRouter(config, auth, validate) {
       op = { id: randomUUID(), tool: data.tool, hash, turn: t, call: data.call, confirmed: false };
       t.calls.set(data.call, op);
       if (data.tool === "dft_job_submit") approvals.set(op.id, op);
+    }
+    const adapter = adapters && modelAdapter(data.tool);
+    if (adapter) {
+      if (req.url !== "/call") throw deny(403, "model_cannot_confirm");
+      if (data.arguments.conversation_id !== undefined && data.arguments.conversation_id !== t.session)
+        throw deny(403, "conversation_mismatch");
+      return adapterCall(
+        t,
+        { name: adapter, tool: data.tool, args: data.arguments, turn: data.turn, call: data.call, id: op.id },
+        "model",
+      );
     }
     if (req.url === "/prepare") return { operation_id: op.id };
     if (data.tool === "dft_job_submit" && !op.confirmed) throw deny(403, "human_confirmation_required");
@@ -162,6 +189,45 @@ export async function toolRouter(config, auth, validate) {
     await original(t);
     if (Date.now() >= grant.valid_until * 1000) throw deny(401, "tool_lease_expired");
     return result;
+  }
+  async function adapterCall(t, op, channel) {
+    const canonical = JSON.stringify(ordered(op.args));
+    const grant = await auth("delegations", {
+      agent_session: t.page.grant,
+      operation_id: op.id,
+      tool: op.tool,
+      arguments_sha256: sha(canonical),
+      workspace_session: t.session,
+      turn_id: op.turn,
+      call_id: op.call,
+      confirmed: op.confirmed ?? false,
+      channel,
+      workspace_generation: t.credential,
+      turn_expires_ms: t.until,
+      draft_id: op.draft_id ?? op.args.draft_id,
+      revision: op.revision ?? op.args.revision,
+      job_id: op.args.job_id,
+    });
+    const result = await adapters.rpc(
+      op.name,
+      "tools/call",
+      { name: op.tool, arguments: op.args, _meta: { "nexpoly/arguments-json": canonical } },
+      grant.operation_token,
+    );
+    await original(t);
+    if (Date.now() >= grant.valid_until * 1000) throw deny(401, "tool_lease_expired");
+    return result;
+  }
+  async function form(page, name, payload, credential) {
+    const record = await adapters.formEvidence(name, payload, page, credential);
+    const handle = begin(page, record.session, credential);
+    const t = turns.get(handle);
+    t.form = { ...record, id: randomUUID() };
+    t.until = Math.min(t.until, Date.now() + 30_000);
+    return {
+      "x-nexpoly-form-action": handle,
+      "x-nexpoly-tool-turn": begin(page, record.session, credential),
+    };
   }
   // The native permission record comes from the scoped instance, including the saved
   // operation ID and actual (server generated) session and tool call association.
@@ -216,6 +282,7 @@ export async function toolRouter(config, auth, validate) {
   }
   return {
     begin,
+    form,
     confirm,
     close() {
       for (const s of servers) {

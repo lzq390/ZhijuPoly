@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import ipaddress
+import os
 from pathlib import Path
 import re
 import secrets
@@ -18,10 +19,13 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
+from app.auth import openscience_adapter_scopes as adapters
 from app.auth.context import Identity, user_context
 
 ISSUE = "/internal/openscience/delegations"
 EXCHANGE = ISSUE + "/exchange"
+ADAPTER_CONTEXT = "/internal/openscience/adapter-context"
+ADAPTER_EXCHANGE = "/internal/openscience/adapter-exchange"
 DFT = "/api/v1/monomer-dft/jobs"
 TOKEN_PATTERN = r"^[A-Za-z0-9_-]{43}$"
 Token = Annotated[str, Field(pattern=TOKEN_PATTERN, min_length=43, max_length=43)]
@@ -53,9 +57,14 @@ class Operation(BaseModel):
     agent_session: Token
     agent_origin: str = Field(max_length=256)
     operation_id: UUID
-    tool: Tool
+    tool: Tool | adapters.AdapterTool
     arguments_sha256: Digest
-    job_id: UUID | None = None
+    job_id: (
+        Annotated[str, Field(pattern=r"^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$", max_length=128)] | None
+    ) = None
+    channel: Literal["model", "ui"] = "model"
+    draft_id: Annotated[str, Field(pattern=r"^(ptd|rtd)_[0-9a-f]{32}$")] | None = None
+    revision: int | None = Field(None, strict=True, ge=1, le=2147483647)
     confirmed: StrictBool = False
     workspace_session: str = Field(pattern=r"^ses_[A-Za-z0-9_-]{1,120}$")
     workspace_generation: Digest
@@ -64,15 +73,19 @@ class Operation(BaseModel):
     call_id: Reference
 
 
-class Exchange(BaseModel):
+class AdapterContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation_token: Token
-    tool: Tool
+    tool: Tool | adapters.AdapterTool
     arguments_sha256: Digest
+
+
+class Exchange(AdapterContext):
     method: Literal["GET", "POST"]
     path: str = Field(min_length=1, max_length=300)
     query: str = Field(default="", max_length=256)
     request_sha256: Digest
+    idempotency_key: Digest | None = None
 
 
 def token_hash(value: str) -> bytes:
@@ -88,7 +101,8 @@ def allowed_target(tool, job_id, method, path, query):
     }
     if tool in fixed:
         return (method, path) == fixed[tool] and (
-            not query or (tool == "dft_job_list" and re.fullmatch(r"page_size=[0-9]{1,3}", query) is not None)
+            not query
+            or (tool == "dft_job_list" and re.fullmatch(r"page_size=[0-9]{1,3}", query) is not None)
         )
     return (
         tool in {"dft_job_status", "dft_job_result"}
@@ -105,15 +119,23 @@ class Delegations:
         self.auth, self.agent = auth, agent
         self.gateway_secret = b"Bearer " + gateway_secret
         self.inspect_handoff = inspect_handoff
+        self.keys = {"gateway": self.gateway_secret}
+        if os.environ.get("OPENSCIENCE_M3_ADAPTERS_ENABLED") == "1":
+            for name in adapters.BASES:
+                key = Path(os.environ["M3_" + name.upper() + "_AUTHORITY_FILE"]).read_bytes().strip()
+                credential = b"Bearer " + key
+                if len(key) < 32 or credential in self.keys.values():
+                    raise ValueError("Development adapters require distinct service credentials")
+                self.keys[name] = credential
 
-    def gateway_identity(self, headers):
+    def service_identity(self, headers):
         values = headers.getlist("authorization")
-        if (
-            len(values) != 1
-            or not hmac.compare_digest(values[0].encode(), self.gateway_secret)
-            or any(key in headers for key in SECRET_HEADERS)
-        ):
-            raise HTTPException(403, "Gateway service credential required")
+        if len(values) != 1 or any(key in headers for key in SECRET_HEADERS):
+            raise HTTPException(403, "Private service credential required")
+        for name, key in self.keys.items():
+            if hmac.compare_digest(key, values[0].encode()):
+                return name
+        raise HTTPException(403, "Private service credential required")
 
     def current_generation(self, workspace, expected):
         if workspace not in {"test-user-a", "test-user-b"} or not isinstance(expected, str):
@@ -145,7 +167,28 @@ class Delegations:
     def issue(self, body):
         if body.agent_origin != self.agent or (body.tool == "dft_job_submit" and not body.confirmed):
             raise HTTPException(403, "Tool operation was not authorized")
-        if (body.tool in {"dft_job_status", "dft_job_result"}) != (body.job_id is not None):
+        family = adapters.service(body.tool)
+        if family not in self.keys:
+            raise HTTPException(403, "Tool adapter is unavailable")
+        if (
+            body.channel == "ui"
+            and body.tool not in adapters.UI
+            or body.channel == "model"
+            and body.tool in adapters.FORM_ONLY
+        ):
+            raise HTTPException(403, "Tool audience mismatch")
+        if family != "gateway" and body.confirmed != (body.tool in adapters.CONFIRM):
+            raise HTTPException(403, "Trusted form confirmation required")
+        if body.tool in adapters.CONFIRM and (not body.draft_id or not body.revision):
+            raise HTTPException(422, "Expected an exact draft revision")
+        if body.tool in {"dft_job_status", "dft_job_result"}:
+            try:
+                UUID(body.job_id or "")
+            except ValueError:
+                raise HTTPException(422, "Invalid DFT job") from None
+        if (body.tool in {"dft_job_status", "dft_job_result"} | adapters.JOB_READS) != (
+            body.job_id is not None
+        ):
             raise HTTPException(422, "Invalid tool job scope")
         token = secrets.token_urlsafe(32)
         with self.auth.connection() as conn:
@@ -166,13 +209,16 @@ class Delegations:
                 body.call_id,
                 body.workspace_generation,
                 body.turn_expires_ms,
+                body.channel,
+                body.draft_id,
+                body.revision,
             )
             conn.execute(
                 """
                 INSERT INTO openscience_m3.operations
                   (operation_id,environment,owner_id,login_id,workspace_user_id,handoff_id,tool,
-                   arguments_sha256,job_id,confirmed,workspace_session,turn_id,call_id,workspace_generation,turn_expires_ms)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (operation_id) DO NOTHING
+                   arguments_sha256,job_id,confirmed,workspace_session,turn_id,call_id,workspace_generation,turn_expires_ms,channel,draft_id,revision)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (operation_id) DO NOTHING
             """,
                 (
                     body.operation_id,
@@ -185,7 +231,7 @@ class Delegations:
             )
             recorded = conn.execute(
                 """
-                SELECT handoff_id,tool,arguments_sha256,job_id,confirmed,workspace_session,turn_id,call_id,workspace_generation,turn_expires_ms
+                SELECT handoff_id,tool,arguments_sha256,job_id,confirmed,workspace_session,turn_id,call_id,workspace_generation,turn_expires_ms,channel,draft_id,revision
                   FROM openscience_m3.operations WHERE operation_id=%s
             """,
                 (body.operation_id,),
@@ -208,7 +254,8 @@ class Delegations:
     def lookup(self, conn, digest, audience):
         row = conn.execute(
             """
-            SELECT d.*,o.handoff_id,o.tool,o.arguments_sha256,o.job_id,o.owner_id,o.login_id,o.workspace_user_id,o.workspace_generation
+            SELECT d.*,o.handoff_id,o.tool,o.arguments_sha256,o.job_id,o.owner_id,o.login_id,o.workspace_user_id,o.workspace_generation,
+                   o.workspace_session,o.channel,o.confirmed,o.draft_id,o.revision,o.turn_id,o.call_id
               FROM openscience_m3.delegations d JOIN openscience_m3.operations o USING(operation_id)
              WHERE d.token_hash=%s AND d.audience=%s AND d.expires_at>clock_timestamp()
                AND o.turn_expires_ms>extract(epoch FROM clock_timestamp())*1000
@@ -231,21 +278,42 @@ class Delegations:
             raise HTTPException(401, "Delegation expired")
         return row, deadline
 
-    def exchange(self, body):
+    def checked_operation(self, conn, body, service):
+        row, deadline = self.lookup(conn, token_hash(body.operation_token), "capability-gateway")
+        if (
+            row["tool"] != body.tool
+            or row["arguments_sha256"] != body.arguments_sha256
+            or adapters.service(row["tool"]) != service
+        ):
+            raise HTTPException(403, "Tool operation scope mismatch")
+        return row, deadline
+
+    def context(self, body, service):
+        with self.auth.connection() as conn:
+            row, deadline = self.checked_operation(conn, body, service)
+            return {
+                **{name: str(row[name]) for name in ("owner_id", "login_id", "operation_id")},
+                **{name: row[name] for name in ("tool", "workspace_session", "confirmed", "channel")},
+                "valid_until": deadline,
+            }
+
+    def exchange(self, body, service="gateway"):
         access = secrets.token_urlsafe(32)
         with self.auth.connection() as conn:
-            row, deadline = self.lookup(conn, token_hash(body.operation_token), "capability-gateway")
-            if (
-                row["tool"] != body.tool
-                or row["arguments_sha256"] != body.arguments_sha256
-                or not allowed_target(row["tool"], row["job_id"], body.method, body.path, body.query)
-            ):
-                raise HTTPException(403, "Tool operation scope mismatch")
+            row, deadline = self.checked_operation(conn, body, service)
+            if service == "gateway":
+                allowed = not body.idempotency_key and allowed_target(
+                    row["tool"], row["job_id"], body.method, body.path, body.query
+                )
+            else:
+                allowed = adapters.native_target(row, body, conn)
+            if not allowed:
+                raise HTTPException(403, "Native operation scope mismatch")
             conn.execute(
                 """
                 INSERT INTO openscience_m3.delegations
-                    (token_hash,operation_id,audience,expires_at,method,path,query,request_sha256)
-                VALUES (%s,%s,'nexpoly-native',to_timestamp(%s),%s,%s,%s,%s)
+                    (token_hash,operation_id,audience,expires_at,method,path,query,request_sha256,native_key)
+                VALUES (%s,%s,'nexpoly-native',to_timestamp(%s),%s,%s,%s,%s,%s)
             """,
                 (
                     token_hash(access),
@@ -255,13 +323,16 @@ class Delegations:
                     body.path,
                     body.query,
                     body.request_sha256,
+                    body.idempotency_key,
                 ),
             )
         return {"access_token": access, "operation_id": str(row["operation_id"]), "valid_until": deadline}
 
-    def claim(self, digest, method, path, query, payload_digest):
+    def claim(self, digest, method, path, query, payload_digest, service):
         with self.auth.connection() as conn:
             row, deadline = self.lookup(conn, digest, "nexpoly-native")
+            if adapters.service(row["tool"]) != service:
+                raise HTTPException(403, "Wrong native calling service")
             if (row["method"], row["path"], row["query"], row["request_sha256"]) != (
                 method,
                 path,
@@ -279,7 +350,12 @@ class Delegations:
             if not accepted:
                 raise HTTPException(401, "Native authorization already consumed or expired")
         identity = Identity(str(row["owner_id"]), str(row["login_id"]), str(row["operation_id"]))
-        return identity, deadline, (row["workspace_user_id"], row["workspace_generation"])
+        return (
+            identity,
+            deadline,
+            (row["workspace_user_id"], row["workspace_generation"]),
+            row["native_key"],
+        )
 
     def receipt(self, digest, status, request_id, usage_id):
         with self.auth.connection() as conn:
@@ -294,7 +370,7 @@ class Delegations:
     async def dispatch(self, app, scope, receive, send):
         headers = Headers(scope=scope)
         try:
-            self.gateway_identity(headers)
+            service = self.service_identity(headers)
             # The gateway enters on the private Unix listener. Direct loopback
             # peers also support the isolated ASGI/integration test transport.
             if scope.get("client") is not None or scope.get("server") is not None:
@@ -322,13 +398,14 @@ class Delegations:
                 query = scope["query_string"].decode("ascii")
             except UnicodeDecodeError:
                 raise HTTPException(400, "Invalid native query") from None
-            identity, deadline, generation = await anyio.to_thread.run_sync(
+            identity, deadline, generation, native_key = await anyio.to_thread.run_sync(
                 self.claim,
                 digest,
                 scope["method"],
                 scope["path"],
                 query,
                 hashlib.sha256(request_body).hexdigest(),
+                service,
             )
         except HTTPException as e:
             return await JSONResponse({"detail": e.detail}, status_code=e.status_code, headers=PRIVATE)(
@@ -351,7 +428,7 @@ class Delegations:
             kept.extend(
                 [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]
             )
-        kept.append((b"idempotency-key", ("openscience-" + identity.request_id).encode()))
+        kept.append((b"idempotency-key", (native_key or "openscience-" + identity.request_id).encode()))
         scope = {
             **scope,
             "headers": kept,
@@ -416,8 +493,25 @@ def install(app, auth, agent, router_identity, gateway_secret, inspect_handoff):
         return JSONResponse(authority.issue(body), headers=PRIVATE)
 
     def gateway_identity(request: Request):
-        authority.gateway_identity(request.headers)
+        if authority.service_identity(request.headers) != "gateway":
+            raise HTTPException(403, "Gateway credential required")
 
     @app.post(EXCHANGE, dependencies=[Depends(gateway_identity)])
     def exchange(body: Exchange):
         return JSONResponse(authority.exchange(body), headers=PRIVATE)
+
+    if len(authority.keys) > 1:
+
+        def adapter_service(request: Request):
+            service = authority.service_identity(request.headers)
+            if service == "gateway":
+                raise HTTPException(403, "Adapter credential required")
+            return service
+
+        @app.post(ADAPTER_CONTEXT)
+        def context(body: AdapterContext, service=Depends(adapter_service)):
+            return JSONResponse(authority.context(body, service), headers=PRIVATE)
+
+        @app.post(ADAPTER_EXCHANGE)
+        def adapter_exchange(body: Exchange, service=Depends(adapter_service)):
+            return JSONResponse(authority.exchange(body, service), headers=PRIVATE)

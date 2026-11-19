@@ -1,0 +1,301 @@
+{
+  "environment": "dev-m1",
+  "workspace_image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+  "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+  "adapter_images": {
+    "polytao": "sha256:72eca12668d3ee9d03969d2711c750067431c26c31f95811eb9ec5c3ec7d862d",
+    "retrosynthesis": "sha256:afc71c6ba92bb8595d177f04c33fb01dcf26ad9d40f9f6c19dc67c536e0fa5ed"
+  },
+  "model_manifest_sha256": "ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2",
+  "workspace_bindings": {
+    "test-user-a": {
+      "workspace_id": "463fc2f89367468bb7fc6e048d522c9e",
+      "uid": 58161656,
+      "volume": "nexpoly-m1-67e4414ac390-463fc2f89367468bb7fc6e048d522c9e-data"
+    },
+    "test-user-b": {
+      "workspace_id": "3c137e9c236d4998bed842786c0f4548",
+      "uid": 43620582,
+      "volume": "nexpoly-m1-67e4414ac390-3c137e9c236d4998bed842786c0f4548-data"
+    }
+  },
+  "start": "2026-11-19T09:50:30.100Z",
+  "browser": "153.0.8010.12",
+  "status": "passed",
+  "adapters": {
+    "polytao": {
+      "owner_edits": {
+        "a": {
+          "from": 1,
+          "to": 2,
+          "field": "temperature",
+          "value": 0.99,
+          "stale_confirmation": 409,
+          "other_revision": 1,
+          "other_parameters_unchanged": true
+        },
+        "b": {
+          "from": 1,
+          "to": 2,
+          "field": "temperature",
+          "value": 0.98,
+          "stale_confirmation": 409,
+          "other_revision": 2,
+          "other_parameters_unchanged": true
+        }
+      },
+      "private_drafts": {
+        "a": {
+          "foreign_form_status": 403,
+          "foreign_edit_status": 403,
+          "foreign_confirm_status": 403,
+          "foreign_tool": "DRAFT_NOT_FOUND"
+        },
+        "b": {
+          "foreign_form_status": 403,
+          "foreign_edit_status": 403,
+          "foreign_confirm_status": 403,
+          "foreign_tool": "DRAFT_NOT_FOUND"
+        }
+      },
+      "model_only_confirmation_created_job": false,
+      "wrong_login_confirmation": 403,
+      "limits": {
+        "a_second_login": 429,
+        "a_extra_job": null,
+        "b_accepted": true,
+        "a_still_limited_after_b": 429,
+        "elapsed_ms": 9936
+      },
+      "confirmations": {
+        "a": {
+          "job": "polytao.a8ae8110a8d64f57.e43ae4c231444403ac97d0d02f57cfdb",
+          "lost_reply_http": 503,
+          "replayed": true,
+          "receipts": 1,
+          "clicked_card": true
+        },
+        "b": {
+          "job": "polytao.a8ae8110a8d64f57.5ddb1f1bab5a4fd4b0d393bbd1f93e57",
+          "lost_reply_http": 503,
+          "replayed": true,
+          "receipts": 1,
+          "clicked_card": true
+        },
+        "wrong_login_after_accept": 403
+      },
+      "jobs": {
+        "a": {
+          "native_owner": 200,
+          "native_other": 404,
+          "foreign_tool": "JOB_NOT_FOUND",
+          "result_status": "completed",
+          "candidates": 1,
+          "result_sha256": "22e414497655524b77ced2a09c084f14aa2ea674f12acaaf66086461f0193fd7",
+          "own_usage_records": 1,
+          "own_usage_attempts": 1,
+          "foreign_usage_records": 0
+        },
+        "b": {
+          "native_owner": 200,
+          "native_other": 404,
+          "foreign_tool": "JOB_NOT_FOUND",
+          "result_status": "completed",
+          "candidates": 1,
+          "result_sha256": "dcf62be9c737242beb8d7ec6a83aa3e8cfa6ce11d036356a118b88dcc3f82271",
+          "own_usage_records": 1,
+          "own_usage_attempts": 1,
+          "foreign_usage_records": 0
+        }
+      },
+      "verified_lost_native_receipts": [
+        {
+          "user": "a",
+          "job_id": "polytao.a8ae8110a8d64f57.e43ae4c231444403ac97d0d02f57cfdb",
+          "key_sha256": "839dbb55ec2859b19ac6a77e7c87ff04bc5297410d2c0574b92f4eee484b999b"
+        },
+        {
+          "user": "b",
+          "job_id": "polytao.a8ae8110a8d64f57.5ddb1f1bab5a4fd4b0d393bbd1f93e57",
+          "key_sha256": "414b5de999dd2c615a077d0cc8e77b2818346a996a97c6b51efabd7f229873b2"
+        }
+      ]
+    },
+    "retrosynthesis": {
+      "owner_edits": {
+        "a": {
+          "from": 1,
+          "to": 2,
+          "field": "max_new_tokens",
+          "value": 31,
+          "stale_confirmation": 409,
+          "other_revision": 1,
+          "other_parameters_unchanged": true
+        },
+        "b": {
+          "from": 1,
+          "to": 2,
+          "field": "max_new_tokens",
+          "value": 30,
+          "stale_confirmation": 409,
+          "other_revision": 2,
+          "other_parameters_unchanged": true
+        }
+      },
+      "private_drafts": {
+        "a": {
+          "foreign_form_status": 403,
+          "foreign_edit_status": 403,
+          "foreign_confirm_status": 403,
+          "foreign_tool": "DRAFT_NOT_FOUND"
+        },
+        "b": {
+          "foreign_form_status": 403,
+          "foreign_edit_status": 403,
+          "foreign_confirm_status": 403,
+          "foreign_tool": "DRAFT_NOT_FOUND"
+        }
+      },
+      "model_only_confirmation_created_job": false,
+      "wrong_login_confirmation": 403,
+      "limits": {
+        "a_second_login": 429,
+        "a_extra_job": null,
+        "b_accepted": true,
+        "a_still_limited_after_b": 429,
+        "elapsed_ms": 6225
+      },
+      "confirmations": {
+        "a": {
+          "job": "71e76a66-d425-44f4-b2ba-5fa6a5a8eed3",
+          "lost_reply_http": 503,
+          "replayed": true,
+          "receipts": 1,
+          "clicked_card": true
+        },
+        "b": {
+          "job": "3da357e5-bbcf-4223-b717-11c697392cae",
+          "lost_reply_http": 503,
+          "replayed": true,
+          "receipts": 1,
+          "clicked_card": true
+        },
+        "wrong_login_after_accept": 403
+      },
+      "jobs": {
+        "a": {
+          "native_owner": 200,
+          "native_other": 404,
+          "foreign_tool": "JOB_NOT_FOUND",
+          "result_status": "completed",
+          "candidates": 1,
+          "result_sha256": "145bad8b6d301d6f1e9c6af5ec64fb6f6d6f28144dda7c69e182a0650bf32871",
+          "own_usage_records": 1,
+          "own_usage_attempts": 1,
+          "foreign_usage_records": 0
+        },
+        "b": {
+          "native_owner": 200,
+          "native_other": 404,
+          "foreign_tool": "JOB_NOT_FOUND",
+          "result_status": "completed",
+          "candidates": 1,
+          "result_sha256": "4fdd1098833c3111f666efccd502018ea87c8987aca4d46e1e23a91925d79831",
+          "own_usage_records": 1,
+          "own_usage_attempts": 1,
+          "foreign_usage_records": 0
+        }
+      },
+      "verified_lost_native_receipts": [
+        {
+          "user": "a",
+          "job_id": "71e76a66-d425-44f4-b2ba-5fa6a5a8eed3",
+          "key_sha256": "80f0c2367b928a98de4fc278d5f2b8058e5f734c24f1428adaf1caa6510b0a2a"
+        },
+        {
+          "user": "b",
+          "job_id": "3da357e5-bbcf-4223-b717-11c697392cae",
+          "key_sha256": "622740407f75595657a38760446a83ea1db97eff199f1adbb0067beace3bf7f1"
+        }
+      ]
+    }
+  },
+  "ledger": {
+    "users": {
+      "a": {
+        "polytao": {
+          "workspace_owner": "test-user-a",
+          "draft_revision": 3,
+          "original_login_confirmed": true,
+          "native_result_matches": true,
+          "quota_pool": "generation",
+          "operation_ref": "82bda813b00ab3d6",
+          "native_submissions": 1,
+          "successful_receipt_lookups": 1,
+          "authorized_starts": 1,
+          "settled_charges": 1,
+          "completed_usage_attempts": 1,
+          "accepted_journal_receipts": 1,
+          "limited_draft_has_no_submission": true
+        },
+        "retrosynthesis": {
+          "workspace_owner": "test-user-a",
+          "draft_revision": 2,
+          "original_login_confirmed": true,
+          "native_result_matches": true,
+          "quota_pool": "chemistry_small",
+          "operation_ref": "42a99fa47a629417",
+          "native_submissions": 1,
+          "successful_receipt_lookups": 1,
+          "authorized_starts": 1,
+          "settled_charges": 1,
+          "completed_usage_attempts": 1,
+          "accepted_journal_receipts": 1,
+          "limited_draft_has_no_submission": true
+        }
+      },
+      "b": {
+        "polytao": {
+          "workspace_owner": "test-user-b",
+          "draft_revision": 3,
+          "original_login_confirmed": true,
+          "native_result_matches": true,
+          "quota_pool": "generation",
+          "operation_ref": "4b2d4c67da05759c",
+          "native_submissions": 1,
+          "successful_receipt_lookups": 1,
+          "authorized_starts": 1,
+          "settled_charges": 1,
+          "completed_usage_attempts": 1,
+          "accepted_journal_receipts": 1
+        },
+        "retrosynthesis": {
+          "workspace_owner": "test-user-b",
+          "draft_revision": 2,
+          "original_login_confirmed": true,
+          "native_result_matches": true,
+          "quota_pool": "chemistry_small",
+          "operation_ref": "3aea4ad12cc070d4",
+          "native_submissions": 1,
+          "successful_receipt_lookups": 1,
+          "authorized_starts": 1,
+          "settled_charges": 1,
+          "completed_usage_attempts": 1,
+          "accepted_journal_receipts": 1
+        }
+      }
+    },
+    "new_native_operations": 4,
+    "other_owners_delta": {
+      "logins": 0,
+      "dft_jobs": 0,
+      "quota_events": 0,
+      "usage_events": 0,
+      "usage_attempts": 0,
+      "tool_operations": 0,
+      "quota_operations": 0,
+      "request_observations": 0
+    }
+  },
+  "end": "2026-11-19T09:51:48.533Z"
+}

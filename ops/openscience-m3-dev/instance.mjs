@@ -2,9 +2,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 const requests = new AsyncLocalStorage();
+const forms = new AsyncLocalStorage();
 const turns = new Map();
 const ttl = 15 * 60_000;
-export const withToolTurn = (c, next) => requests.run(c.req.header("x-nexpoly-tool-turn"), next);
+export const withToolTurn = (c, next) =>
+  forms.run(c.req.header("x-nexpoly-form-action"), () =>
+    requests.run(c.req.header("x-nexpoly-tool-turn"), next),
+  );
 
 export function rememberTurn(session, message) {
   const handle = requests.getStore();
@@ -46,4 +50,19 @@ export async function toolsForTurn(input, jsonSchema) {
     };
   }
   return tools;
+}
+
+// The instance can redeem this short-lived handle only for the action that the browser already requested.
+export async function formTool(name, args) {
+  const handle = forms.getStore();
+  if (!handle) throw Error("Missing authenticated form context");
+  const r = await fetch("http://localhost/form", {
+    unix: "/m3-peer/tools.sock",
+    method: "POST",
+    headers: { authorization: "Bearer " + handle, "content-type": "application/json" },
+    body: JSON.stringify({ tool: name, arguments: args }),
+    signal: AbortSignal.timeout(28000),
+  });
+  if (!r.ok) throw Error("Development form transport unavailable");
+  return r.json();
 }

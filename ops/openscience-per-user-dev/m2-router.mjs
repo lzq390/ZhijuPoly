@@ -121,7 +121,15 @@ export async function startRouter(c, loadUi = pinnedUi) {
   const authorityKey = (await readFile(c.service_token_file, "utf8")).trim()
   if (authorityKey.length < 32) throw Error("Missing trusted authority identity")
   const uiRoot = await realpath(c.ui_root)
-  const {boot, index, patchedApp} = await loadUi(uiRoot, parents)
+  const {boot, index:baseIndex, patchedApp} = await loadUi(uiRoot, parents)
+  const adapterAssets = new Map()
+  let index = baseIndex
+  if (c.m3?.adapters) {
+    for (const file of ["results-controller.mjs","results-view.mjs","results-view.css"]) {
+      adapterAssets.set("/assets/m3/"+file, await readFile(resolve(HERE,"../openscience-mcp-dev",file)))
+    }
+    index = baseIndex.replace("</head>", '<link rel="stylesheet" href="/assets/m3/results-view.css"><script type="module" src="/assets/m3/results-controller.mjs"></script></head>')
+  }
   const pages = new Map(), profiles = new Map(), startups = new Map()
   const secure = origin.protocol === "https:"
   const cookieName = key => (secure ? "__Host-" : "") + "np_os_m2_" + key
@@ -231,15 +239,17 @@ export async function startRouter(c, loadUi = pinnedUi) {
       shell(res,parent,{type:"nexpoly:openscience:ready",handoff_id:handoff,page_context:key},true)
     } catch (e) { shell(res,parent,{type:"nexpoly:openscience:error",handoff_id:handoff,reason:e instanceof Refusal ? e.message : "workspace_unavailable"}) }
   }
-  let tools
+  let tools, formAdapter
   if (c.m3) {
     const { toolRouter } = await import("../openscience-m3-dev/tool-router.mjs")
     tools = await toolRouter(c.m3, auth, validate)
+    if (c.m3.adapters) ({formAdapter} = await import("../openscience-m3-dev/adapter-router.mjs"))
   }
   async function forward(req, res, url, path, page) {
     const toolRequest = tools && req.method === "POST"
     const permissionReply = toolRequest && /^\/permission\/per_[a-zA-Z0-9_-]+\/reply$/.test(path)
-    if (!permissionReply && !allows(req.method, path)) throw new Refusal(403, "route_disabled")
+    const form = toolRequest && formAdapter?.(path)
+    if (!form && !permissionReply && !allows(req.method, path)) throw new Refusal(403, "route_disabled")
     const writing = !["GET","HEAD"].includes(req.method)
     if (writing && (req.headers.origin !== c.public_origin || req.headers["x-nexpoly-page"] !== page.key))
       throw new Refusal(403, "write_origin_denied")
@@ -261,6 +271,7 @@ export async function startRouter(c, loadUi = pinnedUi) {
         if (!(await stat(page.route.socket)).isSocket()) throw new Refusal(503,"workspace_restarting")
         gate(page)
         controller.signal.throwIfAborted()
+        if (form) Object.assign(headers, await tools.form(page, form, payload, token))
         if (permissionReply) await tools.confirm(page, path, url.search, payload)
         const prompt = toolRequest && /^\/session\/(ses_[a-zA-Z0-9_-]+)\/(?:message|prompt_async)$/.exec(path)
         if (prompt) headers["x-nexpoly-tool-turn"] = tools.begin(page, prompt[1], token)
@@ -336,6 +347,7 @@ export async function startRouter(c, loadUi = pinnedUi) {
     const fixed = req.method === "GET" && staticPath(path)
     if (!fixed) throw new Refusal(404,"not_found")
     if (fixed === "/index.html") return reply(res,200,index,MIME[".html"])
+    if (adapterAssets.has(fixed)) return reply(res,200,adapterAssets.get(fixed),MIME[extname(fixed)])
     if (fixed === mainJs) return reply(res,200,patchedApp,MIME[".js"])
     const file = await realpath(resolve(uiRoot, "." + fixed)).catch(() => null)
     if (!file || !file.startsWith(uiRoot + sep) || !MIME[extname(file)] || !(await stat(file)).isFile()) throw new Refusal(404,"not_found")
@@ -347,6 +359,7 @@ export async function startRouter(c, loadUi = pinnedUi) {
   }
   const handler = (req,res) => handle(req,res).catch(e => {
     if (res.headersSent) return res.destroy()
+    if (e.code === "DRAFT_NOT_IN_SESSION" || e.code === "INVALID_ACTION") return reply(res,e.status,{ok:false,error:{code:e.code}})
     reply(res,e.status || 502,{error:e instanceof Refusal ? e.message : "workspace_unavailable"})
   })
   const srv = secure ? https.createServer({key:await readFile(c.tls_key_file),cert:await readFile(c.tls_cert_file)},handler) : http.createServer(handler)

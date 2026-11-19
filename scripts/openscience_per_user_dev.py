@@ -361,6 +361,9 @@ class Workspace:
             "/app/backend/cli/src/session/prompt.ts": code / "prompt.ts",
             "/app/backend/cli/src/server/server.ts": code / "server.ts",
         }
+        bridge = code / "capability-form-bridge.mjs"
+        if bridge.exists():
+            backend_overlay["/app/backend/cli/src/server/capability-form-bridge.mjs"] = bridge
         return backend_overlay, {"/m3-model.py": code / "model.py"}
 
     def retire_generation(self):

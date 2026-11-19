@@ -31,7 +31,7 @@ export function retrosynthesisDraftBridgeBody(sessionId, directory, action, inpu
 }
 
 export function sessionFromPath(pathname) {
-  const match = /^\/chat\/(ses_[A-Za-z0-9_-]+)\/?$/.exec(pathname)
+  const match = /^\/(?:chat|[A-Za-z0-9_-]+\/session)\/(ses_[A-Za-z0-9_-]+)\/?$/.exec(pathname)
   return match?.[1] ?? null
 }
 

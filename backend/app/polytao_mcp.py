@@ -343,6 +343,10 @@ class MCPRuntime:
             raise MCPFailure("PERMISSION_DENIED", "This MCP client lacks permission for this tool.")
         owner_id = registry.owner_for(client_id)
         session = await self.session()
+        return await self.execute_for_owner(name, args, owner_id, session, client_id=client_id)
+
+    async def execute_for_owner(self, name: str, args: Any, owner_id: str, session: BackendSession, *, client_id: str) -> Any:
+        """Execute after the request transport has established its native owner."""
         if name in {"prepare_polytao_generation", "get_polytao_draft", "update_polytao_draft", "confirm_polytao_generation", "cancel_polytao_draft"}:
             return await self.execute_draft(name, args, owner_id, session)
         if name == "get_polytao_capabilities":
