@@ -11,6 +11,10 @@ import {
   useState,
   type CSSProperties
 } from "react";
+import { ModalFocusSuspendedContext } from "../hooks/useModalFocus";
+import { ModuleDock } from "./module-frame/ModuleDock";
+import { ModuleTools } from "./module-frame/ModuleTools";
+import { TgAssistantPanel } from "./TgAssistantPanel";
 import { REVERSE_DESIGN_DEMO_SMILES } from "../constants/reverseDesignDefaults";
 import type { TgAssistantSession } from "../hooks/useTgAssistant";
 import { useReverseDesign } from "../hooks/useReverseDesign";
@@ -186,13 +190,14 @@ export const ReverseDesignPage = forwardRef<
 >(function ReverseDesignPage({ structure, onOpenKnowledge, assistant }, forwardedRef) {
   const reverseDesign = useReverseDesign();
   const [openPanel, setOpenPanel] = useState<ReverseDesignOpenPanel>(null);
+  // The assistant lives in the module dock, independent of the canvas parameter popover.
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [hasActivated3D, setHasActivated3D] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [hasRun, setHasRun] = useState(false);
   const [drawerWidth, setDrawerWidth] = useState(380);
   const [resultPage, setResultPage] = useState(1);
   const parameterPanelRef = useRef<HTMLElement | null>(null);
-  const assistantPanelRef = useRef<HTMLElement | null>(null);
   const parameterButtonRef = useRef<HTMLButtonElement | null>(null);
   const assistantButtonRef = useRef<HTMLButtonElement | null>(null);
   const restoreFocusFrameRef = useRef<number | null>(null);
@@ -223,7 +228,7 @@ export const ReverseDesignPage = forwardRef<
     }
     restoreFocusFrameRef.current = window.requestAnimationFrame(() => {
       restoreFocusFrameRef.current = null;
-      (panel === "parameters" ? parameterButtonRef.current : assistantButtonRef.current)?.focus();
+      parameterButtonRef.current?.focus();
     });
   }, [openPanel]);
 
@@ -237,33 +242,19 @@ export const ReverseDesignPage = forwardRef<
 
   useEffect(() => {
     if (!openPanel) return;
-    const panel = openPanel === "parameters" ? parameterPanelRef.current : assistantPanelRef.current;
+    const panel = parameterPanelRef.current;
     const frame = window.requestAnimationFrame(() => {
-      panel
-        ?.querySelector<HTMLElement>(
-          openPanel === "parameters"
-            ? ".np-tg-field input"
-            : 'textarea[aria-label="发送给 AI 助手的消息"]'
-        )
-        ?.focus();
+      panel?.querySelector<HTMLElement>(".np-tg-field input")?.focus();
     });
 
     function handlePointerDown(event: PointerEvent) {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      if (
-        openPanel === "assistant" &&
-        target instanceof Element &&
-        target.closest(".np-sw-drawer")
-      ) {
-        return;
-      }
-      const trigger = openPanel === "parameters" ? parameterButtonRef.current : assistantButtonRef.current;
-      if (!panel?.contains(target) && !trigger?.contains(target)) closePanel(false);
+      if (!panel?.contains(target) && !parameterButtonRef.current?.contains(target)) closePanel(false);
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
       closePanel(true);
     }
@@ -627,8 +618,28 @@ export const ReverseDesignPage = forwardRef<
       data-module="tg-reverse-design"
       style={workbenchStyle}
     >
-      <ModulePageHeader actions={<BrowsingRecordingControls module="reverseDesign" />}>Tg 逆向设计</ModulePageHeader>
+      <ModulePageHeader
+        actions={
+          <ModuleTools
+            tools={[{
+              id: "assistant",
+              label: "AI 助手",
+              icon: <Sparkles aria-hidden="true" />,
+              pressed: assistantOpen,
+              busy: assistant.isStreaming,
+              controls: "tg-assistant-panel",
+              buttonRef: assistantButtonRef,
+              onClick: () => setAssistantOpen((current) => !current)
+            }]}
+            recording={<BrowsingRecordingControls module="reverseDesign" />}
+          />
+        }
+      >
+        Tg 逆向设计
+      </ModulePageHeader>
       <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>
+        <div className={`np-module-frame np-tg-frame${assistantOpen ? " has-open-dock" : ""}`}>
+        <div className="np-module-frame__main is-workbench-container">
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
             <StructureCanvasSurface
@@ -646,16 +657,6 @@ export const ReverseDesignPage = forwardRef<
                   buttonRef: parameterButtonRef,
                   controls: "tg-parameter-panel",
                   onClick: () => togglePanel("parameters")
-                },
-                {
-                  id: "tg-assistant",
-                  label: "AI 助手",
-                  icon: <Sparkles aria-hidden="true" />,
-                  active: openPanel === "assistant",
-                  busy: assistant.isStreaming,
-                  buttonRef: assistantButtonRef,
-                  controls: "tg-assistant-panel",
-                  onClick: () => togglePanel("assistant")
                 }
               ]}
               onLoadExample={() => canvas.loadStructure(REVERSE_DESIGN_DEMO_SMILES)}
@@ -669,32 +670,19 @@ export const ReverseDesignPage = forwardRef<
             <ReverseDesignUtilityPanels
               openPanel={openPanel}
               parameterPanelRef={parameterPanelRef}
-              assistantPanelRef={assistantPanelRef}
               request={reverseDesign.request}
               parameterStatus={parameterStatusText()}
               parameterHasError={parameterHasError}
               searching={reverseDesign.isLoading}
               canSearch={!validationMessage && !operationBusy && !smilesSyncBlocked}
-              assistant={assistant}
-              assistantContextLabels={[
-                canvas.smilesDraftState === "syncing"
-                  ? "结构同步中"
-                  : smilesSyncBlocked
-                    ? "结构输入待修正"
-                    : canvas.smilesDraft.trim()
-                      ? "结构已准备"
-                      : "尚未添加结构",
-                `Tg ${reverseDesign.request.target_tg ?? "—"} °C`,
-                resultStatus
-              ]}
-              assistantLocalDiagnostic={localDiagnostic}
-              assistantSuggestions={assistantSuggestions}
               onClose={closePanel}
               onRequestChange={updateRequest}
               onSearch={() => void handleSearch()}
             />
           </main>
 
+          {/* While the assistant is open, an overlay results drawer must not trap focus away from it. */}
+          <ModalFocusSuspendedContext.Provider value={assistantOpen}>
           <ReverseDesignDrawer
             open={drawerOpen}
             hasRun={hasRun}
@@ -712,6 +700,43 @@ export const ReverseDesignPage = forwardRef<
             onClose={() => setDrawerOpen(false)}
             onOpen={openDrawer}
           />
+          </ModalFocusSuspendedContext.Provider>
+        </div>
+        </div>
+        <ModuleDock
+          id="tg-assistant-panel"
+          className="np-tg-assistant-panel"
+          open={assistantOpen}
+          bare={{ labelledBy: "tg-assistant-title" }}
+          tabs={[{
+            id: "assistant",
+            label: "AI 助手",
+            content: (
+              <TgAssistantPanel
+                assistant={assistant}
+                onClose={() => setAssistantOpen(false)}
+                contextLabels={[
+                  canvas.smilesDraftState === "syncing"
+                    ? "结构同步中"
+                    : smilesSyncBlocked
+                      ? "结构输入待修正"
+                      : canvas.smilesDraft.trim()
+                        ? "结构已准备"
+                        : "尚未添加结构",
+                  `Tg ${reverseDesign.request.target_tg ?? "—"} °C`,
+                  resultStatus
+                ]}
+                localDiagnostic={localDiagnostic}
+                contextualSuggestions={assistantSuggestions}
+              />
+            )
+          }]}
+          activeTab="assistant"
+          onTabChange={() => undefined}
+          onClose={() => setAssistantOpen(false)}
+          returnFocusRef={assistantButtonRef}
+          initialFocusSelector='textarea[aria-label="发送给 AI 助手的消息"]'
+        />
         </div>
       </div>
     </div>

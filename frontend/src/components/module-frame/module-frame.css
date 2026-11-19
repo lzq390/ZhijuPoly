@@ -41,6 +41,16 @@
   background: #eef3fe;
 }
 
+.np-module-tools__button .np-module-tools__spin {
+  animation: np-module-tools-spin 800ms linear infinite;
+}
+
+@keyframes np-module-tools-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .np-module-tools__button.is-pressed svg {
   color: var(--np-theme-blue, #2563eb);
 }
@@ -113,6 +123,19 @@
   max-width: var(--np-frame-max);
 }
 
+.np-module-frame > .np-module-frame__main.is-workbench-container {
+  height: 100%;
+  min-height: 0;
+}
+
+/* While a pushing dock is open, workbench layouts that size themselves with container units
+   measure the area left beside it. Narrower screens float the dock and keep the page container. */
+@media (min-width: 1800px) {
+  .np-module-frame.has-open-dock > .np-module-frame__main.is-workbench-container {
+    container: np-sw-workbench / inline-size;
+  }
+}
+
 .np-module-dock {
   display: flex;
   min-width: 0;
@@ -128,6 +151,18 @@
   font-family: var(--font-body);
   font-size: 13.5px;
   line-height: 1.6;
+}
+
+.np-module-dock[hidden] {
+  display: none;
+}
+
+/* Bare docks host content that brings its own header and scrolling. */
+.np-module-dock.is-bare > .np-module-dock__body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
 }
 
 .np-module-dock__header {
@@ -223,7 +258,8 @@
 @media (max-width: 1799px) {
   .np-module-frame > .np-module-dock {
     position: absolute;
-    z-index: 30;
+    /* Above workbench result drawers (41) so the dock stays usable over them. */
+    z-index: 45;
     top: 0;
     right: 0;
     bottom: 0;
@@ -242,7 +278,19 @@
     font-size: 17px;
   }
 
-  .np-module-dock__header {
+  .np-module-dock[hidden] {
+  display: none;
+}
+
+/* Bare docks host content that brings its own header and scrolling. */
+.np-module-dock.is-bare > .np-module-dock__body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.np-module-dock__header {
     padding: 16px 14px 14px 24px;
   }
 

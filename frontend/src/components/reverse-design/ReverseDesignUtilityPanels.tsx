@@ -1,25 +1,19 @@
-import { LoaderCircle, Search, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import { LoaderCircle, Search, SlidersHorizontal, X } from "lucide-react";
 import type { RefObject } from "react";
 import { useMotionPresence } from "../../hooks/useMotionPresence";
-import type { TgAssistantSession } from "../../hooks/useTgAssistant";
 import type { ReverseDesignTgRequest } from "../../types";
-import { TgAssistantPanel } from "../TgAssistantPanel";
 
-export type ReverseDesignOpenPanel = "parameters" | "assistant" | null;
+/** The AI assistant moved to the module dock; only search parameters remain a canvas popover. */
+export type ReverseDesignOpenPanel = "parameters" | null;
 
 type ReverseDesignUtilityPanelsProps = {
   openPanel: ReverseDesignOpenPanel;
   parameterPanelRef: RefObject<HTMLElement | null>;
-  assistantPanelRef: RefObject<HTMLElement | null>;
   request: ReverseDesignTgRequest;
   parameterStatus: string;
   parameterHasError: boolean;
   searching: boolean;
   canSearch: boolean;
-  assistant: TgAssistantSession;
-  assistantContextLabels: string[];
-  assistantLocalDiagnostic: string;
-  assistantSuggestions: string[];
   onClose: (restoreFocus?: boolean) => void;
   onRequestChange: (partial: Partial<ReverseDesignTgRequest>) => void;
   onSearch: () => void;
@@ -36,28 +30,22 @@ function parseNumber(value: string) {
 export function ReverseDesignUtilityPanels({
   openPanel,
   parameterPanelRef,
-  assistantPanelRef,
   request,
   parameterStatus,
   parameterHasError,
   searching,
   canSearch,
-  assistant,
-  assistantContextLabels,
-  assistantLocalDiagnostic,
-  assistantSuggestions,
   onClose,
   onRequestChange,
   onSearch
 }: ReverseDesignUtilityPanelsProps) {
   const parameterPresence = useMotionPresence(openPanel === "parameters", { elementRef: parameterPanelRef });
-  const assistantPresence = useMotionPresence(openPanel === "assistant", { elementRef: assistantPanelRef });
   return (
-    <div className={`np-sw-utility-layer${parameterPresence.present || assistantPresence.present ? " is-open" : ""}`} aria-hidden={!openPanel}>
+    <div className={`np-sw-utility-layer${parameterPresence.present ? " is-open" : ""}`} aria-hidden={!openPanel}>
       <button
         type="button"
         className="np-sw-utility-backdrop"
-        aria-label="关闭 Tg 逆向设计浮层"
+        aria-label="关闭搜索参数背景"
         tabIndex={openPanel ? 0 : -1}
         onClick={() => onClose(false)}
       />
@@ -165,26 +153,6 @@ export function ReverseDesignUtilityPanels({
             </button>
           </footer>
         </form>
-      </section>
-
-      <section
-        ref={assistantPanelRef}
-        {...assistantPresence.motionProps}
-        id="tg-assistant-panel"
-        className={`np-sw-popover np-sw-popover--assistant np-tg-assistant-panel${openPanel === "assistant" ? " is-open" : ""}`}
-        role="dialog"
-        aria-modal="false"
-        aria-labelledby="tg-assistant-title"
-        aria-hidden={openPanel !== "assistant"}
-        inert={openPanel !== "assistant"}
-      >
-        <TgAssistantPanel
-          assistant={assistant}
-          onClose={() => onClose()}
-          contextLabels={assistantContextLabels}
-          localDiagnostic={assistantLocalDiagnostic}
-          contextualSuggestions={assistantSuggestions}
-        />
       </section>
     </div>
   );

@@ -1,3 +1,4 @@
+import { LoaderCircle } from "lucide-react";
 import type { ReactNode, RefObject } from "react";
 import "./module-frame.css";
 
@@ -6,6 +7,8 @@ export type ModuleTool = {
   label: string;
   icon: ReactNode;
   pressed?: boolean;
+  /** Shows progress in place of the icon, e.g. while the assistant is answering. */
+  busy?: boolean;
   controls?: string;
   buttonRef?: RefObject<HTMLButtonElement | null>;
   onClick: () => void;
@@ -29,9 +32,10 @@ function ToolButton({ tool }: { tool: ModuleTool }) {
       data-module-tool={tool.id}
       aria-pressed={tool.pressed}
       aria-controls={tool.controls}
+      aria-busy={tool.busy || undefined}
       onClick={tool.onClick}
     >
-      {tool.icon}
+      {tool.busy ? <LoaderCircle className="np-module-tools__spin" aria-hidden="true" /> : tool.icon}
       <span>{tool.label}</span>
     </button>
   );

@@ -174,7 +174,7 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
               label: "使用说明",
               icon: <BookOpen aria-hidden="true" />,
               pressed: dockOpen,
-              controls: dockOpen ? dockId : undefined,
+              controls: dockId,
               buttonRef: helpButtonRef,
               onClick: () => setDockOpen((open) => !open)
             }}
@@ -245,16 +245,15 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
               onOpenModule={onOpenModule}
             />
           </div>
-          {dockOpen ? (
-            <ModuleDock
-              id={dockId}
-              tabs={[{ id: "help", label: "使用说明", content: <HomopolymerPredictionHelp /> }]}
-              activeTab="help"
-              onTabChange={() => undefined}
-              onClose={() => setDockOpen(false)}
-              returnFocusRef={helpButtonRef}
-            />
-          ) : null}
+          <ModuleDock
+            id={dockId}
+            open={dockOpen}
+            tabs={[{ id: "help", label: "使用说明", content: <HomopolymerPredictionHelp /> }]}
+            activeTab="help"
+            onTabChange={() => undefined}
+            onClose={() => setDockOpen(false)}
+            returnFocusRef={helpButtonRef}
+          />
         </div>
       </div>
     </div>

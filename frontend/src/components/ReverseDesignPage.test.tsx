@@ -1,7 +1,7 @@
 import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StructureWorkspaceContext } from "../types";
 import type { TgAssistantSession } from "../hooks/useTgAssistant";
@@ -223,21 +223,29 @@ describe("ReverseDesignPage production workbench", () => {
     expect(document.querySelector("[data-structure-editor]")).not.toBeNull();
   });
 
-  it("keeps parameters and AI mutually exclusive while allowing parameters over an open result drawer", async () => {
-    render(<ReverseDesignPage structure={makeStructure()} onOpenKnowledge={vi.fn()} assistant={makeAssistant()} />);
+  it("opens the AI assistant in the module dock, alongside parameters and results", async () => {
+    const assistant = makeAssistant();
+    assistant.status = { ...assistant.status!, enabled: true, configured: true };
+    render(<ReverseDesignPage structure={makeStructure()} onOpenKnowledge={vi.fn()} assistant={assistant} />);
+
+    const trigger = screen.getByRole("button", { name: "AI 助手" });
+    expect(trigger.closest(".np-module-tools")).not.toBeNull();
+    expect(trigger.closest("[data-workbench-tool]")).toBeNull();
+    const dock = document.getElementById("tg-assistant-panel") as HTMLElement;
+    expect(dock.closest(".np-module-frame")).not.toBeNull();
+    expect(dock.hidden).toBe(true);
+
+    fireEvent.click(trigger);
+    expect(dock.hidden).toBe(false);
+    expect(trigger.getAttribute("aria-pressed")).toBe("true");
+    expect(within(dock).getByRole("heading", { name: "Tg AI 助手" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "搜索参数" }));
     const parameterPanel = document.getElementById("tg-parameter-panel");
     expect(parameterPanel?.getAttribute("aria-hidden")).toBe("false");
-    expect(screen.getAllByRole("spinbutton")).toHaveLength(3);
+    expect(dock.hidden).toBe(false);
 
-    fireEvent.click(screen.getByRole("button", { name: "AI 助手" }));
-    expect(parameterPanel?.getAttribute("aria-hidden")).toBe("true");
-    expect(document.getElementById("tg-assistant-panel")?.getAttribute("aria-hidden")).toBe("false");
-
-    fireEvent.click(screen.getByRole("button", { name: "搜索参数" }));
     fireEvent.click(screen.getByRole("button", { name: "运行搜索" }));
-
     await waitFor(() => {
       expect(mocks.submit).toHaveBeenCalledWith({
         target_tg: 450,
@@ -249,10 +257,35 @@ describe("ReverseDesignPage production workbench", () => {
     expect(mocks.setFeedback).toHaveBeenCalledWith(null);
     expect(document.querySelector(".np-tg-results-drawer")?.getAttribute("aria-hidden")).toBe("false");
     expect(parameterPanel?.getAttribute("aria-hidden")).toBe("true");
+    expect(dock.hidden).toBe(false);
 
     fireEvent.click(screen.getByRole("button", { name: "搜索参数" }));
     expect(parameterPanel?.getAttribute("aria-hidden")).toBe("false");
     expect(document.querySelector(".np-tg-results-drawer")?.getAttribute("aria-hidden")).toBe("false");
+  });
+
+  it("keeps the assistant draft while the dock is closed and returns focus on Escape", async () => {
+    const assistant = makeAssistant();
+    assistant.status = { ...assistant.status!, enabled: true, configured: true };
+    render(<ReverseDesignPage structure={makeStructure()} onOpenKnowledge={vi.fn()} assistant={assistant} />);
+    const trigger = screen.getByRole("button", { name: "AI 助手" });
+    fireEvent.click(trigger);
+
+    const dock = document.getElementById("tg-assistant-panel") as HTMLElement;
+    const input = within(dock).getByRole("textbox", { name: "发送给 AI 助手的消息" }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "把目标 Tg 设为 420" } });
+    input.focus();
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(dock.hidden).toBe(true);
+    expect(trigger.getAttribute("aria-pressed")).toBe("false");
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+
+    fireEvent.click(trigger);
+    expect((within(dock).getByRole("textbox", { name: "发送给 AI 助手的消息" }) as HTMLTextAreaElement).value)
+      .toBe("把目标 Tg 设为 420");
+    fireEvent.click(within(dock).getByRole("button", { name: "收起 AI 助手" }));
+    expect(dock.hidden).toBe(true);
   });
 
   it("builds a minimal current-page snapshot without database IDs, job IDs, SVG, or raw errors", async () => {

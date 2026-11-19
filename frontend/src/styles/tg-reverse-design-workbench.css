@@ -883,3 +883,79 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- AI assistant in the module dock ----------
+   The assistant used to be a canvas popover; it now sits in the shared side dock
+   (beside the surface on wide screens, over its right edge below 1800px, a sheet
+   on phones). These rules undo the popover sizing and quiet its header. */
+.np-tg-reverse-design .np-module-frame > .np-module-dock.np-tg-assistant-panel {
+  height: auto;
+  max-height: none;
+}
+
+@media (min-width: 1800px) {
+  .np-tg-reverse-design .np-module-frame > .np-module-dock.np-tg-assistant-panel {
+    width: auto;
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1799px) {
+  .np-tg-reverse-design .np-module-frame > .np-module-dock.np-tg-assistant-panel {
+    width: min(var(--np-dock-w), calc(100% - 24px));
+  }
+}
+
+.np-tg-reverse-design .np-module-dock.np-tg-assistant-panel .tg-assistant-header {
+  min-height: 0;
+  padding: 10px 10px 10px 16px;
+  border-bottom: 1px solid #eaecf0;
+  background: #fff;
+}
+
+.np-tg-reverse-design .np-module-dock.np-tg-assistant-panel .tg-assistant-header h2 {
+  color: #101828;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.np-tg-reverse-design .np-module-dock.np-tg-assistant-panel .tg-assistant-body {
+  background: #fff;
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-tg-reverse-design .np-module-dock.np-tg-assistant-panel .tg-assistant-header {
+    padding: 14px 14px 14px 22px;
+  }
+
+  .np-tg-reverse-design .np-module-dock.np-tg-assistant-panel .tg-assistant-header h2 {
+    font-size: 18px;
+  }
+}
+
+/* The frame wraps the existing workbench; on phones the page scrolls as before. */
+@media (max-width: 899px) {
+  .np-tg-reverse-design .np-tg-frame,
+  .np-tg-reverse-design .np-tg-frame > .np-module-frame__main {
+    display: block;
+    height: auto;
+  }
+
+  .np-tg-reverse-design .np-module-frame > .np-module-dock.np-tg-assistant-panel {
+    width: auto;
+    border-radius: 0;
+  }
+}
+
+/* Wide screens: structure, results and assistant side by side. The page margins tighten while
+   the dock is open, and the canvas/results pair fills the area the dock leaves. */
+@media (min-width: 1800px) {
+  .np-tg-reverse-design .np-sw-page:has(> .np-tg-frame.has-open-dock) {
+    padding-right: var(--np-sw-drawer-edge);
+    padding-left: var(--np-sw-drawer-edge);
+  }
+
+  .np-tg-reverse-design .np-tg-frame.has-open-dock .np-sw-layout:has(.np-sw-drawer-layer:not(.is-overlay)) {
+    --np-sw-pair-width: min(100cqw, calc(var(--np-sw-layout-max-width) + var(--np-sw-drawer-effective-width) + var(--np-sw-drawer-gap)));
+  }
+}
