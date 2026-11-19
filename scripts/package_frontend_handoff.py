@@ -447,12 +447,9 @@ def adapt(stage: Path, kit: Path, run: Path) -> None:
             target = frontend / 'src/constants' / path.relative_to(source_assets)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, target)
-    for name in ('src/index.css', 'src/styles/polymer-desktop.css'):
-        path = frontend / name
-        value = path.read_text()
-        value = re.sub(r'@import url\("https://fonts.googleapis.com/[^\n]+\);',
-                       '@import url("/fonts/fonts.css");' if name == 'src/index.css' else '', value)
-        path.write_text(value)
+    index_css = frontend / 'src/index.css'
+    index_css.write_text(re.sub(r'@import url\("https://fonts.googleapis.com/[^\n]+\);',
+                                '@import url("/fonts/fonts.css");', index_css.read_text()))
     # Keep current UI markup; replace only its synthetic bibliography and paper image URLs.
     paper = frontend / 'src/components/PdfSimilarityDemoPanel.tsx'
     value = paper.read_text()

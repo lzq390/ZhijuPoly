@@ -105,25 +105,6 @@
   gap: 8px;
 }
 
-.polymer-desktop-page .polymer-module-header .tg-tool-button svg,
-.polymer-desktop-page .polymer-module-header .tg-icon-tool svg {
-  width: 14px;
-  height: 14px;
-}
-
-.polymer-desktop-page .polymer-module-header .tg-icon-tool {
-  width: 30px;
-  min-width: 30px;
-  padding: 0 !important;
-  justify-content: center;
-}
-
-.polymer-desktop-page .polymer-module-header .tg-icon-tool.is-active {
-  border-color: rgba(77, 149, 255, 0.3) !important;
-  background: var(--color-primary-light) !important;
-  color: var(--color-primary) !important;
-}
-
 .tg-toolbar-separator {
   width: 1px;
   height: 18px;
@@ -1747,11 +1728,6 @@
   font-size: 12px;
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
-}
-
-.polymer-desktop-page .tg-drawer-reopen svg {
-  width: 14px;
-  height: 14px;
 }
 
 /* Drawer result content */
