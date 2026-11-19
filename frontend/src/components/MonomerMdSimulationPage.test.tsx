@@ -193,6 +193,31 @@ describe("MonomerMdSimulationPage formal queue", () => {
     expect(view.container.querySelector(".np-mmd-view-badge")).toBeTruthy();
   });
 
+  it.each([
+    ["reconnecting", "状态通知连接中断，正在重连；可手动刷新。"],
+    ["unavailable", "状态通知暂不可用，请手动刷新。"]
+  ] as const)("shows the %s task-event notice as a toolbar chip instead of a page row", (state, message) => {
+    hook.useMonomerMdSimulation.mockReturnValue(simulationState({ eventConnectionState: state }));
+    const view = renderPage();
+
+    const notice = screen.getAllByRole("status").find((element) => element.textContent === message);
+    expect(notice).toBeTruthy();
+    expect(notice!.classList.contains("np-mmd-event-status")).toBe(true);
+    expect(notice!.getAttribute("title")).toBe(message);
+    expect(notice!.closest(".np-mmd-toolbar-actions")).toBeTruthy();
+    expect(view.container.querySelector(".np-mmd-page > p")).toBeNull();
+  });
+
+  it("omits the task-event notice while the stream is connecting or live", () => {
+    for (const state of ["connecting", "live"] as const) {
+      hook.useMonomerMdSimulation.mockReturnValue(simulationState({ eventConnectionState: state }));
+      const view = renderPage();
+      expect(view.container.querySelector(".np-mmd-event-status")).toBeNull();
+      expect(screen.getAllByRole("status")).toHaveLength(1);
+      cleanup();
+    }
+  });
+
   it("renders queue/history state and applies both filters and pagination", () => {
     const simulation = simulationState();
     hook.useMonomerMdSimulation.mockReturnValue(simulation);

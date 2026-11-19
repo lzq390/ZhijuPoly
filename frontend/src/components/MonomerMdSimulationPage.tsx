@@ -281,6 +281,13 @@ export function MonomerMdSimulationPage({
   const activeMainTab = MAIN_TABS.find((tab) => tab.id === activeTab) ?? MAIN_TABS[0];
   const SurfaceIcon = activeMainTab.icon;
   const demoSteps = simulation.serviceStatus?.default_steps ?? 300;
+  const eventStatusLabel = guest
+    ? null
+    : simulation.eventConnectionState === "reconnecting"
+      ? "状态通知连接中断，正在重连；可手动刷新。"
+      : simulation.eventConnectionState === "unavailable"
+        ? "状态通知暂不可用，请手动刷新。"
+        : null;
 
   return (
     <div className="np-module-page np-structure-workbench np-monomer-md-simulation">
@@ -288,6 +295,12 @@ export function MonomerMdSimulationPage({
       <div className="np-mmd-page np-module-page-body">
         <div className="np-mmd-module-toolbar" aria-label="单体 MD 模拟工具栏">
           <div className="np-mmd-toolbar-actions">
+            {eventStatusLabel ? (
+              <span className="np-mmd-event-status" role="status" title={eventStatusLabel}>
+                <TriangleAlert aria-hidden="true" />
+                <span>{eventStatusLabel}</span>
+              </span>
+            ) : null}
             <div className="np-mmd-service-status">
               <span className={`is-${servicePresentation.tone}`} role="status" title={servicePresentation.detail ?? undefined}>
                 {servicePresentation.tone === "ready" ? <i className="np-mmd-ready-dot" aria-hidden="true" /> : null}
@@ -303,9 +316,6 @@ export function MonomerMdSimulationPage({
             </div>
           </div>
         </div>
-        {!guest && (simulation.eventConnectionState === "unavailable" || simulation.eventConnectionState === "reconnecting") ? (
-          <p role="status">{simulation.eventConnectionState === "reconnecting" ? "状态通知连接中断，正在重连；可手动刷新。" : "状态通知暂不可用，请手动刷新。"}</p>
-        ) : null}
         <div className="np-mmd-scroll-region">
           <div className="np-mmd-content-column">
             {invalidDeepLink ? (
