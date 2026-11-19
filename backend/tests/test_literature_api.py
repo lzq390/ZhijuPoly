@@ -27,6 +27,17 @@ from test_auth_isolation import auth_database
 from test_private_http_support import authenticated_client
 
 
+def test_literature_attachment_get_and_head_have_distinct_operation_ids():
+    app = FastAPI()
+    app.include_router(router)
+    path = "/api/v1/knowledge/literature/{document_uid}/files/{asset_uid}/content"
+    operations = app.openapi()["paths"][path]
+    assert operations["get"]["operationId"] == (
+        "get_literature_file_api_v1_knowledge_literature__document_uid__files__asset_uid__content_get"
+    )
+    assert operations["head"]["operationId"] != operations["get"]["operationId"]
+
+
 def test_literature_doi_precedes_boolean_parser_and_has_no_iupac_expansion():
     doi = "10.1002/(sici)1099-0518(199610)34:14<2867::aid-pola4>3.0.co;2-o"
     assert literature_search_groups(KnowledgeSearchRequest(query="https://doi.org/" + doi,
