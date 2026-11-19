@@ -53,13 +53,19 @@ type HomopolymerPredictionPanelProps = {
   hasAttempt: boolean;
   structureMissing: boolean;
   latestRun: PredictionRun | null;
-  runCount: number;
+  /** 1-based position of the displayed run within this session. */
+  runNumber: number;
+  /** All runs of this session, oldest first. */
+  runs: readonly PredictionRun[];
   stale: boolean;
   comparison: PredictionRun | null;
   comparisonOptions: readonly PredictionRun[];
   onComparisonChange: (runId: number | null) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onRetry: () => void;
+  onRestoreRun: (run: PredictionRun) => void;
+  /** Relay links only make sense once there is a structure to carry over. */
+  showRelay: boolean;
   onOpenModule?: (module: PredictionRelayModule) => void;
 };
 
@@ -252,6 +258,52 @@ function ResultTable({
   );
 }
 
+function SessionRuns({
+  runs,
+  current,
+  comparison,
+  onRestore
+}: {
+  runs: readonly PredictionRun[];
+  current: PredictionRun;
+  comparison: PredictionRun | null;
+  onRestore: (run: PredictionRun) => void;
+}) {
+  const headingId = useId();
+  return (
+    <section className="np-hp-runs" aria-labelledby={headingId}>
+      <header>
+        <h3 id={headingId}>本次会话的运行</h3>
+        <small>点一条可恢复结构和结果</small>
+      </header>
+      <ol>
+        {[...runs].reverse().map((run) => {
+          const isCurrent = run.id === current.id;
+          const tg = formatPredictionValue(predictionValue(run, "Glass transition temperature"));
+          const role = isCurrent ? "当前" : comparison?.id === run.id ? "对比中" : null;
+          return (
+            <li key={run.id}>
+              <button
+                type="button"
+                className={isCurrent ? "is-current" : undefined}
+                aria-current={isCurrent ? "true" : undefined}
+                disabled={isCurrent}
+                onClick={() => onRestore(run)}
+              >
+                <span className="np-hp-runs__main">
+                  <code title={run.smiles}>{displaySmiles(run.smiles)}</code>
+                  <small>{formatRunTime(run.finishedAt)}，{run.properties.length} 项{role ? `，${role}` : ""}</small>
+                </span>
+                {tg !== null ? <span className="np-hp-runs__tg">Tg <strong>{tg}</strong> °C</span> : null}
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
 export function HomopolymerPredictionPanel({
   formRef,
   selectedProperties,
@@ -263,13 +315,16 @@ export function HomopolymerPredictionPanel({
   hasAttempt,
   structureMissing,
   latestRun,
-  runCount,
+  runNumber,
+  runs,
   stale,
   comparison,
   comparisonOptions,
   onComparisonChange,
   onSubmit,
   onRetry,
+  onRestoreRun,
+  showRelay,
   onOpenModule
 }: HomopolymerPredictionPanelProps) {
   const selectionId = useId();
@@ -310,7 +365,7 @@ export function HomopolymerPredictionPanel({
               aria-controls={`${selectionId}-editor`}
               onClick={() => onSelectionOpenChange(!selectionOpen)}
             >
-              {selectionOpen ? "完成" : "调整"}
+              {selectionOpen ? "收起" : "调整"}
             </button>
           </div>
           {selectionOpen ? (
@@ -388,7 +443,7 @@ export function HomopolymerPredictionPanel({
             预测结果
             {latestRun && !loading ? (
               <small>
-                {runCount > 1 ? `第 ${runCount} 次运行，` : ""}
+                {runs.length > 1 ? `第 ${runNumber} 次运行，` : ""}
                 {latestRun.queryTimeMs.toFixed(1)} ms
               </small>
             ) : null}
@@ -445,6 +500,9 @@ export function HomopolymerPredictionPanel({
             <p className="np-hp-footnote">
               模型预测值，需结合实验验证{comparison ? "；加粗表示变化超过 20%" : ""}。
             </p>
+            {runs.length > 1 ? (
+              <SessionRuns runs={runs} current={latestRun} comparison={comparison} onRestore={onRestoreRun} />
+            ) : null}
           </>
         ) : null}
 
@@ -473,7 +531,7 @@ export function HomopolymerPredictionPanel({
         ) : null}
       </section>
 
-      {onOpenModule ? (
+      {onOpenModule && showRelay ? (
         <nav className="np-hp-next" aria-label="用这个结构继续">
           <span>用这个结构继续</span>
           {RELAY_LINKS.map((link) => (

@@ -1,10 +1,12 @@
 import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
+import { BookOpen } from "lucide-react";
 import {
   forwardRef,
   useCallback,
   useEffect,
+  useId,
   useImperativeHandle,
   useRef,
   useState,
@@ -17,12 +19,16 @@ import type { PredictableProperty, StructureWorkspaceContext } from "../types";
 import "../styles/structure-workbench.css";
 import "../styles/homopolymer-property-prediction.css";
 import type { StructureCanvasOwnerHandle } from "./StructureWorkbenchPage";
-import { StructureCanvasSurface } from "./structure-workbench/StructureCanvasSurface";
+import { runCanvasMutation, StructureCanvasSurface } from "./structure-workbench/StructureCanvasSurface";
 import {
   HomopolymerPredictionPanel,
   type PredictionRelayModule
 } from "./homopolymer-prediction/HomopolymerPredictionPanel";
+import { HomopolymerPredictionHelp } from "./homopolymer-prediction/HomopolymerPredictionHelp";
+import { HOMOPOLYMER_EXAMPLES } from "./homopolymer-prediction/examples";
 import type { PredictionRun } from "./homopolymer-prediction/predictionFormat";
+import { ModuleDock } from "./module-frame/ModuleDock";
+import { ModuleTools } from "./module-frame/ModuleTools";
 
 type HomopolymerPropertyPredictionPageProps = {
   structure: StructureWorkspaceContext;
@@ -43,17 +49,22 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
   const [selectedProperties, setSelectedProperties] = useState<PredictableProperty[]>(() => [
     ...PREDICTABLE_PROPERTIES
   ]);
-  const [selectionOpen, setSelectionOpen] = useState(false);
+  // The choice is the first decision on an empty page; it folds away after the first result.
+  const [selectionOpen, setSelectionOpen] = useState(true);
   const [hasActivated3D, setHasActivated3D] = useState(false);
   const [hasAttempt, setHasAttempt] = useState(false);
   const [structureMissing, setStructureMissing] = useState(false);
   const [runs, setRuns] = useState<PredictionRun[]>([]);
-  // "latest" follows the newest previous run until the user picks another.
+  const [viewedRunId, setViewedRunId] = useState<number | null>(null);
+  // "latest" follows the newest other run until the user picks another.
   const [comparisonChoice, setComparisonChoice] = useState<number | null | "latest">("latest");
+  const [dockOpen, setDockOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
+  const helpButtonRef = useRef<HTMLButtonElement | null>(null);
   const requestRef = useRef(0);
   const runIdRef = useRef(0);
+  const dockId = useId();
   const predict = usePredict();
   const canvas = useTgStructureCanvas({
     structure,
@@ -103,7 +114,6 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
     const properties = PREDICTABLE_PROPERTIES.filter((property) => selectedProperties.includes(property));
     const request = ++requestRef.current;
     setHasAttempt(true);
-    setSelectionOpen(false);
     try {
       const data = await predict.submit({ smiles, properties });
       if (request !== requestRef.current) return;
@@ -116,14 +126,25 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
         finishedAt: new Date()
       };
       setRuns((current) => [...current, run].slice(-RUN_HISTORY_LIMIT));
+      setViewedRunId(null);
       setComparisonChoice("latest");
+      setSelectionOpen(false);
     } catch {
       // usePredict owns the visible error and ignores cancelled or stale responses.
     }
   }
 
-  const latestRun = runs.at(-1) ?? null;
-  const comparisonOptions = runs.slice(0, -1).reverse();
+  function restoreRun(run: PredictionRun) {
+    if (!requestServiceAccess()) return;
+    setViewedRunId(run.id);
+    setComparisonChoice("latest");
+    setSelectedProperties([...run.properties]);
+    void runCanvasMutation(structure, canvas, () => canvas.loadStructure(run.smiles));
+  }
+
+  const viewedRun = (viewedRunId === null ? null : runs.find((run) => run.id === viewedRunId)) ?? runs.at(-1) ?? null;
+  const runNumber = viewedRun ? runs.indexOf(viewedRun) + 1 : 0;
+  const comparisonOptions = runs.filter((run) => run !== viewedRun).reverse();
   const comparison =
     comparisonChoice === "latest"
       ? comparisonOptions[0] ?? null
@@ -131,11 +152,12 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
         ? null
         : comparisonOptions.find((run) => run.id === comparisonChoice) ?? null;
   const stale = Boolean(
-    latestRun &&
-      (structure.smiles.trim() !== latestRun.smiles ||
-        !sameProperties(selectedProperties, latestRun.properties))
+    viewedRun &&
+      (structure.smiles.trim() !== viewedRun.smiles ||
+        !sameProperties(selectedProperties, viewedRun.properties))
   );
   const operationBusy = canvas.isBusy || predict.isLoading;
+  const hasStructure = Boolean(structure.smiles.trim() || canvas.smilesDraft.trim());
 
   return (
     <div
@@ -143,45 +165,96 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
       className="np-module-page np-structure-workbench np-homopolymer-prediction"
       data-module="homopolymer-property-prediction"
     >
-      <ModulePageHeader actions={<BrowsingRecordingControls module="homopolymerPrediction" />}>均聚物性质预测</ModulePageHeader>
-      <div className="np-sw-page np-module-page-body np-hp-page">
-        <div className="np-hp-workbench">
-          <main className="np-sw-workspace np-hp-structure">
-            <StructureCanvasSurface
-              structure={structure}
-              canvas={canvas}
-              hasActivated3D={hasActivated3D}
-              operationBusy={operationBusy}
-              editorTitle="均聚物性质预测结构编辑器"
-              commandbarLabel="结构"
-              onLoadExample={() => canvas.loadStructure(HOMOPOLYMER_EXAMPLE_SMILES)}
-              onImportFile={(file) => canvas.importImageFile(file)}
-              onClear={() => canvas.clearCanvas()}
-              onSync={() => canvas.syncSmilesFromCanvas()}
-              onToggle3D={toggle3D}
-            />
-          </main>
-
-          <HomopolymerPredictionPanel
-            formRef={formRef}
-            selectedProperties={selectedProperties}
-            onSelectedPropertiesChange={setSelectedProperties}
-            selectionOpen={selectionOpen}
-            onSelectionOpenChange={setSelectionOpen}
-            loading={predict.isLoading}
-            error={predict.error}
-            hasAttempt={hasAttempt}
-            structureMissing={structureMissing}
-            latestRun={predict.error ? null : latestRun}
-            runCount={runs.length}
-            stale={stale}
-            comparison={comparison}
-            comparisonOptions={comparisonOptions}
-            onComparisonChange={setComparisonChoice}
-            onSubmit={submitPrediction}
-            onRetry={() => formRef.current?.requestSubmit()}
-            onOpenModule={onOpenModule}
+      <ModulePageHeader
+        actions={
+          <ModuleTools
+            recording={<BrowsingRecordingControls module="homopolymerPrediction" />}
+            help={{
+              id: "help",
+              label: "使用说明",
+              icon: <BookOpen aria-hidden="true" />,
+              pressed: dockOpen,
+              controls: dockOpen ? dockId : undefined,
+              buttonRef: helpButtonRef,
+              onClick: () => setDockOpen((open) => !open)
+            }}
           />
+        }
+      >
+        均聚物性质预测
+      </ModulePageHeader>
+      <div className="np-sw-page np-module-page-body np-hp-page">
+        <div className="np-module-frame np-hp-frame">
+          <div className="np-hp-workbench np-module-frame__main">
+            <main className="np-sw-workspace np-hp-structure">
+              <StructureCanvasSurface
+                structure={structure}
+                canvas={canvas}
+                hasActivated3D={hasActivated3D}
+                operationBusy={operationBusy}
+                editorTitle="均聚物性质预测结构编辑器"
+                commandbarLabel="结构"
+                onLoadExample={() => canvas.loadStructure(HOMOPOLYMER_EXAMPLE_SMILES)}
+                onImportFile={(file) => canvas.importImageFile(file)}
+                onClear={() => canvas.clearCanvas()}
+                onSync={() => canvas.syncSmilesFromCanvas()}
+                onToggle3D={toggle3D}
+                emptyState={(load) => (
+                  <div className="np-hp-start">
+                    <strong>在这里画出重复单元</strong>
+                    <p>用 * 标出两个连接点，或在下方粘贴 SMILES；也可以从示例开始：</p>
+                    <ul aria-label="示例结构">
+                      {HOMOPOLYMER_EXAMPLES.map((example) => (
+                        <li key={example.abbr}>
+                          <button type="button" onClick={() => load(example.smiles)} title={`${example.name}：${example.smiles}`}>
+                            <img src={example.image} alt="" loading="lazy" />
+                            <span>
+                              <b>{example.abbr}</b>
+                              <small>{example.name}</small>
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              />
+            </main>
+
+            <HomopolymerPredictionPanel
+              formRef={formRef}
+              selectedProperties={selectedProperties}
+              onSelectedPropertiesChange={setSelectedProperties}
+              selectionOpen={selectionOpen}
+              onSelectionOpenChange={setSelectionOpen}
+              loading={predict.isLoading}
+              error={predict.error}
+              hasAttempt={hasAttempt}
+              structureMissing={structureMissing}
+              latestRun={predict.error ? null : viewedRun}
+              runNumber={runNumber}
+              runs={runs}
+              stale={stale}
+              comparison={comparison}
+              comparisonOptions={comparisonOptions}
+              onComparisonChange={setComparisonChoice}
+              onSubmit={submitPrediction}
+              onRetry={() => formRef.current?.requestSubmit()}
+              onRestoreRun={restoreRun}
+              showRelay={hasStructure}
+              onOpenModule={onOpenModule}
+            />
+          </div>
+          {dockOpen ? (
+            <ModuleDock
+              id={dockId}
+              tabs={[{ id: "help", label: "使用说明", content: <HomopolymerPredictionHelp /> }]}
+              activeTab="help"
+              onTabChange={() => undefined}
+              onClose={() => setDockOpen(false)}
+              returnFocusRef={helpButtonRef}
+            />
+          ) : null}
         </div>
       </div>
     </div>

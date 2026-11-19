@@ -45,7 +45,31 @@ type StructureCanvasSurfaceProps = {
   onSync: () => void | Promise<unknown>;
   onToggle3D: () => void | Promise<unknown>;
   onSmilesDraftChange?: (value: string) => void;
+  /** Optional guidance over an empty 2D canvas; `load` writes a structure through the normal mutation path. */
+  emptyState?: (load: (smiles: string) => void) => ReactNode;
 };
+
+/**
+ * Canvas writes from outside the editor (examples, history, buttons) must cancel pending SMILES
+ * draft sync, stay within the workspace session and adopt the editor's SMILES afterwards.
+ */
+export async function runCanvasMutation(
+  structure: StructureWorkspaceContext,
+  canvas: StructureCanvasController,
+  action: () => void | Promise<unknown>,
+  writesEditor = true
+) {
+  const current = structure.workspace.guard();
+  const finish = writesEditor ? structure.workspace.beginMutation() : () => {};
+  try {
+    await canvas.cancelSmilesDraftSync();
+    if (!current()) return;
+    await action();
+  } finally {
+    if (current()) canvas.adoptCanvasSmiles();
+    finish();
+  }
+}
 
 function ToolButton({
   label,
@@ -108,20 +132,13 @@ export function StructureCanvasSurface({
   onClear,
   onSync,
   onToggle3D,
-  onSmilesDraftChange
+  onSmilesDraftChange,
+  emptyState
 }: StructureCanvasSurfaceProps) {
-  async function runCanvasMutation(action: () => void | Promise<unknown>, writesEditor = true) {
-    const current = structure.workspace.guard();
-    const finish = writesEditor ? structure.workspace.beginMutation() : () => {};
-    try {
-      await canvas.cancelSmilesDraftSync();
-      if (!current()) return;
-      await action();
-    } finally {
-      if (current()) canvas.adoptCanvasSmiles();
-      finish();
-    }
-  }
+  const mutate = (action: () => void | Promise<unknown>, writesEditor = true) =>
+    runCanvasMutation(structure, canvas, action, writesEditor);
+  const showEmptyState = Boolean(emptyState) && canvas.isEditorReady && !canvas.isFlipped &&
+    !structure.smiles.trim() && !canvas.smilesDraft.trim() && !canvas.isLoadingStructure;
 
   const smilesStatus = canvas.smilesDraftError || (
     canvas.smilesDraftState === "pending"
@@ -141,7 +158,7 @@ export function StructureCanvasSurface({
         aria-label="导入结构图片"
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
-          if (file && requestServiceAccess()) void runCanvasMutation(() => onImportFile(file));
+          if (file && requestServiceAccess()) void mutate(() => onImportFile(file));
         }}
       />
 
@@ -154,7 +171,7 @@ export function StructureCanvasSurface({
             busy={canvas.isLoadingStructure}
             icon={<Atom aria-hidden="true" />}
             disabled={operationBusy}
-            onClick={() => void runCanvasMutation(onLoadExample)}
+            onClick={() => void mutate(onLoadExample)}
           />
           <ToolButton
             label="导入图片"
@@ -171,7 +188,7 @@ export function StructureCanvasSurface({
             icon={<Eraser aria-hidden="true" />}
             disabled={operationBusy || !canvas.isEditorReady}
             danger
-            onClick={() => void runCanvasMutation(onClear)}
+            onClick={() => void mutate(onClear)}
           />
           <ToolButton
             label="生成SMILES"
@@ -180,7 +197,7 @@ export function StructureCanvasSurface({
             icon={<RefreshCcw aria-hidden="true" />}
             disabled={operationBusy || !canvas.isEditorReady}
             primary
-            onClick={() => void runCanvasMutation(onSync, false)}
+            onClick={() => void mutate(onSync, false)}
           />
           <ToolButton
             label={canvas.isFlipped ? "2D画布" : "3D构象"}
@@ -237,6 +254,11 @@ export function StructureCanvasSurface({
             </div>
           ) : null}
         </div>
+        {showEmptyState && emptyState ? (
+          <div className="np-sw-empty-state">
+            {emptyState((smiles) => { if (requestServiceAccess()) void mutate(() => canvas.loadStructure(smiles)); })}
+          </div>
+        ) : null}
       </div>
 
       <footer className="np-sw-smiles" aria-labelledby="np-sw-smiles-label">

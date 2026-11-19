@@ -15,7 +15,10 @@
   --np-hp-thermal: #d9682b;
   --np-hp-mechanical: #14897c;
   --np-hp-permeability: #7a4fd6;
-  --np-hp-panel-w: 400px;
+  --np-hp-panel-min: 400px;
+  --np-hp-panel-max: 480px;
+  /* Fill the work area on common screens; only ultrawide windows hit this cap and centre. */
+  --np-hp-frame-max: 1680px;
   --np-hp-gutter: 24px;
   --np-hp-pad: 22px;
   --np-hp-radius: 14px;
@@ -44,7 +47,8 @@
 
 .np-structure-workbench.np-homopolymer-prediction .np-hp-workbench {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--np-hp-panel-w);
+  /* Results get ~42% of the surface, within readable limits, instead of a fixed column. */
+  grid-template-columns: minmax(0, 1fr) clamp(var(--np-hp-panel-min), 42%, var(--np-hp-panel-max));
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -250,6 +254,239 @@
     clip: rect(0 0 0 0);
     white-space: nowrap;
   }
+}
+
+/* Width rules: the frame may cap the work surface; the dock uses whatever is left. */
+.np-structure-workbench.np-homopolymer-prediction .np-hp-frame {
+  --np-frame-max: var(--np-hp-frame-max);
+  justify-content: center;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-hp-frame > .np-hp-workbench {
+  height: 100%;
+}
+
+/* Duplicates on this page: the canvas syncs SMILES continuously, and our toolbar already clears. */
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool[data-workbench-tool="sync"],
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [data-testid="clear-canvas"] {
+  display: none;
+}
+
+/* ---------- empty canvas: what to draw and where to start ---------- */
+/* Keep guidance clear of Ketcher's own top, side and template toolbars. */
+.np-structure-workbench.np-homopolymer-prediction .np-sw-empty-state {
+  padding: 56px 72px;
+}
+
+.np-homopolymer-prediction .np-hp-start {
+  width: min(600px, 100%);
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs);
+  line-height: 1.6;
+  text-align: center;
+}
+
+.np-homopolymer-prediction .np-hp-start > strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--np-hp-ink2);
+  font-size: var(--np-hp-fs-lg);
+  font-weight: 600;
+}
+
+.np-homopolymer-prediction .np-hp-start > p {
+  margin: 0 0 14px;
+}
+
+.np-homopolymer-prediction .np-hp-start ul {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.np-homopolymer-prediction .np-hp-start button {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--np-hp-line);
+  border-radius: 10px;
+  color: inherit;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.np-homopolymer-prediction .np-hp-start button:hover {
+  border-color: var(--np-hp-line2);
+  background: #f9fafb;
+}
+
+.np-homopolymer-prediction .np-hp-start img {
+  display: block;
+  width: 76px;
+  height: 42px;
+  border-radius: 6px;
+  background: #f9fafb;
+  object-fit: contain;
+}
+
+.np-homopolymer-prediction .np-hp-start b {
+  display: block;
+  color: var(--np-hp-ink);
+  font-size: var(--np-hp-fs-sm);
+  font-weight: 600;
+}
+
+.np-homopolymer-prediction .np-hp-start small {
+  display: block;
+  overflow: hidden;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- session runs ---------- */
+.np-homopolymer-prediction .np-hp-runs {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--np-hp-line);
+}
+
+.np-homopolymer-prediction .np-hp-runs > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.np-homopolymer-prediction .np-hp-runs h3 {
+  margin: 0;
+  color: var(--np-hp-ink);
+  font-family: var(--font-body);
+  font-size: var(--np-hp-fs-title);
+  font-weight: 600;
+}
+
+.np-homopolymer-prediction .np-hp-runs > header small {
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+}
+
+.np-homopolymer-prediction .np-hp-runs ol {
+  margin: 0 -8px;
+  padding: 0;
+  list-style: none;
+}
+
+.np-homopolymer-prediction .np-hp-runs button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.np-homopolymer-prediction .np-hp-runs button:hover:not(:disabled) {
+  background: #f9fafb;
+}
+
+.np-homopolymer-prediction .np-hp-runs button.is-current {
+  background: #f6f8fe;
+  cursor: default;
+}
+
+.np-homopolymer-prediction .np-hp-runs__main {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.np-homopolymer-prediction .np-hp-runs code {
+  display: block;
+  overflow: hidden;
+  color: var(--np-hp-ink2);
+  font-family: var(--font-mono);
+  font-size: var(--np-hp-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-homopolymer-prediction .np-hp-runs__main small,
+.np-homopolymer-prediction .np-hp-runs__tg {
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  white-space: nowrap;
+}
+
+.np-homopolymer-prediction .np-hp-runs__tg strong {
+  color: var(--np-hp-ink);
+  font-size: var(--np-hp-fs-sm);
+  font-weight: 600;
+}
+
+/* ---------- help (module dock) ---------- */
+.np-hp-help section + section {
+  margin-top: 18px;
+}
+
+.np-hp-help h3 {
+  margin: 0 0 6px;
+  color: #101828;
+  font-family: var(--font-body);
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.np-hp-help p,
+.np-hp-help ul,
+.np-hp-help dl {
+  margin: 0;
+  color: #344054;
+}
+
+.np-hp-help ul {
+  padding-left: 1.2em;
+  list-style: disc;
+}
+
+.np-hp-help li + li {
+  margin-top: 4px;
+}
+
+.np-hp-help dl > div + div {
+  margin-top: 6px;
+}
+
+.np-hp-help dt {
+  color: #101828;
+  font-weight: 500;
+}
+
+.np-hp-help dd {
+  margin: 0;
+}
+
+.np-hp-help code,
+.np-hp-help kbd {
+  padding: 0 4px;
+  border: 1px solid #eaecf0;
+  border-radius: 4px;
+  background: #f9fafb;
+  font-family: var(--font-mono);
+  font-size: 0.92em;
 }
 
 /* ---------- task panel ---------- */
@@ -809,7 +1046,8 @@
 /* ---------- tiers ---------- */
 @media (min-width: 1600px) {
   .np-structure-workbench.np-homopolymer-prediction {
-    --np-hp-panel-w: 440px;
+    --np-hp-panel-min: 440px;
+    --np-hp-panel-max: 600px;
     --np-hp-gutter: 32px;
     --np-hp-pad: 24px;
   }
@@ -817,7 +1055,8 @@
 
 @media (max-width: 1399px) {
   .np-structure-workbench.np-homopolymer-prediction {
-    --np-hp-panel-w: 372px;
+    --np-hp-panel-min: 372px;
+    --np-hp-panel-max: 372px;
     --np-hp-gutter: 20px;
     --np-hp-pad: 20px;
     --np-hp-row: 32px;
@@ -827,7 +1066,8 @@
 /* Keep the editor zone at or above Ketcher's ~530px compact minimum. */
 @media (max-width: 1279px) {
   .np-structure-workbench.np-homopolymer-prediction {
-    --np-hp-panel-w: 340px;
+    --np-hp-panel-min: 340px;
+    --np-hp-panel-max: 340px;
     --np-hp-pad: 18px;
   }
 }
@@ -877,7 +1117,9 @@
 /* Native 2K: the same layout, every panel measure scaled by about 1.3. */
 @media (min-width: 2000px) and (min-height: 1120px) {
   .np-structure-workbench.np-homopolymer-prediction {
-    --np-hp-panel-w: 560px;
+    --np-hp-panel-min: 560px;
+    --np-hp-panel-max: 780px;
+    --np-hp-frame-max: 2184px;
     --np-hp-gutter: 36px;
     --np-hp-pad: 30px;
     --np-hp-radius: 20px;
@@ -935,6 +1177,11 @@
     overflow-y: auto;
     /* No bottom padding: sticky bars rest on the padding edge, which would expose content below. */
     padding: 0 12px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-frame {
+    display: block;
+    height: auto;
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-hp-workbench {
@@ -1009,6 +1256,26 @@
 }
 
 @container np-sw-workbench (max-width: 559px) {
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-empty-state {
+    padding: 52px 60px 48px;
+  }
+
+  .np-homopolymer-prediction .np-hp-start > p,
+  .np-homopolymer-prediction .np-hp-start img,
+  .np-homopolymer-prediction .np-hp-start small {
+    display: none;
+  }
+
+  .np-homopolymer-prediction .np-hp-start > strong {
+    margin-bottom: 10px;
+  }
+
+  .np-homopolymer-prediction .np-hp-start button {
+    display: block;
+    padding: 7px 8px;
+    text-align: center;
+  }
+
   .np-structure-workbench.np-homopolymer-prediction .np-sw-commandbar {
     flex-wrap: nowrap;
   }

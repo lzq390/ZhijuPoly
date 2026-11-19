@@ -100,8 +100,13 @@ function panel() {
 }
 
 function openSelection() {
-  fireEvent.click(within(panel()).getByRole("button", { name: "调整" }));
+  const toggle = within(panel()).queryByRole("button", { name: "调整" });
+  if (toggle) fireEvent.click(toggle);
   return panel();
+}
+
+function resultsTable() {
+  return within(panel()).getAllByRole("table").at(-1)!;
 }
 
 function run() {
@@ -128,7 +133,7 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("HomopolymerPropertyPredictionPage", () => {
-  it("结构画板与常驻任务面板并排，默认全选九项并列出占位结果", () => {
+  it("结构画板与常驻任务面板并排，运行前展开九项性质选择并列出占位结果", () => {
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
 
     expect(screen.getByRole("heading", { name: "均聚物性质预测" })).toBeTruthy();
@@ -139,11 +144,19 @@ describe("HomopolymerPropertyPredictionPage", () => {
     expect(within(panel()).getByRole("button", { name: "运行预测" })).toBeTruthy();
     expect(within(panel()).getAllByText("—")).toHaveLength(9);
 
-    const editor = openSelection();
-    const checkboxes = within(editor).getAllByRole("checkbox") as HTMLInputElement[];
+    const checkboxes = within(panel()).getAllByRole("checkbox") as HTMLInputElement[];
     expect(checkboxes).toHaveLength(9);
     expect(checkboxes.every((checkbox) => checkbox.checked)).toBe(true);
-    expect(within(editor).getByText("全部 9 项性质")).toBeTruthy();
+    expect(within(panel()).getByRole("button", { name: "收起" }).getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("首次成功运行后收起性质选择，之后可再展开", async () => {
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
+    run();
+    await waitFor(() => expect(within(resultsTable()).getByText("123")).toBeTruthy());
+    expect(within(panel()).queryAllByRole("checkbox")).toHaveLength(0);
+    fireEvent.click(within(panel()).getByRole("button", { name: "调整" }));
+    expect(within(panel()).getAllByRole("checkbox")).toHaveLength(9);
   });
 
   it("支持清空、分组和全选，并以固定顺序提交所选性质", async () => {
@@ -243,12 +256,12 @@ describe("HomopolymerPropertyPredictionPage", () => {
     run();
     expect(await screen.findByText(/第 2 次运行/)).toBeTruthy();
     expect(screen.getByRole("columnheader", { name: "上次" })).toBeTruthy();
-    const delta = screen.getByText("+50");
+    const delta = within(resultsTable()).getByText("+50");
     expect(delta.classList.contains("is-large")).toBe(true);
 
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "none" } });
     expect(screen.queryByRole("columnheader", { name: "变化" })).toBeNull();
-    expect(screen.getByText("150")).toBeTruthy();
+    expect(within(resultsTable()).getByText("150")).toBeTruthy();
   });
 
   it("结构变化后保留上次结果并显示提交结构", async () => {
@@ -272,7 +285,7 @@ describe("HomopolymerPropertyPredictionPage", () => {
 
     const editor = openSelection();
     fireEvent.click(within(editor).getByRole("checkbox", { name: /玻璃化转变温度/ }));
-    fireEvent.click(within(editor).getByRole("button", { name: "完成" }));
+    fireEvent.click(within(editor).getByRole("button", { name: "收起" }));
 
     expect(screen.getByText(/当前结构或性质选择已变化/)).toBeTruthy();
     expect(screen.getByText("123")).toBeTruthy();
@@ -299,6 +312,59 @@ describe("HomopolymerPropertyPredictionPage", () => {
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
     fireEvent.keyDown(screen.getByLabelText("SMILES 输入，自动同步到画板"), { key: "Enter", ctrlKey: true });
     await waitFor(() => expect(mocks.predictSmiles).toHaveBeenCalledOnce());
+  });
+
+  it("空画板显示示例，点击示例经由画板写入结构", async () => {
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure("")} />);
+    const examples = screen.getByRole("list", { name: "示例结构" });
+    fireEvent.click(within(examples).getByRole("button", { name: /PS/ }));
+    await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledWith("*CC(*)c1ccccc1"));
+    expect(mocks.cancelSmilesDraftSync).toHaveBeenCalled();
+  });
+
+  it("有结构时不显示示例", () => {
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure("*CC*")} />);
+    expect(screen.queryByRole("list", { name: "示例结构" })).toBeNull();
+  });
+
+  it("本次会话的运行可恢复较早的结构与结果", async () => {
+    mocks.resolveSmilesForSearch.mockResolvedValueOnce("*CC*").mockResolvedValueOnce("CCO");
+    mocks.predictSmiles
+      .mockResolvedValueOnce({ predictions: { "Glass transition temperature": 100 }, query_time_ms: 5 })
+      .mockResolvedValueOnce({ predictions: { "Glass transition temperature": 150 }, query_time_ms: 6 });
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
+    run();
+    await waitFor(() => expect(within(resultsTable()).getByText("100")).toBeTruthy());
+    expect(screen.queryByRole("heading", { name: "本次会话的运行" })).toBeNull();
+    run();
+    expect(await screen.findByRole("heading", { name: "本次会话的运行" })).toBeTruthy();
+
+    const runs = screen.getByRole("heading", { name: "本次会话的运行" }).closest("section")!;
+    const [current, earlier] = within(runs).getAllByRole("button");
+    expect(current.getAttribute("aria-current")).toBe("true");
+    fireEvent.click(earlier);
+
+    await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledWith("*CC*"));
+    expect(within(resultsTable()).getByText("100")).toBeTruthy();
+    expect(screen.getByText(/第 1 次运行/)).toBeTruthy();
+  });
+
+  it("使用说明在辅助栏打开，Escape 关闭并把焦点还给入口", async () => {
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
+    const trigger = screen.getByRole("button", { name: "使用说明" });
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("aria-pressed")).toBe("true");
+    const dock = screen.getByRole("complementary", { name: "使用说明" });
+    expect(within(dock).getByRole("heading", { name: "运行与对比" })).toBeTruthy();
+
+    fireEvent.keyDown(within(dock).getByRole("button", { name: "关闭使用说明" }), { key: "Escape" });
+    expect(screen.queryByRole("complementary", { name: "使用说明" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("没有结构时不显示“用这个结构继续”", () => {
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure("")} onOpenModule={vi.fn()} />);
+    expect(screen.queryByRole("navigation", { name: "用这个结构继续" })).toBeNull();
   });
 
   it("用这个结构继续跳转到相关模块", () => {

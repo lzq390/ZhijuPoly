@@ -40,12 +40,47 @@ export type KetcherInstance = {
   }> } };
   editor?: {
     serverSettings?: Record<string, unknown>;
-    struct?(value: unknown, center?: boolean): unknown;
+    struct?(value?: unknown, center?: boolean): unknown;
     zoomAccordingContent?(value: unknown): unknown;
+    zoom?(value?: number): number;
     centerStruct?(): void;
     centerViewportAccordingToStruct?(): void;
+    render?: {
+      options?: { microModeScale?: number };
+      clientArea?: { getBoundingClientRect(): { width: number; height: number } };
+    };
   };
 };
+
+type StructWithBounds = { getCoordBoundingBox?(): { min: { x: number; y: number }; max: { x: number; y: number } } };
+
+// Ketcher's own import fit only ever shrinks (its zoom ceiling is 100%), so a small repeat unit
+// lands as a few millimetres in a large canvas. Enlarge imported structures to a readable share
+// of the visible canvas, never beyond 2x, and never shrink what Ketcher already fitted.
+const IMPORT_FIT_WIDTH = 0.4;
+const IMPORT_FIT_HEIGHT = 0.45;
+const IMPORT_FIT_MAX_ZOOM = 2;
+
+export function enlargeImportedStructure(ketcher: KetcherInstance) {
+  const editor = ketcher.editor;
+  const struct = editor?.struct?.() as StructWithBounds | undefined;
+  const area = editor?.render?.clientArea?.getBoundingClientRect();
+  const scale = editor?.render?.options?.microModeScale;
+  if (!editor?.zoom || !struct?.getCoordBoundingBox || !area || !scale || area.width <= 0 || area.height <= 0) return;
+  const box = struct.getCoordBoundingBox();
+  const width = Math.max(box.max.x - box.min.x, 1);
+  const height = Math.max(box.max.y - box.min.y, 1);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+  const current = editor.zoom();
+  const target = Math.min(
+    IMPORT_FIT_MAX_ZOOM,
+    (IMPORT_FIT_WIDTH * area.width) / (width * scale),
+    (IMPORT_FIT_HEIGHT * area.height) / (height * scale)
+  );
+  if (!(target > current * 1.05)) return;
+  editor.zoom(target);
+  editor.centerStruct?.();
+}
 
 export function createKetcherAdapter(
   ketcher: KetcherInstance,
@@ -118,6 +153,9 @@ export function createKetcherAdapter(
       }
       if (!ketcher.setMolecule) missing("结构导入");
       await ketcher.setMolecule!(source);
+      if (isCurrent() && source.trim()) {
+        try { enlargeImportedStructure(ketcher); } catch { /* View fit is cosmetic; the structure is already loaded. */ }
+      }
     },
     clear: async () => {
       if (ketcher.clear) await ketcher.clear();

@@ -286,6 +286,21 @@
   pointer-events: none;
 }
 
+/* Page-provided guidance over an empty 2D canvas; only its own controls take pointer events. */
+.np-structure-workbench .np-sw-empty-state {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: none;
+}
+
+.np-structure-workbench .np-sw-empty-state :is(button, a, input) {
+  pointer-events: auto;
+}
+
 .np-structure-workbench .np-sw-editor {
   position: relative;
   display: grid;

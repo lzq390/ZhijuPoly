@@ -1,0 +1,297 @@
+/* Shared module frame: header tool group, auxiliary dock and the work area that hosts them.
+   Pages opt in by wrapping their surface in .np-module-frame and rendering ModuleTools/ModuleDock. */
+
+.np-module-tools {
+  --np-tools-h: 30px;
+  --np-tools-fs: 13px;
+  --np-tools-icon: 15px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.np-module-tools__button {
+  display: inline-flex;
+  height: var(--np-tools-h);
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #344054;
+  background: transparent;
+  font: 500 var(--np-tools-fs) / 1 var(--font-body);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.np-module-tools__button svg {
+  width: var(--np-tools-icon);
+  height: var(--np-tools-icon);
+  flex: none;
+  color: #667085;
+}
+
+.np-module-tools__button:hover {
+  background: #f2f4f7;
+}
+
+.np-module-tools__button.is-pressed {
+  color: #1d4ed8;
+  background: #eef3fe;
+}
+
+.np-module-tools__button.is-pressed svg {
+  color: var(--np-theme-blue, #2563eb);
+}
+
+.np-module-tools__button:focus-visible {
+  outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
+  outline-offset: 2px;
+}
+
+.np-module-tools__separator {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: #eaecf0;
+}
+
+/* The recording entry renders nothing on narrow screens (it lives in the mobile bar). */
+.np-module-tools__recording:empty {
+  display: none;
+}
+
+.np-module-tools:not(:has(> .np-module-tools__button:not([data-module-tool="help"]), > .np-module-tools__recording:not(:empty))) > .np-module-tools__separator {
+  display: none;
+}
+
+/* The recording entry keeps its behaviour and height rules; inside the group it drops the glow
+   so it reads as a peer of the other tools. Recording state stays green. */
+.np-module-tools .np-recording-entry .ks-recording-trigger:not(:disabled):not(.is-recording) {
+  border-color: #d0d5dd;
+  background: #fff;
+  color: #344054;
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.np-module-tools .np-recording-entry .ks-recording-trigger:not(:disabled):not(.is-recording):hover {
+  border-color: #b9c1cd;
+  background: #f9fafb;
+  box-shadow: none;
+}
+
+.np-module-tools .np-recording-entry .ks-recording-trigger svg {
+  color: #667085;
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-module-tools {
+    --np-tools-h: 42px;
+    --np-tools-fs: 16px;
+    --np-tools-icon: 19px;
+    gap: 6px;
+  }
+}
+
+/* ---------- work area + dock ---------- */
+.np-module-frame {
+  --np-frame-max: none;
+  --np-dock-w: 400px;
+  --np-dock-gap: 16px;
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  gap: var(--np-dock-gap);
+}
+
+.np-module-frame > .np-module-frame__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: var(--np-frame-max);
+}
+
+.np-module-dock {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 0 0 var(--np-dock-w);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #eaecf0;
+  border-radius: var(--np-theme-surface-radius, 14px);
+  color: #101828;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.np-module-dock__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 10px 10px 18px;
+  border-bottom: 1px solid #eaecf0;
+}
+
+.np-module-dock__header h2 {
+  margin: 0;
+  color: #101828;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  outline: none;
+}
+
+.np-module-dock__tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: #f2f4f7;
+}
+
+.np-module-dock__tabs button {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  color: #667085;
+  background: transparent;
+  font: 500 13px / 1 var(--font-body);
+  cursor: pointer;
+}
+
+.np-module-dock__tabs button.is-active {
+  color: #101828;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.1);
+}
+
+.np-module-dock__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.np-module-dock__close {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  margin-left: auto;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  color: #667085;
+  background: transparent;
+  cursor: pointer;
+}
+
+.np-module-dock__close:hover {
+  background: #f2f4f7;
+}
+
+.np-module-dock__close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.np-module-dock :is(button, a):focus-visible {
+  outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
+  outline-offset: 2px;
+}
+
+.np-module-dock__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 18px 20px;
+}
+
+/* Below ~1800px there is no room to push the surface without squeezing the editor under
+   its usable width, so the dock floats over the surface's right edge instead. */
+@media (max-width: 1799px) {
+  .np-module-frame > .np-module-dock {
+    position: absolute;
+    z-index: 30;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(var(--np-dock-w), calc(100% - 24px));
+    box-shadow: 0 16px 40px rgba(16, 24, 40, 0.16);
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-module-frame {
+    --np-dock-w: 520px;
+    --np-dock-gap: 20px;
+  }
+
+  .np-module-dock {
+    font-size: 17px;
+  }
+
+  .np-module-dock__header {
+    padding: 16px 14px 14px 24px;
+  }
+
+  .np-module-dock__header h2 {
+    font-size: 18px;
+  }
+
+  .np-module-dock__tabs button {
+    height: 36px;
+    padding: 0 16px;
+    font-size: 16px;
+  }
+
+  .np-module-dock__close {
+    width: 40px;
+    height: 40px;
+  }
+
+  .np-module-dock__close svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .np-module-dock__body {
+    padding: 22px 24px 26px;
+  }
+}
+
+/* Phones: the dock becomes a sheet under the 56px platform bar. */
+@media (max-width: 899px) {
+  .np-module-frame > .np-module-dock {
+    position: fixed;
+    z-index: 60;
+    inset: 56px 0 0;
+    width: auto;
+    border-width: 1px 0 0;
+    border-radius: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .np-module-dock {
+    animation: np-module-dock-in 160ms ease-out;
+  }
+}
+
+@keyframes np-module-dock-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
