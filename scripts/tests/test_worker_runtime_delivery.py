@@ -129,6 +129,18 @@ class ComposeWorkerRuntimeTests(unittest.TestCase):
             "http+unix://%2Fapp%2Fmonomer-md-worker%2Fworker.sock",
         )
 
+    def test_development_frontend_mounts_shared_polymer_md_configuration(self) -> None:
+        document = self._render(
+            BASE_COMPOSE,
+            DEV_COMPOSE,
+            environment={"PATH": os.defpath, "NEXPOLY_ASSET_ROOT": "/tmp/nexpoly-test-assets"},
+        )
+        mounts = {mount["target"]: mount for mount in document["services"]["frontend-dev"]["volumes"]}
+        mount = mounts["/app/polymer_md"]
+        self.assertEqual(mount["type"], "bind")
+        self.assertEqual(Path(mount["source"]), REPOSITORY_ROOT / "polymer_md")
+        self.assertTrue(mount["read_only"])
+
     def test_development_frontend_external_bind_is_explicit_and_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             environment = os.environ.copy()
