@@ -344,31 +344,72 @@ class Workspace:
             raise Problem("Stored M2 loopback program differs from its registered version")
         return path
 
+    def m3_root(self):
+        root = os.environ.get("OPENSCIENCE_M3_OVERLAY")
+        if not root or self.env != "dev-m1" or self.user not in ("test-user-a", "test-user-b"):
+            return None
+        return Path(root)
+
+    def m3_overlay(self):
+        base = self.m3_root()
+        if base is None:
+            return {}, {}
+        code = base / "code"
+        backend_overlay = {
+            "/m3-code": code,
+            "/m3-peer": base / self.row["id"],
+            "/app/backend/cli/src/session/prompt.ts": code / "prompt.ts",
+            "/app/backend/cli/src/server/server.ts": code / "server.ts",
+        }
+        return backend_overlay, {"/m3-model.py": code / "model.py"}
+
+    def retire_generation(self):
+        if root := self.m3_root():
+            (root / "generations" / self.user).unlink(missing_ok=True)
+
+    def rotate_credential(self):
+        self.retire_generation()
+        token = secrets.token_hex(32).encode("ascii")
+        write_atomic(self.secret_dir / "token", token, 0o444)
+        if root := self.m3_root():
+            write_atomic(root / "generations" / self.user, hashlib.sha256(token).hexdigest().encode("ascii"), 0o444)
+
     def create_pair(self):
         self.runtime.mkdir(mode=0o700, exist_ok=True)
         for path in (self.secret_dir, self.control):
             path.mkdir(mode=0o755, exist_ok=True)
             path.chmod(0o755)
-        write_atomic(self.secret_dir / "token", secrets.token_hex(32).encode(), 0o444)
+        self.rotate_credential()
         (self.control / "draining").unlink(missing_ok=True)
         secret = self.bind(self.secret_dir, TOKEN_DIR)
         transport = self.runtime / "transport"
         transport.mkdir(exist_ok=True)
         transport.chmod(0o733)  # Only accessible through the deployment owner's private runtime directory.
+        backend_overlay, fixture_overlay = self.m3_overlay()
+
+        def mount_flags(bindings):
+            flags = []
+            for target, source in bindings.items():
+                flags.extend(("--mount", self.bind(source, target)))
+            return flags
+
         fixture_id = docker("run", "-d", *RUNTIME, *self.label_flags("fixture"), "--name", self.fixture,
                             "--network", "none", "--user", "65534:65534", "--memory", "96m", "--memory-swap", "96m",
                             "--cpus", "0.5", "--pids-limit", "32", "--mount", secret, "--mount",
                             self.bind(self.registry.root / "fixture.py", "/fixture.py"), "--mount",
                             self.bind(self.transport_program(), "/m2-loopback.py"), "--mount",
-                            f"type=bind,src={transport},dst=/m2-transport", PYTHON,
-                            "python", "-B", "/m2-loopback.py")
-        env = [arg for k, v in ENV.items() for arg in ["--env", k + "=" + v]]
+                            f"type=bind,src={transport},dst=/m2-transport", *mount_flags(fixture_overlay), PYTHON,
+                            "python", "-B", "/m3-model.py" if fixture_overlay else "/m2-loopback.py")
+        settings = dict(ENV)
+        if backend_overlay:
+            settings["OPENSCIENCE_CONFIG"] = "/m3-code/config.json"
+        env = [arg for key, value in settings.items() for arg in ("--env", key + "=" + value)]
         return docker("run", "-d", *RUNTIME, *self.label_flags("backend"), "--name", self.backend, "--network",
                       "container:" + fixture_id, "--user", self.identity, "--memory", "2g", "--memory-swap", "2g",
                       "--cpus", "1", "--pids-limit", "256", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m,mode=1777",
                       "--mount", f"type=volume,src={self.volume},dst={MOUNT},volume-nocopy",
                       "--mount", secret, "--mount", self.bind(self.control, CONTROL),
-                      "--mount", self.bind(self.registry.root / "config.json", "/m1-config.json"), *env,
+                      "--mount", self.bind(self.registry.root / "config.json", "/m1-config.json"), *mount_flags(backend_overlay), *env,
                       self.registry.data["image"], "bun", "--conditions=browser", "/app/backend/cli/src/index.ts",
                       "serve", "--hostname", "127.0.0.1", "--port", "4096", "--project-root",
                       "/openscience/files/projects", "--general-workspace", "/openscience/files/general")
@@ -383,14 +424,18 @@ class Workspace:
         if (net != "container:" + fixture["id"] or fnet != "none" or user != self.identity
                 or fuser != "65534:65534" or ports or fports):
             raise Problem("Workspace network namespace, user or port bindings differ from the M1 template")
-        if (set(mounts) != {MOUNT, TOKEN_DIR, CONTROL, "/m1-config.json"}
-                or set(fm) not in ({TOKEN_DIR, "/fixture.py"}, {TOKEN_DIR, "/fixture.py", "/m2-loopback.py", "/m2-transport"})
+        backend_overlay, fixture_overlay = self.m3_overlay()
+        fixture_template = {TOKEN_DIR, "/fixture.py", "/m2-loopback.py", "/m2-transport", *fixture_overlay}
+        if (set(mounts) != {MOUNT, TOKEN_DIR, CONTROL, "/m1-config.json", *backend_overlay}
+                or set(fm) not in ({TOKEN_DIR, "/fixture.py"}, fixture_template)
                 or mounts[MOUNT].get("Type") != "volume" or mounts[MOUNT].get("Name") != self.volume
                 or not mounts[MOUNT]["RW"]):
             raise Problem("Workspace private mounts differ from the M1 template")
         bindings = [(mounts[TOKEN_DIR], self.secret_dir), (mounts[CONTROL], self.control),
                     (mounts["/m1-config.json"], self.registry.root / "config.json"),
                     (fm[TOKEN_DIR], self.secret_dir), (fm["/fixture.py"], self.registry.root / "fixture.py")]
+        bindings.extend((mounts[dst], src) for dst, src in backend_overlay.items())
+        bindings.extend((fm[dst], src) for dst, src in fixture_overlay.items())
         if "/m2-transport" in fm:
             channel = fm["/m2-transport"]
             if channel["Type"] != "bind" or not channel["RW"] or channel["Source"] != str(self.runtime / "transport"):
@@ -414,6 +459,7 @@ class Workspace:
 
     def remove_pair(self):
         items = [self.resource(role) for role in ("backend", "fixture")]
+        self.retire_generation()
         for item in items:
             if item:
                 if item["state"] == "running":
@@ -510,8 +556,9 @@ class Workspace:
             if reason:
                 return self.state(reason)
             if command == "restart":
+                self.retire_generation()
                 docker("stop", "--time", "10", backend["id"])
-                write_atomic(self.secret_dir / "token", secrets.token_hex(32).encode(), 0o444)
+                self.rotate_credential()
                 docker("start", backend["id"])
                 self.ready(fixture)
                 self.row["last_activity"] = time.time()

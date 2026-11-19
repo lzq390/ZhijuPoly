@@ -47,9 +47,15 @@ def workspace_extensions(dsn):
             "SELECT to_regprocedure('openscience_m2.membership_transition()')",
             "0002_membership_revocation.sql",
         ),
+        ("SELECT to_regclass('openscience_m3.delegations')", "0003_native_delegation.sql"),
+        (
+            "SELECT max(attname::text) FROM pg_attribute WHERE attrelid='openscience_m3.operations'::regclass "
+            "AND attname='workspace_generation' AND NOT attisdropped",
+            "0004_workspace_generation.sql",
+        ),
     )
     with psycopg.connect(dsn, autocommit=True) as conn:
-        # Both extension scripts own their transaction. This session lock spans them
+        # Each extension script owns its transaction. This session lock spans them
         # and is automatically released if setup is interrupted.
         conn.execute("SELECT pg_advisory_lock(hashtext('openscience_m2_development_extensions'))")
         for check, name in extensions:

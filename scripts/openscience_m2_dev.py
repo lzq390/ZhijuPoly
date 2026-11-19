@@ -3,6 +3,9 @@
 import argparse
 from contextlib import ExitStack
 import fcntl
+import hashlib
+import runpy
+import re
 import json
 import os
 from pathlib import Path
@@ -29,6 +32,7 @@ AGENT = "https://agent.m2.test:18761"
 API_IMAGE = "sha256:886fc49f0ad7a4a4922e9f820886a9b0f7e76829f6dfbc84a41b02fbd9a68961"
 PG_IMAGE = "sha256:eb4759788a2182f08257135e61a34f2cfc3c2914079f3465d64ee62350f4d081"
 UI_IMAGE = "sha256:fea8a3c294bb324a98041f8f8354448e6ca5c6502dedc565c4b884994c567bb0"
+M3_MODEL_SHA = "f8a207538832b1d1ecdf80cc380194dcf8f92d13d2381042022170c217559df2"
 MANAGER = ROOT / "scripts/openscience_per_user_dev.py"
 
 
@@ -277,6 +281,78 @@ def run_stack(args, stack):
         *mount(pg_socket, "/m2pg"),
     ]
 
+    m3_api, manager_env, tool_config = [], dict(os.environ), {}
+    retry_evidence = None
+    gateway = None
+    if args.m3_gateway_image:
+        base = "sha256:fb7fdd70e46d7544d0816f042bd0a4324cd7a6c1e86a4a4606031f5108199df0"
+        image_id = args.m3_gateway_image
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+            raise ValueError("Pass the immutable image ID from the development gateway builder")
+
+        def layers(image):
+            return json.loads(
+                run("docker", "image", "inspect", "--format", "{{json .RootFS.Layers}}", image)
+            )
+
+        expected = layers(base)
+        if layers(image_id)[: len(expected)] != expected or image_id == base:
+            raise ValueError("Expected a development gateway derived from the reviewed November image")
+        if (
+            run(
+                "docker",
+                "image",
+                "inspect",
+                "--format",
+                '{{index .Config.Labels "org.nexpoly.purpose"}} {{index .Config.Labels "org.nexpoly.expected-base-image"}}',
+                image_id,
+            )
+            != "openscience-per-user-development-gateway " + base
+        ):
+            raise ValueError("Expected the labeled M3 development gateway")
+        model = args.m3_prediction_model.resolve(strict=True)
+        if (
+            model.name != "rf_Glass transition temperature_exp.pkl"
+            or hashlib.sha256(model.read_bytes()).hexdigest() != M3_MODEL_SHA
+        ):
+            raise ValueError("Unexpected M3 development prediction model")
+        for name in ("m3-ingress", "m3-gateway"):
+            secret(cred / name)
+        env.update(
+            OPENSCIENCE_M3_GATEWAY_TOKEN_FILE="/m3key",
+            USAGE_ENTITLEMENTS_ENABLED="true",
+            USAGE_ENTITLEMENTS_ALLOW_EXAMPLE="true",
+            USAGE_ENTITLEMENTS_POLICY_FILE="/m3policy.json",
+            USAGE_METERING_ENABLED="true",
+        )
+        policy = ROOT / "config/examples/entitlements-example-v1.json"
+        common += mount(policy, "/m3policy.json")
+        artifacts = state / "m3-artifacts"
+        artifacts.mkdir(mode=0o700, exist_ok=True)
+        m3_api = [
+            *mount(cred / "m3-gateway", "/m3key"),
+            *mount(model, "/m3model/" + model.name),
+            *mount(ROOT / "workers/monomer_dft_worker", "/app/workers/monomer_dft_worker"),
+            *mount(artifacts, "/m3artifacts", True),
+        ]
+        overlay = transport / "m3"
+        overlay.mkdir()
+        generations = overlay / "generations"
+        generations.mkdir(mode=0o755)
+        generations.chmod(0o755)
+        m3_api += mount(generations, "/m3generations")
+        runpy.run_path(str(ROOT / "ops/openscience-m3-dev/workspace.py"))["prepare"](
+            overlay / "code", args.registry
+        )
+        manager_env["OPENSCIENCE_M3_OVERLAY"] = str(overlay)
+        peer_dir = transport / "gateway"
+        peer_dir.mkdir()
+        tool_config = {
+            "ingress_file": str(cred / "m3-ingress"),
+            "gateway_socket": str(peer_dir / "gateway.sock"),
+            "peer_sockets": {},
+        }
+
     def env_file(name, values):
         dest = transport / name
         file(dest, "".join(k + "=" + v + "\n" for k, v in values.items()))
@@ -305,9 +381,70 @@ def run_stack(args, stack):
     ]
     subprocess.run([*bootstrap, "/bootstrap-m2.py"], check=True)
     subprocess.run([*bootstrap, "-m", "app.auth.openscience_seed"], check=True)
+    if args.m3_gateway_image:
+        subprocess.run(
+            [
+                *bootstrap,
+                "-m",
+                "app.entitlement_cli",
+                "install-policy",
+                "--file",
+                "/m3policy.json",
+                "--allow-example",
+                "--apply",
+            ],
+            check=True,
+        )
+        gateway = container(
+            stack,
+            "--label",
+            label + "=" + deploy,
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
+            "--memory",
+            "384m",
+            "--cpus",
+            "1",
+            *mount(peer_dir, "/ipc", True),
+            *mount(api_socket, "/nexpoly"),
+            *mount(cred / "m3-ingress", "/ingress"),
+            *mount(cred / "m3-gateway", "/gw"),
+            "-e",
+            "OPENSCIENCE_M3_INGRESS_KEY_FILE=/ingress",
+            "-e",
+            "OPENSCIENCE_M3_GATEWAY_KEY_FILE=/gw",
+            "-e",
+            "OPENSCIENCE_M3_PARENT_ORIGIN=" + PARENT,
+            args.m3_gateway_image,
+        )
+        wait(lambda: (peer_dir / "gateway.sock").is_socket(), "isolated capability gateway")
+        if args.verify:
+            retry_evidence = transport / "retry.json"
+            replay = transport / "retry.sock"
+            launch(
+                stack,
+                logs,
+                "m3-retry",
+                [
+                    shutil.which("node"),
+                    str(ROOT / "scripts/ci/openscience_m3_retry.mjs"),
+                    "--listen",
+                    str(replay),
+                    "--upstream",
+                    tool_config["gateway_socket"],
+                    "--evidence",
+                    str(retry_evidence),
+                ],
+            )
+            wait(replay.is_socket, "private M3 retry verifier")
+            tool_config["gateway_socket"] = str(replay)
     api = container(
         stack,
         *common,
+        *m3_api,
         *mount(cred / "router", "/m2key"),
         *mount(api_socket, "/ipc", True),
         *env_file("app.env", env),
@@ -333,6 +470,20 @@ def run_stack(args, stack):
     if len(retained) != 2:
         raise RuntimeError("Both retained dev-m1 bindings are required")
 
+    if args.m3_gateway_image:
+        if (
+            any(v["state"] != "recycled" for v in retained.values())
+            or (args.registry / "supervisor.sock").exists()
+        ):
+            raise RuntimeError(
+                "M3 needs the retained development workspaces offline to attach its scoped transports"
+            )
+        for user, row in retained.items():
+            directory = overlay / row["workspace"]
+            directory.mkdir(mode=0o755)
+            directory.chmod(0o755)
+            tool_config["peer_sockets"][user] = str(directory / "tools.sock")
+
     def recycle():
         for u, original in retained.items():
             if original["state"] == "recycled":
@@ -347,10 +498,13 @@ def run_stack(args, stack):
                         "dev-m1",
                         "--user-id",
                         u,
+                        env=manager_env,
                     )
                 )
                 if result["state"] != "recycled" or result["volume"] != original["volume"]:
-                    raise RuntimeError("Workspace did not finish draining with its original private volume")
+                    raise RuntimeError(
+                        "Workspace did not finish draining with its original private volume"
+                    )
 
     stack.callback(recycle)
     supervisor_socket = args.registry / "supervisor.sock"
@@ -365,6 +519,7 @@ def run_stack(args, stack):
                 "--state-dir",
                 str(args.registry),
             ],
+            env=manager_env,
         )
         wait(supervisor_socket.is_socket, "M1 supervisor")
     config = {
@@ -379,6 +534,8 @@ def run_stack(args, stack):
         "tls_key_file": str(key),
         "tls_cert_file": str(cert),
     }
+    if args.m3_gateway_image:
+        config["m3"] = tool_config
     config_file = transport / "router.json"
     file(config_file, json.dumps(config))
     node = shutil.which("node")
@@ -464,15 +621,28 @@ http {{
         "agent": AGENT,
         "user_volumes": {k: v["volume"] for k, v in retained.items()},
     }
+    if args.m3_gateway_image:
+        ready.update(gateway=gateway, gateway_image=args.m3_gateway_image)
+        if retry_evidence:
+            ready["retry_evidence"] = str(retry_evidence)
     info = state / "running.json"
     file(info, json.dumps(ready))
     stack.callback(info.unlink, missing_ok=True)
-    print("M2 ready. Browser origins:", PARENT, AGENT, flush=True)
+    phase = "M3" if args.m3_gateway_image else "M2"
+    print(f"{phase} ready. Browser origins:", PARENT, AGENT, flush=True)
     if args.verify:
         subprocess.run(
             [
                 node,
-                str(ROOT / "scripts/ci/verify_openscience_m2_browser.mjs"),
+                str(
+                    ROOT
+                    / "scripts/ci"
+                    / (
+                        "verify_openscience_m3.mjs"
+                        if args.m3_gateway_image
+                        else "verify_openscience_m2_browser.mjs"
+                    )
+                ),
                 "--state",
                 str(state),
                 "--output",
@@ -491,6 +661,16 @@ def main():
     parser.add_argument("--registry", type=Path, default=REGISTRY)
     parser.add_argument(
         "--verify", type=Path, help="Run browser acceptance and write a new JSON report, then stop."
+    )
+    parser.add_argument(
+        "--m3-gateway-image", help="Enable the six-tool M3 pilot with this reviewed derived image ID"
+    )
+    parser.add_argument(
+        "--m3-prediction-model",
+        type=Path,
+        default=Path(
+            "/data/lzq/nexpoly-assets/releases/ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2/model/rf_Glass transition temperature_exp.pkl"
+        ),
     )
     args = parser.parse_args()
     os.umask(0o077)

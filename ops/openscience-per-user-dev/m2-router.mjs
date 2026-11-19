@@ -231,8 +231,15 @@ export async function startRouter(c, loadUi = pinnedUi) {
       shell(res,parent,{type:"nexpoly:openscience:ready",handoff_id:handoff,page_context:key},true)
     } catch (e) { shell(res,parent,{type:"nexpoly:openscience:error",handoff_id:handoff,reason:e instanceof Refusal ? e.message : "workspace_unavailable"}) }
   }
+  let tools
+  if (c.m3) {
+    const { toolRouter } = await import("../openscience-m3-dev/tool-router.mjs")
+    tools = await toolRouter(c.m3, auth, validate)
+  }
   async function forward(req, res, url, path, page) {
-    if (!allows(req.method, path)) throw new Refusal(403, "route_disabled")
+    const toolRequest = tools && req.method === "POST"
+    const permissionReply = toolRequest && /^\/permission\/per_[a-zA-Z0-9_-]+\/reply$/.test(path)
+    if (!permissionReply && !allows(req.method, path)) throw new Refusal(403, "route_disabled")
     const writing = !["GET","HEAD"].includes(req.method)
     if (writing && (req.headers.origin !== c.public_origin || req.headers["x-nexpoly-page"] !== page.key))
       throw new Refusal(403, "write_origin_denied")
@@ -254,6 +261,9 @@ export async function startRouter(c, loadUi = pinnedUi) {
         if (!(await stat(page.route.socket)).isSocket()) throw new Refusal(503,"workspace_restarting")
         gate(page)
         controller.signal.throwIfAborted()
+        if (permissionReply) await tools.confirm(page, path, url.search, payload)
+        const prompt = toolRequest && /^\/session\/(ses_[a-zA-Z0-9_-]+)\/(?:message|prompt_async)$/.exec(path)
+        if (prompt) headers["x-nexpoly-tool-turn"] = tools.begin(page, prompt[1], token)
         const up = http.request({socketPath:page.route.socket,path:path+url.search,method:req.method,
           headers:{...headers,authorization:"Bearer " + token},agent:false,signal:controller.signal})
         up.on("error", () => {})  // The response iterator handles errors after headers arrive.
@@ -340,7 +350,7 @@ export async function startRouter(c, loadUi = pinnedUi) {
     reply(res,e.status || 502,{error:e instanceof Refusal ? e.message : "workspace_unavailable"})
   })
   const srv = secure ? https.createServer({key:await readFile(c.tls_key_file),cert:await readFile(c.tls_cert_file)},handler) : http.createServer(handler)
-  srv.on("close",() => {clearInterval(heartbeat); for (const p of pages.values()) retire(p)})
+  srv.on("close",() => {clearInterval(heartbeat); tools?.close(); for (const p of pages.values()) retire(p)})
   srv.listen(c.listen_port,"127.0.0.1")
   await once(srv,"listening")
   return srv

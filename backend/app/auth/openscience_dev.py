@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.auth.context import Identity, user_context
+from app.auth import openscience_delegation_dev as m3
 from app.auth.middleware import AuthenticationMiddleware
 from app.auth.policy import capabilities
 from app.auth.router import router as login_router
@@ -37,11 +38,19 @@ class WorkspaceAuthenticationMiddleware(AuthenticationMiddleware):
         if (
             scope["type"] == "http"
             and scope.get("method") == "POST"
-            and scope["path"] in INTERNAL_ROUTES
+            and (
+                scope["path"] in INTERNAL_ROUTES
+                or (
+                    hasattr(scope["app"].state, "openscience_m3") and scope["path"] in {m3.ISSUE, m3.EXCHANGE}
+                )
+            )
             and scope.get("client") is None
             and scope.get("server") is None
         ):
             scope = {**scope, "client": ("127.0.0.1", 0)}
+        if scope["type"] == "http" and hasattr(scope["app"].state, "openscience_m3"):
+            if any(k.lower() == b"x-openscience-delegation" for k, _ in scope["headers"]):
+                return await scope["app"].state.openscience_m3.dispatch(self.app, scope, receive, send)
         return await super().__call__(scope, receive, send)
 
 
@@ -108,7 +117,6 @@ def create_app():
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.auth = auth
     app.state.entitlement_repository = EntitlementRepository(auth.settings.application_dsn)
-    app.add_middleware(WorkspaceAuthenticationMiddleware, auth_service=auth)
     app.include_router(login_router)
 
     @app.exception_handler(RequestValidationError)
@@ -282,6 +290,17 @@ def create_app():
                 raise HTTPException(401, "Workspace session revoked")
         return JSONResponse(grant, headers={"Cache-Control": "no-store"})
 
+    m3_key_file = os.environ.get("OPENSCIENCE_M3_GATEWAY_TOKEN_FILE")
+    if m3_key_file:
+        from app.auth.openscience_m3_native import install_native
+
+        gateway_key = Path(m3_key_file).read_bytes().strip()
+        if not 32 <= len(gateway_key) <= 256 or hmac.compare_digest(service_secret, gateway_key):
+            raise ValueError("Use a distinct M3 gateway service credential")
+        m3.install(app, auth, agent, router_identity, gateway_key, inspect_handoff)
+        install_native(app)
+    # Auth must establish the original actor before native entitlement and usage admission.
+    app.add_middleware(WorkspaceAuthenticationMiddleware, auth_service=auth)
     return app
 
 
