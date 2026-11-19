@@ -20,18 +20,42 @@ def anchor(source, old, new):
     return source.replace(old, new)
 
 
-def prepare(root, registry, adapters=False):
+def prepare(root, registry, adapters=False, m4=False):
     if json.loads((registry / "registry.json").read_text())["image"] != IMAGE:
         raise ValueError("The M3 overlay requires the verified M1 image")
     root.mkdir()
     cid = subprocess.check_output(
-        ["docker", "create", "--pull=never", "--network", "none", "--entrypoint", "/bin/true", IMAGE],
+        [
+            "docker",
+            "create",
+            "--pull=never",
+            "--network",
+            "none",
+            "--entrypoint",
+            "/bin/true",
+            IMAGE,
+        ],
         text=True,
     ).strip()
     try:
-        for name, (src, digest) in SOURCES.items():
+        sources = dict(SOURCES)
+        if m4:
+            sources.update(
+                llm=(
+                    "session/llm.ts",
+                    "0c6478cbf5e4efbc87dade8c75105de339955f25a01a0023593ee8af8b2e8a62",
+                ),
+                provider=(
+                    "provider/provider.ts",
+                    "9cd397849a731c6c10166e05f1656eeb40f7ada89a794579db453c92b948644c",
+                ),
+            )
+        for name, (src, digest) in sources.items():
             file = root / (name + ".ts")
-            subprocess.run(["docker", "cp", cid + ":/app/backend/cli/src/" + src, str(file)], check=True)
+            subprocess.run(
+                ["docker", "cp", cid + ":/app/backend/cli/src/" + src, str(file)],
+                check=True,
+            )
             if hashlib.sha256(file.read_bytes()).hexdigest() != digest:
                 raise ValueError("Unrecognized M1 " + name)
             source = file.read_text()
@@ -40,6 +64,18 @@ def prepare(root, registry, adapters=False):
                     source,
                     "        .use(devBoundary)",
                     "        .use(devBoundary)\n        .use(withToolTurn)",
+                )
+            elif name == "llm":
+                source = 'import { modelHeaders } from "/m3-code/instance.mjs"\n' + anchor(
+                    source,
+                    "        ...input.model.headers,\n        ...headers,",
+                    '        ...input.model.headers,\n        ...headers,\n        ...(["m4local", "m4local-responses"].includes(input.model.providerID) ? modelHeaders(input.sessionID, input.user.id) : {}),',
+                )
+            elif name == "provider":
+                source = 'import { modelFetch } from "/m3-code/instance.mjs"\n' + anchor(
+                    source,
+                    '      const customFetch = options["fetch"]',
+                    '      const customFetch = ["m4local", "m4local-responses"].includes(model.providerID) ? modelFetch : options["fetch"]',
                 )
             else:
                 source = 'import { rememberTurn, toolsForTurn } from "/m3-code/instance.mjs"\n' + source
@@ -121,6 +157,33 @@ def prepare(root, registry, adapters=False):
             },
         }
     )
+    if m4:
+        # The transport container exposes only the API relay. Model calls go via the
+        # SDK Unix socket, which requires a live turn and carries no provider key.
+        (root / "model.py").write_text(
+            "import asyncio, runpy\nasyncio.run(runpy.run_path('/m2-loopback.py')['main']())\n"
+        )
+        protocols = {"m4local": "@ai-sdk/openai-compatible", "m4local-responses": "@ai-sdk/openai"}
+        config.update(
+            model="m4local/qwen2.5-7b",
+            small_model="m4local/qwen2.5-7b",
+            enabled_providers=list(protocols),
+            provider={
+                provider: {
+                    "npm": sdk,
+                    "name": "Qwen2.5-7B · " + ("Responses" if provider.endswith("-responses") else "Chat Completions"),
+                    "options": {"baseURL": "http://m4-model.invalid/v1", "apiKey": "local-transport", "timeout": 300000},
+                    "models": {"qwen2.5-7b": {"name": "Qwen2.5-7B", "limit": {"context": 16384, "output": 12}}},
+                }
+                for provider, sdk in protocols.items()
+            },
+        )
+        for tool in [
+            "knowledge_service_kb_search",
+            "knowledge_service_kb_read_citation",
+        ]:
+            config["permission"][tool] = "allow"
+            config["permission"]["mcp"][tool] = "allow"
     (root / "config.json").write_text(json.dumps(config))
     root.chmod(0o755)
     for f in root.iterdir():

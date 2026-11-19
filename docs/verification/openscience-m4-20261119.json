@@ -1,0 +1,183 @@
+{
+  "environment": "dev-m1",
+  "workspace_image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+  "model_image": "sha256:886fc49f0ad7a4a4922e9f820886a9b0f7e76829f6dfbc84a41b02fbd9a68961",
+  "model_manifest_sha256": "2cdb0c3afafb408c85ae429636bfb4e19f2f0342fbd8d6fa0491b6db92f8d04a",
+  "workspace_bindings": {
+    "test-user-a": {
+      "workspace_id": "463fc2f89367468bb7fc6e048d522c9e",
+      "uid": 58161656,
+      "volume": "nexpoly-m1-67e4414ac390-463fc2f89367468bb7fc6e048d522c9e-data"
+    },
+    "test-user-b": {
+      "workspace_id": "3c137e9c236d4998bed842786c0f4548",
+      "uid": 43620582,
+      "volume": "nexpoly-m1-67e4414ac390-3c137e9c236d4998bed842786c0f4548-data"
+    }
+  },
+  "browser": "153.0.8010.12",
+  "start": "2026-11-19T10:17:44.070Z",
+  "status": "passed",
+  "users": {
+    "a": {
+      "knowledge": {
+        "visible_search_panel": {
+          "common_term_visible_hits": 1,
+          "source_opened": true,
+          "source_text_matches": true,
+          "other_term_visible_hits": 0
+        },
+        "kb_id": "a778b780-d5d9-4f3a-b36d-0ca50f2d9aa8",
+        "document_id": "7c123b5f-21ee-4faf-ba92-2fdd6080e76f",
+        "chunk_id": "76d5d932-fb57-4e81-bc16-21a74ffe1172",
+        "same_name": "notebook-6cf560a8ab7b4544b4af9a36d5e321b0.txt",
+        "upload_sha256": "790f76b197796cf39794677105a49bccd46dae27e2afdf540932e9b31ffb9ef9",
+        "citation_text_sha256": "4a9d421d4c11208253eaeca7b077832cd205478a2cd44a2e9640559ad8e56fb9",
+        "own_download_matches": true,
+        "private_collection_list": true,
+        "search_web_hits": 1,
+        "search_mcp_hits": 1,
+        "foreign_marker_web_hits": 0,
+        "foreign_marker_mcp_hits": 0,
+        "web_mcp_citation_matches": true,
+        "mixed_collections_web": 403,
+        "mixed_collections_mcp": "forbidden_kb",
+        "other_login_http": {
+          "list_documents": 404,
+          "document": 404,
+          "download": 404,
+          "citation": 404
+        },
+        "other_login_mcp_citation": "not_found"
+      },
+      "model": {
+        "model": "qwen2.5-7b",
+        "provider": "m4local",
+        "protocol": "chat.completions",
+        "workspace_session": "ses_e0cafbebdffeSQwmnZzE99Dtay",
+        "turn_id": "msg_1f3505427001UQAZvSNF6bfxGM",
+        "answer_sha256": "1a43faca80444a9bccf76e3f30c106be0ab3c0f613292e03d3f34f67eb6c7676",
+        "answer_characters": 43,
+        "requests": [
+          {
+            "request_id": "a7d41d4c-78ab-474c-8961-698e54965be7",
+            "protocol": "chat.completions",
+            "input_tokens": 9343,
+            "output_tokens": 12,
+            "settlement": "actual"
+          },
+          {
+            "request_id": "5acec0a6-b639-4c11-809b-756ee4b4ecfe",
+            "protocol": "chat.completions",
+            "input_tokens": 828,
+            "output_tokens": 12,
+            "settlement": "actual"
+          }
+        ],
+        "foreign_usage": 0
+      }
+    },
+    "b": {
+      "knowledge": {
+        "visible_search_panel": {
+          "common_term_visible_hits": 1,
+          "source_opened": true,
+          "source_text_matches": true,
+          "other_term_visible_hits": 0
+        },
+        "kb_id": "6748cd33-7bb2-48b8-b7a6-4cccf6f49097",
+        "document_id": "ade22557-33c7-41ff-8d2a-cc6a2170371c",
+        "chunk_id": "f093ba92-1b06-4cc7-baa6-a2a519f6d6b2",
+        "same_name": "notebook-6cf560a8ab7b4544b4af9a36d5e321b0.txt",
+        "upload_sha256": "257f19d2c5d7c3a5c07b01caed701e59482f881579ac9692d0b749024a0b67eb",
+        "citation_text_sha256": "c348adc2df8162c364625fa4e95611c8998e95208e2aa42cc7176588ef07b8aa",
+        "own_download_matches": true,
+        "private_collection_list": true,
+        "search_web_hits": 1,
+        "search_mcp_hits": 1,
+        "foreign_marker_web_hits": 0,
+        "foreign_marker_mcp_hits": 0,
+        "web_mcp_citation_matches": true,
+        "mixed_collections_web": 403,
+        "mixed_collections_mcp": "forbidden_kb",
+        "other_login_http": {
+          "list_documents": 404,
+          "document": 404,
+          "download": 404,
+          "citation": 404
+        },
+        "other_login_mcp_citation": "not_found"
+      },
+      "model": {
+        "model": "qwen2.5-7b",
+        "provider": "m4local-responses",
+        "protocol": "responses",
+        "workspace_session": "ses_e0cafb9b3ffe9FcF9G8KtgVsvN",
+        "turn_id": "msg_1f3526aee00197skHsJl4gsvdn",
+        "answer_sha256": "7674ea81da5b4da3095229916cc6080c9ad7ee1fcf0fd85c528642b78c17cffd",
+        "answer_characters": 46,
+        "requests": [
+          {
+            "request_id": "ee762d47-b8a3-4526-83a6-2cb7fa6c97d1",
+            "protocol": "responses",
+            "input_tokens": 9353,
+            "output_tokens": 12,
+            "settlement": "actual"
+          },
+          {
+            "request_id": "2a75d1fa-62b6-4746-9a3c-e9de70d51d58",
+            "protocol": "chat.completions",
+            "input_tokens": 836,
+            "output_tokens": 12,
+            "settlement": "actual"
+          }
+        ],
+        "foreign_usage": 0
+      }
+    }
+  },
+  "ledger": {
+    "forced_rls": [
+      "chunks",
+      "collections",
+      "documents"
+    ],
+    "users": {
+      "a": {
+        "owner": "test-user-a",
+        "new_rows": {
+          "collections": 1,
+          "documents": 1,
+          "chunks": 1,
+          "model": 2
+        },
+        "upload_and_citation_match": true,
+        "original_workspace_and_login": true,
+        "matching_provider_receipts": 2,
+        "actual_input_tokens": 10171,
+        "actual_output_tokens": 24
+      },
+      "b": {
+        "owner": "test-user-b",
+        "new_rows": {
+          "collections": 1,
+          "documents": 1,
+          "chunks": 1,
+          "model": 2
+        },
+        "upload_and_citation_match": true,
+        "original_workspace_and_login": true,
+        "matching_provider_receipts": 2,
+        "actual_input_tokens": 10189,
+        "actual_output_tokens": 24
+      }
+    },
+    "other_account_deltas": {
+      "collections": 0,
+      "documents": 0,
+      "chunks": 0,
+      "model": 0
+    }
+  },
+  "end": "2026-11-19T10:22:40.784Z"
+}

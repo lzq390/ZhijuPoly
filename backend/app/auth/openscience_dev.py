@@ -37,11 +37,16 @@ class WorkspaceAuthenticationMiddleware(AuthenticationMiddleware):
         # listener. Preserve the standard forwarded-header and service checks.
         if (
             scope["type"] == "http"
-            and scope.get("method") == "POST"
             and (
-                scope["path"] in INTERNAL_ROUTES
+                (scope.get("method") == "POST" and scope["path"] in INTERNAL_ROUTES)
                 or (
-                    hasattr(scope["app"].state, "openscience_m3") and scope["path"] in {m3.ISSUE, m3.EXCHANGE, m3.ADAPTER_CONTEXT, m3.ADAPTER_EXCHANGE}
+                    hasattr(scope["app"].state, "openscience_m4")
+                    and scope["path"].startswith("/internal/openscience/m4/")
+                )
+                or (
+                    scope.get("method") == "POST"
+                    and hasattr(scope["app"].state, "openscience_m3")
+                    and scope["path"] in {m3.ISSUE, m3.EXCHANGE, m3.ADAPTER_CONTEXT, m3.ADAPTER_EXCHANGE}
                 )
             )
             and scope.get("client") is None
@@ -299,6 +304,10 @@ def create_app():
             raise ValueError("Use a distinct M3 gateway service credential")
         m3.install(app, auth, agent, router_identity, gateway_key, inspect_handoff)
         install_native(app)
+    if os.environ.get("OPENSCIENCE_M4_ENABLED") == "1":
+        from app.auth.openscience_m4_dev import install
+
+        install(app, auth, agent, parent, inspect_handoff)
     # Auth must establish the original actor before native entitlement and usage admission.
     app.add_middleware(WorkspaceAuthenticationMiddleware, auth_service=auth)
     return app

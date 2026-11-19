@@ -448,9 +448,17 @@ def run_stack(args, stack):
                 m3_api.extend(mount(model.parent / name, "/m3adapter-models/" + name))
             m3_api.extend(
                 mount(
-                    model.parent.parent / "ASSET-MANIFEST.json", "/m3adapter-models/ASSET-MANIFEST.json"
+                    model.parent.parent / "ASSET-MANIFEST.json",
+                    "/m3adapter-models/ASSET-MANIFEST.json",
                 )
             )
+        peer_dir = transport / "gateway"
+        peer_dir.mkdir()
+        tool_config = {
+            "ingress_file": str(cred / "m3-ingress"),
+            "gateway_socket": str(peer_dir / "gateway.sock"),
+        }
+    if args.m3_gateway_image or args.m4:
         overlay = transport / "m3"
         overlay.mkdir()
         generations = overlay / "generations"
@@ -458,16 +466,80 @@ def run_stack(args, stack):
         generations.chmod(0o755)
         m3_api += mount(generations, "/m3generations")
         runpy.run_path(str(ROOT / "ops/openscience-m3-dev/workspace.py"))["prepare"](
-            overlay / "code", args.registry, args.m3_adapters
+            overlay / "code", args.registry, args.m3_adapters, args.m4
         )
         manager_env["OPENSCIENCE_M3_OVERLAY"] = str(overlay)
-        peer_dir = transport / "gateway"
-        peer_dir.mkdir()
-        tool_config = {
-            "ingress_file": str(cred / "m3-ingress"),
-            "gateway_socket": str(peer_dir / "gateway.sock"),
-            "peer_sockets": {},
+        tool_config["peer_sockets"] = {}
+    if args.m4:
+        worker_ipc = transport / "model-worker"
+        worker_ipc.mkdir()
+        model_receipts = state / "m4-model-receipts"
+        model_receipts.mkdir(mode=0o700, exist_ok=True)
+        m4_config = {
+            "authority_socket": str(api_socket / "auth.sock"),
+            "peer_sockets": tool_config["peer_sockets"],
         }
+        for service in ("knowledge", "model"):
+            path = cred / ("m4-" + service)
+            secret(path)
+            dest = "/m4-" + service + "-key"
+            m3_api.extend(mount(path, dest))
+            env["M4_" + service.upper() + "_KEY_FILE"] = dest
+            m4_config[service + "_key_file"] = str(path)
+        env.update(OPENSCIENCE_M4_ENABLED="1", M4_MODEL_SOCKET="/m4provider/model.sock")
+        m3_api += mount(worker_ipc, "/m4provider")
+        worker = container(
+            stack,
+            "--label",
+            label + "=" + deploy,
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--tmpfs",
+            "/tmp:rw,nosuid,size=64m",
+            "--memory",
+            "22g",
+            "--memory-swap",
+            "22g",
+            "--cpus",
+            "4",
+            "--pids-limit",
+            "128",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
+            *mount(ROOT / "backend", "/app/backend"),
+            *mount(args.m4_weights.resolve(strict=True), "/model"),
+            *mount(worker_ipc, "/m4provider", True),
+            *mount(model_receipts, "/m4receipts", True),
+            "-e",
+            "M4_MODEL_RECEIPTS=/m4receipts/receipts.sqlite",
+            "-e",
+            "PYTHONPATH=/app/backend",
+            "-e",
+            "PYTHONDONTWRITEBYTECODE=1",
+            "-e",
+            "HF_HUB_OFFLINE=1",
+            "-e",
+            "CUDA_VISIBLE_DEVICES=",
+            "-e",
+            "OMP_NUM_THREADS=4",
+            "-e",
+            "MKL_NUM_THREADS=4",
+            "-e",
+            "OPENBLAS_NUM_THREADS=1",
+            "-e",
+            "TOKENIZERS_PARALLELISM=false",
+            API_IMAGE,
+            "python",
+            "-m",
+            "uvicorn",
+            "app.auth.openscience_m4_provider:create_app",
+            "--factory",
+            "--uds",
+            "/m4provider/model.sock",
+            "--no-access-log",
+            "--no-proxy-headers",
+        )
 
     def env_file(name, values):
         dest = transport / name
@@ -541,7 +613,7 @@ def run_stack(args, stack):
             tool_config["adapters"], adapter_evidence = start_adapters(
                 stack, state, transport, api_socket, cred, deploy, args.verify
             )
-        if args.verify and not args.m3_adapters:
+        if args.verify and not args.m3_adapters and not args.m4:
             retry_evidence = transport / "retry.json"
             replay = transport / "retry.sock"
             launch(
@@ -590,7 +662,7 @@ def run_stack(args, stack):
     if len(retained) != 2:
         raise RuntimeError("Both retained dev-m1 bindings are required")
 
-    if args.m3_gateway_image:
+    if args.m3_gateway_image or args.m4:
         if (
             any(v["state"] != "recycled" for v in retained.values())
             or (args.registry / "supervisor.sock").exists()
@@ -654,6 +726,8 @@ def run_stack(args, stack):
         "tls_key_file": str(key),
         "tls_cert_file": str(cert),
     }
+    if args.m4:
+        config["m4"] = m4_config
     if args.m3_gateway_image:
         config["m3"] = tool_config
     config_file = transport / "router.json"
@@ -753,10 +827,25 @@ http {{
             )
         if retry_evidence:
             ready["retry_evidence"] = str(retry_evidence)
+    if args.m4:
+
+        def model_ready():
+            if run("docker", "inspect", "--format", "{{.State.Running}}", worker) != "true":
+                raise RuntimeError("Private M4 model worker exited")
+            return (worker_ipc / "model.sock").is_socket()
+
+        wait(model_ready, "verified Qwen CPU worker", 180)
+        ready.update(
+            m4=True,
+            model_image=API_IMAGE,
+            model_manifest_sha256=hashlib.sha256(
+                (args.m4_weights / "asset_manifest.json").read_bytes()
+            ).hexdigest(),
+        )
     info = state / "running.json"
     file(info, json.dumps(ready))
     stack.callback(info.unlink, missing_ok=True)
-    phase = "M3" if args.m3_gateway_image else "M2"
+    phase = "M4" if args.m4 else "M3" if args.m3_gateway_image else "M2"
     print(f"{phase} ready. Browser origins:", PARENT, AGENT, flush=True)
     if args.verify:
         subprocess.run(
@@ -766,7 +855,9 @@ http {{
                     ROOT
                     / "scripts/ci"
                     / (
-                        "verify_openscience_m3_adapters.mjs"
+                        "verify_openscience_m4.mjs"
+                        if args.m4
+                        else "verify_openscience_m3_adapters.mjs"
                         if args.m3_adapters
                         else "verify_openscience_m3.mjs"
                         if args.m3_gateway_image
@@ -806,6 +897,17 @@ def main():
         "--m3-adapters",
         action="store_true",
         help="Enable private PolyTAO and retrosynthesis MCP adapters",
+    )
+    parser.add_argument(
+        "--m4",
+        action="store_true",
+        help="Enable the isolated per-login model and private knowledge services",
+    )
+    parser.add_argument(
+        "--m4-weights",
+        type=Path,
+        default=Path("/data/lzq/models/Qwen2.5-7B"),
+        help="Local immutable Qwen2.5-7B release verified by the development worker",
     )
     args = parser.parse_args()
     os.umask(0o077)

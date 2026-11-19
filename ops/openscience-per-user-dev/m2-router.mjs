@@ -122,13 +122,19 @@ export async function startRouter(c, loadUi = pinnedUi) {
   if (authorityKey.length < 32) throw Error("Missing trusted authority identity")
   const uiRoot = await realpath(c.ui_root)
   const {boot, index:baseIndex, patchedApp} = await loadUi(uiRoot, parents)
-  const adapterAssets = new Map()
+  const developmentAssets = new Map()
   let index = baseIndex
   if (c.m3?.adapters) {
     for (const file of ["results-controller.mjs","results-view.mjs","results-view.css"]) {
-      adapterAssets.set("/assets/m3/"+file, await readFile(resolve(HERE,"../openscience-mcp-dev",file)))
+      developmentAssets.set("/assets/m3/"+file, await readFile(resolve(HERE,"../openscience-mcp-dev",file)))
     }
     index = baseIndex.replace("</head>", '<link rel="stylesheet" href="/assets/m3/results-view.css"><script type="module" src="/assets/m3/results-controller.mjs"></script></head>')
+  }
+  if (c.m4) {
+    const {knowledgeChunk, privateKnowledgeChunk} = await import("../openscience-m4-dev/workspace-ui.mjs")
+    developmentAssets.set(knowledgeChunk, await privateKnowledgeChunk(uiRoot))
+    developmentAssets.set("/assets/m4/knowledge-ui.mjs", await readFile(resolve(HERE,"../openscience-m4-dev/knowledge-ui.mjs")))
+    index = index.replace("</head>", '<script type="module" src="/assets/m4/knowledge-ui.mjs"></script></head>')
   }
   const pages = new Map(), profiles = new Map(), startups = new Map()
   const secure = origin.protocol === "https:"
@@ -239,11 +245,15 @@ export async function startRouter(c, loadUi = pinnedUi) {
       shell(res,parent,{type:"nexpoly:openscience:ready",handoff_id:handoff,page_context:key},true)
     } catch (e) { shell(res,parent,{type:"nexpoly:openscience:error",handoff_id:handoff,reason:e instanceof Refusal ? e.message : "workspace_unavailable"}) }
   }
-  let tools, formAdapter
-  if (c.m3) {
+  let tools, formAdapter, m4
+  if (c.m4) {
+    const { services } = await import("../openscience-m4-dev/services.mjs")
+    m4 = await services(c.m4, validate)
+  }
+  if (c.m3 || m4) {
     const { toolRouter } = await import("../openscience-m3-dev/tool-router.mjs")
-    tools = await toolRouter(c.m3, auth, validate)
-    if (c.m3.adapters) ({formAdapter} = await import("../openscience-m3-dev/adapter-router.mjs"))
+    tools = await toolRouter(c.m3 || c.m4, auth, validate, m4)
+    if (c.m3?.adapters) ({formAdapter} = await import("../openscience-m3-dev/adapter-router.mjs"))
   }
   async function forward(req, res, url, path, page) {
     const toolRequest = tools && req.method === "POST"
@@ -340,6 +350,8 @@ export async function startRouter(c, loadUi = pinnedUi) {
     }
     if (path.startsWith("/openscience-api/") || path.startsWith("/api/") || path.startsWith("/knowledge-api/")) {
       const page = scope(req,url)
+      if (m4 && (path.startsWith("/knowledge-api/") || path === "/openscience-api/m4/model/usage"))
+        return m4.browser(req, res, url, page, body, c.public_origin)
       if (path.startsWith("/knowledge-api/")) throw new Refusal(403,"knowledge_disabled")
       const upstream = path.startsWith("/openscience-api/") ? path.slice("/openscience-api".length) : path
       return forward(req,res,url,upstream,page)
@@ -347,7 +359,7 @@ export async function startRouter(c, loadUi = pinnedUi) {
     const fixed = req.method === "GET" && staticPath(path)
     if (!fixed) throw new Refusal(404,"not_found")
     if (fixed === "/index.html") return reply(res,200,index,MIME[".html"])
-    if (adapterAssets.has(fixed)) return reply(res,200,adapterAssets.get(fixed),MIME[extname(fixed)])
+    if (developmentAssets.has(fixed)) return reply(res,200,developmentAssets.get(fixed),MIME[extname(fixed)])
     if (fixed === mainJs) return reply(res,200,patchedApp,MIME[".js"])
     const file = await realpath(resolve(uiRoot, "." + fixed)).catch(() => null)
     if (!file || !file.startsWith(uiRoot + sep) || !MIME[extname(file)] || !(await stat(file)).isFile()) throw new Refusal(404,"not_found")

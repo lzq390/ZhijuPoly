@@ -38,7 +38,9 @@ export async function toolsForTurn(input, jsonSchema) {
   const tools = {};
   for (const definition of catalog.tools) {
     const name = definition.name,
-      key = "capability_gateway_" + name;
+      key =
+        (["kb_search", "kb_read_citation"].includes(name) ? "knowledge_service_" : "capability_gateway_") +
+        name;
     tools[key] = {
       type: "dynamic",
       description: definition.description,
@@ -65,4 +67,37 @@ export async function formTool(name, args) {
   });
   if (!r.ok) throw Error("Development form transport unavailable");
   return r.json();
+}
+
+export function modelHeaders(session, message) {
+  const entry = turns.get(session + "/" + message);
+  if (!entry || entry.until <= Date.now()) throw Error("A current workspace turn is required");
+  return {
+    "x-m4-handle": entry.handle,
+    "x-m4-session": session,
+    "x-m4-turn": message,
+    "x-m4-request": crypto.randomUUID(),
+  };
+}
+
+// Send only to the workspace's private peer. SDK retries carry the same request ID.
+export function modelFetch(input, init) {
+  const url = new URL(input instanceof Request ? input.url : input);
+  const headers = new Headers(init?.headers);
+  const turn = headers.get("x-m4-handle");
+  if (
+    url.origin !== "http://m4-model.invalid" ||
+    !["/v1/chat/completions", "/v1/responses"].includes(url.pathname) ||
+    init?.method !== "POST" ||
+    !turn
+  )
+    throw Error("Unsupported workspace model destination");
+  headers.delete("x-m4-handle");
+  headers.set("authorization", "Bearer " + turn);
+  return fetch("http://localhost" + url.pathname, {
+    ...init,
+    headers,
+    unix: "/m3-peer/tools.sock",
+    redirect: "error",
+  });
 }

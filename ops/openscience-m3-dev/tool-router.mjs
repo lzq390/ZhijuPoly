@@ -52,8 +52,8 @@ async function unix(socketPath, method, path, headers, payload) {
     throw deny(r.statusCode >= 400 && r.statusCode < 500 ? r.statusCode : 503, "tool_upstream_refused");
   return JSON.parse(raw);
 }
-export async function toolRouter(config, auth, validate) {
-  const ingress = (await readFile(config.ingress_file, "utf8")).trim();
+export async function toolRouter(config, auth, validate, services = null) {
+  const ingress = config.gateway_socket ? (await readFile(config.ingress_file, "utf8")).trim() : null;
   const adapters = config.adapters ? await connectAdapters(config.adapters, unix) : null;
   const turns = new Map(),
     approvals = new Map(),
@@ -100,14 +100,15 @@ export async function toolRouter(config, auth, validate) {
     if (sha(current) !== t.credential) throw deny(401, "workspace_generation_changed");
     if (t.until <= Date.now()) throw deny(401, "turn_expired");
   }
-  async function handle(user, req) {
+  async function handle(user, req, res) {
     gc();
     if (req.method !== "POST") throw deny(405, "method");
     const h = req.headers.authorization,
       t = typeof h === "string" && h.startsWith("Bearer ") && turns.get(h.slice(7));
     if (!t || t.page.owner !== user) throw deny(401, "workspace_turn_required");
-    const data = JSON.parse(await bytes(req, 16384));
     await original(t);
+    if (services && req.url.startsWith("/v1/")) return services.model(req, res, t, bytes);
+    const data = JSON.parse(await bytes(req, 16384));
     if (req.url === "/form") {
       const form = t.form;
       if (
@@ -128,19 +129,32 @@ export async function toolRouter(config, auth, validate) {
       throw deny(403, "turn_mismatch");
     t.message = data.turn;
     if (req.url === "/catalog") {
-      const result = await mcp("tools/list", {});
+      const result = ingress ? await mcp("tools/list", {}) : { tools: [] };
       if (
-        result.tools?.length !== names.size ||
-        new Set(result.tools.map((x) => x.name)).size !== names.size ||
-        result.tools.some((x) => !names.has(x.name))
+        ingress &&
+        (result.tools?.length !== names.size ||
+          new Set(result.tools.map((x) => x.name)).size !== names.size ||
+          result.tools.some((x) => !names.has(x.name)))
       )
         throw deny(502, "unexpected_tool_catalog");
       if (adapters) result.tools.push(...(await adapters.catalog()));
+      if (services) {
+        const kb = await services.knowledge(t, "tools/list", {});
+        result.tools.push(...kb.tools.filter((x) => ["kb_search", "kb_read_citation"].includes(x.name)));
+      }
+      return result;
+    }
+    if (services && req.url === "/call" && ["kb_search", "kb_read_citation"].includes(data.tool)) {
+      const result = await services.knowledge(t, "tools/call", {
+        name: data.tool,
+        arguments: data.arguments,
+      });
+      await original(t);
       return result;
     }
     if (
       !["/prepare", "/call"].includes(req.url) ||
-      (!names.has(data.tool) && !(adapters && modelAdapter(data.tool))) ||
+      (!(ingress && names.has(data.tool)) && !(adapters && modelAdapter(data.tool))) ||
       !/^[A-Za-z0-9_-]{1,128}$/.test(data.call) ||
       !data.arguments ||
       Array.isArray(data.arguments) ||
@@ -261,12 +275,14 @@ export async function toolRouter(config, auth, validate) {
   try {
     for (const [user, socket] of Object.entries(config.peer_sockets)) {
       const server = http.createServer((req, res) =>
-        handle(user, req)
+        handle(user, req, res)
           .then((result) => {
+            if (res.headersSent || res.destroyed) return;
             res.writeHead(200, { "content-type": "application/json" });
             res.end(JSON.stringify(result));
           })
           .catch((err) => {
+            if (res.headersSent || res.destroyed) return res.destroy();
             res.writeHead(err.status || 503);
             res.end("Tool access unavailable");
           }),

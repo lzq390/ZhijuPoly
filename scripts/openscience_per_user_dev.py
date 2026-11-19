@@ -361,6 +361,9 @@ class Workspace:
             "/app/backend/cli/src/session/prompt.ts": code / "prompt.ts",
             "/app/backend/cli/src/server/server.ts": code / "server.ts",
         }
+        for target, name in [("session/llm.ts", "llm.ts"), ("provider/provider.ts", "provider.ts")]:
+            if (code / name).is_file():
+                backend_overlay["/app/backend/cli/src/" + target] = code / name
         bridge = code / "capability-form-bridge.mjs"
         if bridge.exists():
             backend_overlay["/app/backend/cli/src/server/capability-form-bridge.mjs"] = bridge

@@ -58,6 +58,11 @@ def workspace_extensions(dsn):
             "0005_adapter_scopes.sql",
         ),
     )
+    if os.environ.get("OPENSCIENCE_M4_ENABLED") == "1":
+        extensions += (
+            ("SELECT to_regclass('openscience_m4.model_requests')", "0006_m4_model.sql"),
+            ("SELECT to_regclass('openscience_m4_knowledge.chunks')", "0007_m4_knowledge.sql"),
+        )
     with psycopg.connect(dsn, autocommit=True) as conn:
         # Each extension script owns its transaction. This session lock spans them
         # and is automatically released if setup is interrupted.
