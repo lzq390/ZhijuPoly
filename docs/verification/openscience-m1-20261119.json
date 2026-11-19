@@ -1,0 +1,308 @@
+{
+  "start": "2026-11-19T08:05:24.862533+00:00",
+  "status": "passed",
+  "image": "sha256:239dac5b836ca018de3b4e728f4c909d97c01fbac9be845d7c0b11c597edfdf8",
+  "environment": "dev-m1-8cce7ed29e16",
+  "alternate_environment": "dev-alt-8cce7ed29e16",
+  "stages": {
+    "created": {
+      "bindings": {
+        "a": {
+          "environment": "dev-m1-8cce7ed29e16",
+          "user_id": "test-user-a",
+          "uid": 34739590,
+          "gid": 34739590,
+          "volume": "nexpoly-m1-85708547b156-c4657549d21248498b63998b66c4e4d1-data",
+          "container_id": "c0c9398e5e0fdda4aaf272d26c44dd7607c6f5dfd39b7ee51196b4c0dd6fb718",
+          "generation": 1,
+          "image": "sha256:239dac5b836ca018de3b4e728f4c909d97c01fbac9be845d7c0b11c597edfdf8",
+          "started_at": "2026-11-19T08:05:29.525769015Z",
+          "volume_root_mode": "0700"
+        },
+        "b": {
+          "environment": "dev-m1-8cce7ed29e16",
+          "user_id": "test-user-b",
+          "uid": 74880239,
+          "gid": 74880239,
+          "volume": "nexpoly-m1-85708547b156-b49a09f82e584ee78f52878de41e7259-data",
+          "container_id": "ee77e4372d18f48ea8a4df99f73811e94e95cc4b80f82d9c5f621bb47275e135",
+          "generation": 1,
+          "image": "sha256:239dac5b836ca018de3b4e728f4c909d97c01fbac9be845d7c0b11c597edfdf8",
+          "started_at": "2026-11-19T08:05:39.756325424Z",
+          "volume_root_mode": "0700"
+        }
+      },
+      "owner_reads": {
+        "a": {
+          "session_ids": {
+            "general": "ses_e0d28d804ffeC18pPdLKQs13gO",
+            "project": "ses_e0d28c6d7ffehTxJYCcWjLMvUn"
+          },
+          "transcript_sha256": {
+            "general": "edefbb30fb6d91d62b409a600e90de9f3c0c820ed0137864cda0ea97481dadd6",
+            "project": "1b6c9bffb4b2ad0be1a8ce1a675c20da110d33c4d6f99444f2eefc6f76942b80"
+          },
+          "file_sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+          "project_attachment": "notebook.txt",
+          "foreign_markers": 0
+        },
+        "b": {
+          "session_ids": {
+            "general": "ses_e0d28d7ccffeZJ8ErURyB6iD89",
+            "project": "ses_e0d28c702ffec0NIPAh0ouR9Ib"
+          },
+          "transcript_sha256": {
+            "general": "eb377ed7c341f2c96f0266d1816e6525d1817284bba33e2ce111f320d0870a46",
+            "project": "8c6f90f0db06aa87b2861ed0a98daac7ef948f98c25ef0438d6b1831d5874382"
+          },
+          "file_sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+          "project_attachment": "notebook.txt",
+          "foreign_markers": 0
+        }
+      },
+      "concurrent_ensure_idempotent": true,
+      "third_active_rejected": true
+    },
+    "restarted": {
+      "bindings": {
+        "a": {
+          "environment": "dev-m1-8cce7ed29e16",
+          "user_id": "test-user-a",
+          "uid": 34739590,
+          "gid": 34739590,
+          "volume": "nexpoly-m1-85708547b156-c4657549d21248498b63998b66c4e4d1-data",
+          "container_id": "c0c9398e5e0fdda4aaf272d26c44dd7607c6f5dfd39b7ee51196b4c0dd6fb718",
+          "generation": 1,
+          "image": "sha256:239dac5b836ca018de3b4e728f4c909d97c01fbac9be845d7c0b11c597edfdf8",
+          "started_at": "2026-11-19T08:06:15.026854042Z",
+          "volume_root_mode": "0700"
+        },
+        "b": {
+          "environment": "dev-m1-8cce7ed29e16",
+          "user_id": "test-user-b",
+          "uid": 74880239,
+          "gid": 74880239,
+          "volume": "nexpoly-m1-85708547b156-b49a09f82e584ee78f52878de41e7259-data",
+          "container_id": "ee77e4372d18f48ea8a4df99f73811e94e95cc4b80f82d9c5f621bb47275e135",
+          "generation": 1,
+          "image": "sha256:239dac5b836ca018de3b4e728f4c909d97c01fbac9be845d7c0b11c597edfdf8",
+          "started_at": "2026-11-19T08:06:09.713948856Z",
+          "volume_root_mode": "0700"
+        }
+      },
+      "owner_reads": {
+        "a": {
+          "session_ids": {
+            "general": "ses_e0d28d804ffeC18pPdLKQs13gO",
+            "project": "ses_e0d28c6d7ffehTxJYCcWjLMvUn"
+          },
+          "transcript_sha256": {
+            "general": "edefbb30fb6d91d62b409a600e90de9f3c0c820ed0137864cda0ea97481dadd6",
+            "project": "1b6c9bffb4b2ad0be1a8ce1a675c20da110d33c4d6f99444f2eefc6f76942b80"
+          },
+          "file_sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+          "project_attachment": "notebook.txt",
+          "foreign_markers": 0
+        },
+        "b": {
+          "session_ids": {
+            "general": "ses_e0d28d7ccffeZJ8ErURyB6iD89",
+            "project": "ses_e0d28c702ffec0NIPAh0ouR9Ib"
+          },
+          "transcript_sha256": {
+            "general": "eb377ed7c341f2c96f0266d1816e6525d1817284bba33e2ce111f320d0870a46",
+            "project": "8c6f90f0db06aa87b2861ed0a98daac7ef948f98c25ef0438d6b1831d5874382"
+          },
+          "file_sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+          "project_attachment": "notebook.txt",
+          "foreign_markers": 0
+        }
+      }
+    },
+    "busy_project": {
+      "general_idle": true,
+      "project_status": "busy",
+      "manager_reason": "active_session",
+      "completed_project_replies": 2,
+      "transcript_sha256": "5182fa16e571858a74b216e8e9aedb83ed13b1564984b4630cbf5e72adf7bb9c"
+    },
+    "recycled": {
+      "remaining_containers": 0,
+      "private_volumes_preserved": 2,
+      "active_lease_retained": true,
+      "idle_passive_sse_reaped": true
+    },
+    "second_environment": {
+      "binding": {
+        "environment": "dev-alt-8cce7ed29e16",
+        "user_id": "test-user-a",
+        "uid": 8225323,
+        "gid": 8225323,
+        "volume": "nexpoly-m1-85708547b156-27bc40a5822e41f8ac42591a8dbe8989-data",
+        "container_id": "ca8a82a4c10052bf237628dbf9e097db6d81070093527c20fe391c453ab470af",
+        "generation": 1,
+        "image": "sha256:239dac5b836ca018de3b4e728f4c909d97c01fbac9be845d7c0b11c597edfdf8",
+        "started_at": "2026-11-19T08:07:11.269185527Z",
+        "volume_root_mode": "0700"
+      },
+      "projects": 0,
+      "general_sessions": 0
+    },
+    "template_change": {
+      "initial_image": "sha256:239dac5b836ca018de3b4e728f4c909d97c01fbac9be845d7c0b11c597edfdf8",
+      "restored_image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+      "denied_with_active_instances": true
+    },
+    "recreated": {
+      "bindings": {
+        "a": {
+          "environment": "dev-m1-8cce7ed29e16",
+          "user_id": "test-user-a",
+          "uid": 34739590,
+          "gid": 34739590,
+          "volume": "nexpoly-m1-85708547b156-c4657549d21248498b63998b66c4e4d1-data",
+          "container_id": "28751d1d6731115cc7966979a8ffdccc750fd5a0a60212794c736eb18784b215",
+          "generation": 2,
+          "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+          "started_at": "2026-11-19T08:07:38.572217633Z",
+          "volume_root_mode": "0700"
+        },
+        "b": {
+          "environment": "dev-m1-8cce7ed29e16",
+          "user_id": "test-user-b",
+          "uid": 74880239,
+          "gid": 74880239,
+          "volume": "nexpoly-m1-85708547b156-b49a09f82e584ee78f52878de41e7259-data",
+          "container_id": "47344b8d5511f0934f9206bfb7c8028af8461c013851ff72e6b6fe34f255f48e",
+          "generation": 2,
+          "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+          "started_at": "2026-11-19T08:07:32.95242788Z",
+          "volume_root_mode": "0700"
+        }
+      },
+      "owner_reads": {
+        "a": {
+          "session_ids": {
+            "general": "ses_e0d28d804ffeC18pPdLKQs13gO",
+            "project": "ses_e0d28c6d7ffehTxJYCcWjLMvUn"
+          },
+          "transcript_sha256": {
+            "general": "edefbb30fb6d91d62b409a600e90de9f3c0c820ed0137864cda0ea97481dadd6",
+            "project": "5182fa16e571858a74b216e8e9aedb83ed13b1564984b4630cbf5e72adf7bb9c"
+          },
+          "file_sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+          "project_attachment": "notebook.txt",
+          "foreign_markers": 0
+        },
+        "b": {
+          "session_ids": {
+            "general": "ses_e0d28d7ccffeZJ8ErURyB6iD89",
+            "project": "ses_e0d28c702ffec0NIPAh0ouR9Ib"
+          },
+          "transcript_sha256": {
+            "general": "eb377ed7c341f2c96f0266d1816e6525d1817284bba33e2ce111f320d0870a46",
+            "project": "8c6f90f0db06aa87b2861ed0a98daac7ef948f98c25ef0438d6b1831d5874382"
+          },
+          "file_sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+          "project_attachment": "notebook.txt",
+          "foreign_markers": 0
+        }
+      }
+    },
+    "restored_busy_project": {
+      "general_idle": true,
+      "project_status": "busy",
+      "manager_reason": "active_session",
+      "completed_project_replies": 2,
+      "transcript_sha256": "c4ac257f2d48b5117f651cbff442556b8902b6bf6f2983d743a7616c3a020aaf"
+    },
+    "process_failure_recovery": {
+      "bindings": {
+        "a": {
+          "environment": "dev-m1-8cce7ed29e16",
+          "user_id": "test-user-a",
+          "uid": 34739590,
+          "gid": 34739590,
+          "volume": "nexpoly-m1-85708547b156-c4657549d21248498b63998b66c4e4d1-data",
+          "container_id": "ee17402e9db66ab52b6ef43aafd5643ca7a686276628adc18055ea9158e98d51",
+          "generation": 3,
+          "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+          "started_at": "2026-11-19T08:08:27.961066569Z",
+          "volume_root_mode": "0700"
+        },
+        "b": {
+          "environment": "dev-m1-8cce7ed29e16",
+          "user_id": "test-user-b",
+          "uid": 74880239,
+          "gid": 74880239,
+          "volume": "nexpoly-m1-85708547b156-b49a09f82e584ee78f52878de41e7259-data",
+          "container_id": "47344b8d5511f0934f9206bfb7c8028af8461c013851ff72e6b6fe34f255f48e",
+          "generation": 2,
+          "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+          "started_at": "2026-11-19T08:07:32.95242788Z",
+          "volume_root_mode": "0700"
+        }
+      },
+      "owner_reads": {
+        "a": {
+          "session_ids": {
+            "general": "ses_e0d28d804ffeC18pPdLKQs13gO",
+            "project": "ses_e0d28c6d7ffehTxJYCcWjLMvUn"
+          },
+          "transcript_sha256": {
+            "general": "edefbb30fb6d91d62b409a600e90de9f3c0c820ed0137864cda0ea97481dadd6",
+            "project": "5182fa16e571858a74b216e8e9aedb83ed13b1564984b4630cbf5e72adf7bb9c"
+          },
+          "file_sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+          "project_attachment": "notebook.txt",
+          "foreign_markers": 0
+        },
+        "b": {
+          "session_ids": {
+            "general": "ses_e0d28d7ccffeZJ8ErURyB6iD89",
+            "project": "ses_e0d28c702ffec0NIPAh0ouR9Ib"
+          },
+          "transcript_sha256": {
+            "general": "eb377ed7c341f2c96f0266d1816e6525d1817284bba33e2ce111f320d0870a46",
+            "project": "c4ac257f2d48b5117f651cbff442556b8902b6bf6f2983d743a7616c3a020aaf"
+          },
+          "file_sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+          "project_attachment": "notebook.txt",
+          "foreign_markers": 0
+        }
+      },
+      "other_user_read_during_failure": true
+    }
+  },
+  "deployment": "85708547b1564947b5213252d631aa09",
+  "remaining": {
+    "containers": [],
+    "volumes": []
+  },
+  "end": "2026-11-19T08:08:44.985999+00:00",
+  "supplemental_runs": {
+    "project_session_visibility": {
+      "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+      "environment": "dev-vis-63b568a63f2a",
+      "start": "2026-11-19T08:09:02.683201+00:00",
+      "checks": [
+        {
+          "requesting_user": "test-user-a",
+          "own_project_session_status": 200,
+          "other_project_session_status": 404
+        },
+        {
+          "requesting_user": "test-user-b",
+          "own_project_session_status": 200,
+          "other_project_session_status": 404
+        }
+      ],
+      "deployment": "0d29e876d0db49258a535c3188b192a3",
+      "remaining": {
+        "containers": [],
+        "volumes": []
+      },
+      "end": "2026-11-19T08:09:33.131424+00:00"
+    }
+  }
+}
