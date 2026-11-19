@@ -6,6 +6,8 @@ export type ModuleDockTab = {
   id: string;
   label: string;
   content: ReactNode;
+  /** Content manages its own scrolling and padding, e.g. a chat with a pinned composer. */
+  fill?: boolean;
 };
 
 type ModuleDockProps = {
@@ -121,7 +123,11 @@ export function ModuleDock({
           </button>
         </header>
       )}
-      <div className="np-module-dock__body" role={!bare && tabs.length > 1 ? "tabpanel" : undefined}>
+      <div
+        className={`np-module-dock__body${active.fill ? " is-fill" : ""}`}
+        role={!bare && tabs.length > 1 ? "tabpanel" : undefined}
+        aria-label={!bare && tabs.length > 1 ? active.label : undefined}
+      >
         {active.content}
       </div>
     </aside>

@@ -1,7 +1,7 @@
 import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
-import { BookOpen } from "lucide-react";
+import { BookOpen, Sparkles } from "lucide-react";
 import {
   forwardRef,
   useCallback,
@@ -26,7 +26,11 @@ import {
 } from "./homopolymer-prediction/HomopolymerPredictionPanel";
 import { HomopolymerPredictionHelp } from "./homopolymer-prediction/HomopolymerPredictionHelp";
 import { HOMOPOLYMER_EXAMPLES } from "./homopolymer-prediction/examples";
-import type { PredictionRun } from "./homopolymer-prediction/predictionFormat";
+import { displaySmiles, formatRunTime, type PredictionRun } from "./homopolymer-prediction/predictionFormat";
+import {
+  HomopolymerPredictionAssistant,
+  type PredictionAssistantMessage
+} from "./homopolymer-prediction/HomopolymerPredictionAssistant";
 import { ModuleDock } from "./module-frame/ModuleDock";
 import { ModuleTools } from "./module-frame/ModuleTools";
 
@@ -59,9 +63,15 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
   // "latest" follows the newest other run until the user picks another.
   const [comparisonChoice, setComparisonChoice] = useState<number | null | "latest">("latest");
   const [dockOpen, setDockOpen] = useState(false);
+  const [dockTab, setDockTab] = useState<"assistant" | "help">("assistant");
+  const [assistantMessages, setAssistantMessages] = useState<PredictionAssistantMessage[]>([]);
+  const [assistantAttachContext, setAssistantAttachContext] = useState(false);
+  const assistantMessageIdRef = useRef(0);
+  const dockTriggerRef = useRef<HTMLElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
+  const assistantButtonRef = useRef<HTMLButtonElement | null>(null);
   const requestRef = useRef(0);
   const runIdRef = useRef(0);
   const dockId = useId();
@@ -158,6 +168,41 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
   );
   const operationBusy = canvas.isBusy || predict.isLoading;
   const hasStructure = Boolean(structure.smiles.trim() || canvas.smilesDraft.trim());
+  const canvasSmiles = structure.smiles.trim() || canvas.smilesDraft.trim();
+  const assistantContext = {
+    structure: canvasSmiles ? displaySmiles(canvasSmiles) : null,
+    runCount: runs.length,
+    resultCount: viewedRun && !predict.error
+      ? viewedRun.properties.filter((property) => Number.isFinite(viewedRun.predictions[property])).length
+      : null,
+    comparisonLabel: comparison ? `${formatRunTime(comparison.finishedAt)} ${displaySmiles(comparison.smiles)}` : null
+  };
+
+  // One dock, one tab at a time: the same header button closes it, the other switches tabs.
+  function toggleDock(tab: "assistant" | "help", trigger: HTMLElement | null) {
+    dockTriggerRef.current = trigger;
+    if (dockOpen && dockTab === tab) {
+      setDockOpen(false);
+      return;
+    }
+    setDockTab(tab);
+    setDockOpen(true);
+  }
+
+  // Interface preview: the question stays on the page and gets a fixed, explicit reply.
+  function sendAssistantMessage(text: string) {
+    const attached = assistantAttachContext && assistantContext.structure
+      ? assistantContext.resultCount !== null
+        ? `当前结构和第 ${runNumber} 次运行的 ${assistantContext.resultCount} 项预测结果`
+        : "当前结构"
+      : null;
+    const reply = `（界面预览）AI 助手尚未接入，暂时无法回答。接入后，我会${attached ? `结合${attached}` : "根据你的问题"}来回答“${text}”。`;
+    setAssistantMessages((current) => [
+      ...current,
+      { id: ++assistantMessageIdRef.current, role: "user", content: text },
+      { id: ++assistantMessageIdRef.current, role: "assistant", content: reply }
+    ]);
+  }
 
   return (
     <div
@@ -168,15 +213,24 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
       <ModulePageHeader
         actions={
           <ModuleTools
+            tools={[{
+              id: "assistant",
+              label: "AI 助手",
+              icon: <Sparkles aria-hidden="true" />,
+              pressed: dockOpen && dockTab === "assistant",
+              controls: dockId,
+              buttonRef: assistantButtonRef,
+              onClick: () => toggleDock("assistant", assistantButtonRef.current)
+            }]}
             recording={<BrowsingRecordingControls module="homopolymerPrediction" />}
             help={{
               id: "help",
               label: "使用说明",
               icon: <BookOpen aria-hidden="true" />,
-              pressed: dockOpen,
+              pressed: dockOpen && dockTab === "help",
               controls: dockId,
               buttonRef: helpButtonRef,
-              onClick: () => setDockOpen((open) => !open)
+              onClick: () => toggleDock("help", helpButtonRef.current)
             }}
           />
         }
@@ -248,11 +302,29 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
           <ModuleDock
             id={dockId}
             open={dockOpen}
-            tabs={[{ id: "help", label: "使用说明", content: <HomopolymerPredictionHelp /> }]}
-            activeTab="help"
-            onTabChange={() => undefined}
+            tabs={[
+              {
+                id: "assistant",
+                label: "AI 助手",
+                fill: true,
+                content: (
+                  <HomopolymerPredictionAssistant
+                    context={assistantContext}
+                    messages={assistantMessages}
+                    attachContext={assistantAttachContext}
+                    onAttachContextChange={setAssistantAttachContext}
+                    onSend={sendAssistantMessage}
+                    onClear={() => setAssistantMessages([])}
+                  />
+                )
+              },
+              { id: "help", label: "使用说明", content: <HomopolymerPredictionHelp /> }
+            ]}
+            activeTab={dockTab}
+            onTabChange={(tab) => setDockTab(tab === "help" ? "help" : "assistant")}
             onClose={() => setDockOpen(false)}
-            returnFocusRef={helpButtonRef}
+            returnFocusRef={dockTriggerRef}
+            initialFocusSelector={dockTab === "assistant" ? 'textarea[aria-label="发送给 AI 助手的消息"]' : undefined}
           />
         </div>
       </div>

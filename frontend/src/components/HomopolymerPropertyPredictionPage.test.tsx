@@ -354,12 +354,67 @@ describe("HomopolymerPropertyPredictionPage", () => {
     const trigger = screen.getByRole("button", { name: "使用说明" });
     fireEvent.click(trigger);
     expect(trigger.getAttribute("aria-pressed")).toBe("true");
-    const dock = screen.getByRole("complementary", { name: "使用说明" });
-    expect(within(dock).getByRole("heading", { name: "运行与对比" })).toBeTruthy();
+    const panel = screen.getByRole("tabpanel", { name: "使用说明" });
+    expect(within(panel).getByRole("heading", { name: "运行与对比" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "使用说明" }).getAttribute("aria-selected")).toBe("true");
 
-    fireEvent.keyDown(within(dock).getByRole("button", { name: "关闭使用说明" }), { key: "Escape" });
-    expect(screen.queryByRole("complementary", { name: "使用说明" })).toBeNull();
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Escape" });
+    expect(screen.queryByRole("tabpanel", { name: "使用说明" })).not.toBeNull();
+    const tab = screen.getByRole("tab", { name: "使用说明" });
+    tab.focus();
+    fireEvent.keyDown(tab, { key: "Escape" });
+    expect(screen.queryByRole("tabpanel", { name: "使用说明" })).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("AI 助手在辅助栏打开，与使用说明共用一个辅助栏", () => {
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
+    const ai = screen.getByRole("button", { name: "AI 助手" });
+    const help = screen.getByRole("button", { name: "使用说明" });
+
+    fireEvent.click(ai);
+    expect(ai.getAttribute("aria-pressed")).toBe("true");
+    const panel = screen.getByRole("tabpanel", { name: "AI 助手" });
+    expect(within(panel).getByText(/界面预览：AI 助手尚未接入/)).toBeTruthy();
+    expect(within(panel).getByRole("textbox", { name: "发送给 AI 助手的消息" })).toBeTruthy();
+
+    fireEvent.click(help);
+    expect(ai.getAttribute("aria-pressed")).toBe("false");
+    expect(help.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("tabpanel", { name: "使用说明" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: "AI 助手" }));
+    expect(ai.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(ai);
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+  });
+
+  it("AI 助手界面预览：建议问题、附带上下文与清空对话都只在本页完成", async () => {
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
+    run();
+    await waitFor(() => expect(within(resultsTable()).getByText("123")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "AI 助手" }));
+    const panel = screen.getByRole("tabpanel", { name: "AI 助手" });
+
+    expect(within(panel).getByLabelText("AI 可读取的页面内容").textContent).toContain("1 项预测结果");
+    fireEvent.click(within(panel).getByLabelText("附带当前结构和结果"));
+    fireEvent.click(within(panel).getByRole("button", { name: "解释这次的预测结果" }));
+
+    const log = within(panel).getByRole("log", { name: "对话" });
+    expect(within(log).getByText("解释这次的预测结果")).toBeTruthy();
+    expect(within(log).getByText(/结合当前结构和第 1 次运行的 1 项预测结果/)).toBeTruthy();
+    expect(mocks.predictSmiles).toHaveBeenCalledOnce();
+
+    const input = within(panel).getByRole("textbox", { name: "发送给 AI 助手的消息" });
+    fireEvent.change(input, { target: { value: "Tm 为什么这么高？" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(within(log).getByText("Tm 为什么这么高？")).toBeTruthy();
+    expect((input as HTMLTextAreaElement).value).toBe("");
+
+    fireEvent.click(within(panel).getByRole("button", { name: "清空对话" }));
+    expect(within(log).queryByText("Tm 为什么这么高？")).toBeNull();
+    expect(within(panel).getByRole("button", { name: "解释这次的预测结果" })).toBeTruthy();
   });
 
   it("没有结构时不显示“用这个结构继续”", () => {

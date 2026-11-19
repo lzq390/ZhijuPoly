@@ -1313,3 +1313,297 @@
     white-space: nowrap;
   }
 }
+
+/* ---------- AI assistant (module dock, interface preview) ---------- */
+.np-homopolymer-prediction .np-hp-assistant {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  font-size: var(--np-hp-fs);
+}
+
+.np-homopolymer-prediction .np-hp-assistant__context {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--np-hp-line);
+}
+
+.np-homopolymer-prediction .np-hp-assistant__context span {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  color: var(--np-hp-muted);
+  background: var(--np-hp-hover);
+  font-size: var(--np-hp-fs-xs);
+  line-height: 1.6;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__context span.is-attached {
+  color: var(--np-hp-blue-ink);
+  background: var(--np-hp-blue-soft);
+}
+
+.np-homopolymer-prediction .np-hp-assistant__context code {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px 16px;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__notice {
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: var(--np-hp-ink2);
+  background: #f9fafb;
+  font-size: var(--np-hp-fs-xs);
+  line-height: 1.55;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__welcome {
+  padding-top: 6px;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__mark,
+.np-homopolymer-prediction .np-hp-assistant__avatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--np-hp-blue);
+  background: var(--np-hp-blue-soft);
+}
+
+.np-homopolymer-prediction .np-hp-assistant__mark svg,
+.np-homopolymer-prediction .np-hp-assistant__avatar svg {
+  width: 16px;
+  height: 16px;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__welcome > strong {
+  display: block;
+  margin-top: 12px;
+  color: var(--np-hp-ink);
+  font-size: var(--np-hp-fs-lg);
+  font-weight: 600;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__welcome > p {
+  margin: 4px 0 14px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-sm);
+  line-height: 1.6;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__welcome ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__welcome li button {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--np-hp-line);
+  border-radius: 9px;
+  color: var(--np-hp-ink2);
+  background: #fff;
+  font-size: var(--np-hp-fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__welcome li button:hover {
+  border-color: var(--np-hp-line2);
+  background: #f9fafb;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__messages {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__messages li {
+  display: flex;
+  gap: 10px;
+  line-height: 1.65;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__messages li.is-user {
+  justify-content: flex-end;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__messages li.is-user > div {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 12px 12px 4px 12px;
+  color: var(--np-hp-ink);
+  background: var(--np-hp-blue-soft);
+  overflow-wrap: anywhere;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__messages li.is-assistant > div {
+  min-width: 0;
+  padding-top: 5px;
+  color: var(--np-hp-ink2);
+  overflow-wrap: anywhere;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__composer {
+  flex: none;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--np-hp-line);
+}
+
+.np-homopolymer-prediction .np-hp-assistant__input {
+  position: relative;
+  border: 1px solid var(--np-hp-line2);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__input:focus-within {
+  border-color: rgba(37, 99, 235, 0.5);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.np-homopolymer-prediction .np-hp-assistant__input textarea {
+  display: block;
+  width: 100%;
+  min-height: 64px;
+  max-height: 160px;
+  resize: none;
+  padding: 10px 50px 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  outline: none;
+  color: var(--np-hp-ink);
+  background: transparent;
+  font-size: var(--np-hp-fs);
+  line-height: 1.55;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__input textarea:focus-visible {
+  outline: none;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__send {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--np-hp-blue);
+  cursor: pointer;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__send:disabled {
+  color: #98a2b3;
+  background: var(--np-hp-hover);
+  cursor: not-allowed;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__send svg {
+  width: 16px;
+  height: 16px;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__options {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+}
+
+.np-homopolymer-prediction .np-hp-assistant__options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--np-hp-ink2);
+  cursor: pointer;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__options input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--np-hp-blue);
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-homopolymer-prediction .np-hp-assistant__context {
+    padding: 16px 24px;
+  }
+
+  .np-homopolymer-prediction .np-hp-assistant__log {
+    padding: 18px 24px 20px;
+  }
+
+  .np-homopolymer-prediction .np-hp-assistant__composer {
+    padding: 14px 18px 18px;
+  }
+
+  .np-homopolymer-prediction .np-hp-assistant__mark,
+  .np-homopolymer-prediction .np-hp-assistant__avatar {
+    width: 42px;
+    height: 42px;
+  }
+
+  .np-homopolymer-prediction .np-hp-assistant__mark svg,
+  .np-homopolymer-prediction .np-hp-assistant__avatar svg,
+  .np-homopolymer-prediction .np-hp-assistant__send svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .np-homopolymer-prediction .np-hp-assistant__send {
+    width: 42px;
+    height: 42px;
+  }
+
+  .np-homopolymer-prediction .np-hp-assistant__input textarea {
+    min-height: 84px;
+    padding-right: 64px;
+  }
+}

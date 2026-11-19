@@ -11,6 +11,7 @@
 }
 
 .np-module-tools__button {
+  position: relative;
   display: inline-flex;
   height: var(--np-tools-h);
   align-items: center;
@@ -157,7 +158,8 @@
   display: none;
 }
 
-/* Bare docks host content that brings its own header and scrolling. */
+/* Bare docks and fill tabs host content that brings its own scrolling. */
+.np-module-dock > .np-module-dock__body.is-fill,
 .np-module-dock.is-bare > .np-module-dock__body {
   display: flex;
   flex-direction: column;
@@ -282,7 +284,8 @@
   display: none;
 }
 
-/* Bare docks host content that brings its own header and scrolling. */
+/* Bare docks and fill tabs host content that brings its own scrolling. */
+.np-module-dock > .np-module-dock__body.is-fill,
 .np-module-dock.is-bare > .np-module-dock__body {
   display: flex;
   flex-direction: column;
@@ -341,5 +344,33 @@
   from {
     opacity: 0;
     transform: translateX(8px);
+  }
+}
+
+/* Phones: header tools collapse to icons so the module title keeps a single line. */
+@media (max-width: 899px) {
+  .np-module-tools {
+    --np-tools-h: 36px;
+    --np-tools-icon: 18px;
+    gap: 2px;
+  }
+
+  .np-module-tools__button {
+    width: var(--np-tools-h);
+    justify-content: center;
+    padding: 0;
+  }
+
+  .np-module-tools__button > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .np-module-tools__separator {
+    margin: 0 2px;
   }
 }
