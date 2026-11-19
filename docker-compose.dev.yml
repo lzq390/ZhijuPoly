@@ -255,6 +255,7 @@ services:
       - ./frontend:/app/frontend
       - ./contracts:/app/contracts:ro
       - ./backend/tests/fixtures:/app/backend/tests/fixtures:ro
+      - ./polymer_md:/app/polymer_md:ro
       - nexpoly_dev_frontend_node_modules:/app/frontend/node_modules
     ports:
       - "${NEXPOLY_DEV_FRONTEND_BIND_ADDRESS:-127.0.0.1}:${NEXPOLY_DEV_FRONTEND_PORT:-9001}:5173"
