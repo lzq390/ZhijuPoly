@@ -71,10 +71,12 @@
 }
 
 .np-monomer-md-simulation .np-mmd-toolbar-actions {
+  min-width: 0;
   gap: 8px;
 }
 
 .np-monomer-md-simulation .np-mmd-service-status {
+  flex: none;
   gap: 7px;
 }
 
@@ -107,6 +109,7 @@
   letter-spacing: 0.13em;
 }
 
+.np-monomer-md-simulation .np-mmd-event-status,
 .np-monomer-md-simulation .np-mmd-service-status > span,
 .np-monomer-md-simulation .np-mmd-service-status > button {
   display: inline-flex;
@@ -122,6 +125,7 @@
   white-space: nowrap;
 }
 
+.np-monomer-md-simulation .np-mmd-event-status > svg,
 .np-monomer-md-simulation .np-mmd-service-status > span > svg,
 .np-monomer-md-simulation .np-mmd-service-status > button > svg {
   width: 14px;
@@ -179,6 +183,23 @@
 .np-monomer-md-simulation .np-mmd-service-status > span.is-loading > svg { color: var(--np-sw-blue); }
 .np-monomer-md-simulation .np-mmd-service-status > button { cursor: pointer; font-size: 13px; font-weight: 600; }
 .np-monomer-md-simulation .np-mmd-service-status > button:hover:not(:disabled) { border-color: rgba(37, 99, 235, 0.34); color: var(--np-sw-blue-strong); background: #f8fbff; }
+
+/* Task-event connection notice: an in-toolbar chip, so it never adds a layout row. */
+.np-monomer-md-simulation .np-mmd-event-status {
+  min-width: 0;
+  border-color: var(--np-theme-warning-border);
+  color: var(--np-theme-warning-text);
+  background: var(--np-theme-warning-soft);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.np-monomer-md-simulation .np-mmd-event-status > svg { color: var(--np-theme-warning); }
+.np-monomer-md-simulation .np-mmd-event-status > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .np-monomer-md-simulation .np-mmd-input-actions button,
 .np-monomer-md-simulation .np-mmd-secondary-action,
@@ -1076,13 +1097,16 @@
   .np-monomer-md-simulation .np-mmd-module-toolbar { width: min(calc(100% - 72px), var(--np-mmd-column)); }
   .np-monomer-md-simulation .np-mmd-module-toolbar { min-height: 54px; gap: 12px; margin-bottom: 18px; }
   .np-monomer-md-simulation .np-mmd-module-toolbar::before { width: min(270px, 22vw); }
+  .np-monomer-md-simulation .np-mmd-event-status,
   .np-monomer-md-simulation .np-mmd-service-status > span,
   .np-monomer-md-simulation .np-mmd-service-status > button { min-height: 54px; gap: 10px; border-radius: 9px; padding: 0 16px; }
+  .np-monomer-md-simulation .np-mmd-event-status > svg,
   .np-monomer-md-simulation .np-mmd-service-status > span > svg,
   .np-monomer-md-simulation .np-mmd-service-status > button > svg { width: 19px; height: 19px; }
   .np-monomer-md-simulation .np-mmd-ready-dot { width: 8px; height: 8px; box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.11), 0 0 15px rgba(16, 185, 129, 0.38); }
   .np-monomer-md-simulation .np-mmd-service-status__copy strong { font-size: 18px; }
   .np-monomer-md-simulation .np-mmd-service-status__copy small { max-width: 340px; font-size: 13px; }
+  .np-monomer-md-simulation .np-mmd-event-status,
   .np-monomer-md-simulation .np-mmd-service-status > button { font-size: 18px; }
   .np-monomer-md-simulation .np-mmd-eyebrow { font-size: 13px; }
   .np-monomer-md-simulation .np-mmd-workbench-surface { border-radius: var(--np-theme-surface-radius); box-shadow: var(--np-theme-surface-shadow); }
