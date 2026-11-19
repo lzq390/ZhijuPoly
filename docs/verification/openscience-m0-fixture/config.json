@@ -1,0 +1,30 @@
+{
+  "model": "m0fixture/m0",
+  "small_model": "m0fixture/m0",
+  "enabled_providers": [
+    "m0fixture"
+  ],
+  "provider": {
+    "m0fixture": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "M0 isolated synthetic model",
+      "options": {
+        "baseURL": "http://127.0.0.1:18080/v1",
+        "apiKey": "m0-local-fixture"
+      },
+      "models": {
+        "m0": {
+          "name": "m0",
+          "limit": {
+            "context": 32000,
+            "output": 256
+          }
+        }
+      }
+    }
+  },
+  "mcp": {},
+  "permission": {
+    "*": "deny"
+  }
+}
