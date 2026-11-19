@@ -926,6 +926,7 @@ function AppContent() {
         <HomopolymerPropertyPredictionPage
           ref={structureCanvasOwnerRef}
           structure={structureWorkspace}
+          onOpenModule={openModuleById}
         />
       ) : null}
 

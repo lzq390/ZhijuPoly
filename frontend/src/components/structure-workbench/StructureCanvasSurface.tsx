@@ -36,6 +36,8 @@ type StructureCanvasSurfaceProps = {
   hasActivated3D: boolean;
   operationBusy: boolean;
   editorTitle?: string;
+  /** Optional leading label for pages that frame the canvas as one zone of a larger surface. */
+  commandbarLabel?: ReactNode;
   utilityActions?: readonly StructureCanvasUtilityAction[];
   onLoadExample: () => void | Promise<unknown>;
   onImportFile: (file: File) => void | Promise<unknown>;
@@ -99,6 +101,7 @@ export function StructureCanvasSurface({
   hasActivated3D,
   operationBusy,
   editorTitle = "结构工作台结构编辑器",
+  commandbarLabel,
   utilityActions = [],
   onLoadExample,
   onImportFile,
@@ -143,6 +146,7 @@ export function StructureCanvasSurface({
       />
 
       <header className="np-sw-commandbar" aria-label="结构工作台工具栏">
+        {commandbarLabel ? <span className="np-sw-commandbar__label">{commandbarLabel}</span> : null}
         <div className="np-sw-toolbar">
           <ToolButton
             label="加载示例"

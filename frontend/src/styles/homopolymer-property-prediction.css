@@ -1,523 +1,1048 @@
-.np-homopolymer-prediction .np-hp-parameters {
-  width: min(620px, calc(100% - 32px));
+/* 均聚物性质预测：左侧共享结构画板 + 右侧常驻任务面板。
+   Scoped to this page; the shared workbench keeps its own defaults elsewhere. */
+
+.np-structure-workbench.np-homopolymer-prediction {
+  --np-hp-ink: #101828;
+  --np-hp-ink2: #344054;
+  --np-hp-muted: #667085;
+  --np-hp-line: #eaecf0;
+  --np-hp-line2: #d0d5dd;
+  --np-hp-hover: #f2f4f7;
+  --np-hp-blue: var(--np-theme-blue);
+  --np-hp-blue-strong: var(--np-theme-blue-strong);
+  --np-hp-blue-ink: #1d4ed8;
+  --np-hp-blue-soft: #eef3fe;
+  --np-hp-thermal: #d9682b;
+  --np-hp-mechanical: #14897c;
+  --np-hp-permeability: #7a4fd6;
+  --np-hp-panel-w: 400px;
+  --np-hp-gutter: 24px;
+  --np-hp-pad: 22px;
+  --np-hp-radius: 14px;
+  --np-hp-fs: 13.5px;
+  --np-hp-fs-sm: 12.5px;
+  --np-hp-fs-xs: 12px;
+  --np-hp-fs-title: 14px;
+  --np-hp-fs-lg: 15px;
+  --np-hp-fs-value: 14px;
+  --np-hp-row: 34px;
+  --np-hp-btn: 42px;
+  --np-hp-control: 30px;
+  --np-hp-icon: 15px;
+  --np-hp-tool-h: 32px;
+  --np-hp-tool-fs: 13px;
+  --np-hp-canvas-min: 360px;
+  background-color: #f5f6f8;
+  background-image: none;
+  color: var(--np-hp-ink);
 }
 
-.np-homopolymer-prediction .np-hp-parameters .np-sw-popover__header h2 {
-  font-size: 17px;
-  line-height: 23px;
+/* ---------- page frame ---------- */
+.np-structure-workbench.np-homopolymer-prediction .np-hp-page {
+  padding: 0 var(--np-hp-gutter) calc(var(--np-hp-gutter) - 4px);
 }
 
-.np-homopolymer-prediction .np-hp-parameters .np-sw-popover__header small,
-.np-homopolymer-prediction .np-sw-drawer__header p {
+.np-structure-workbench.np-homopolymer-prediction .np-hp-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--np-hp-panel-w);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--np-hp-line);
+  border-radius: var(--np-hp-radius);
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+/* ---------- structure zone (shared canvas, quieter chrome) ---------- */
+.np-structure-workbench.np-homopolymer-prediction .np-hp-structure {
+  container: np-hp-structure / inline-size;
+  min-width: 0;
+  border-right: 1px solid var(--np-hp-line);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-hp-structure .np-sw-surface {
+  gap: 0;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-commandbar {
+  flex: 0 0 auto;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 0;
+  padding: 12px 14px 8px 20px;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-commandbar__label {
+  color: var(--np-hp-ink);
+  font-size: var(--np-hp-fs-title);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-toolbar {
+  gap: 2px;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool {
+  min-height: var(--np-hp-tool-h);
+  padding: 0 9px;
+  border-color: transparent;
+  border-radius: 7px;
+  color: var(--np-hp-ink2);
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--np-hp-tool-fs);
+  font-weight: 500;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool > svg {
+  width: var(--np-hp-icon);
+  height: var(--np-hp-icon);
+  color: var(--np-hp-muted);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool:hover:not(:disabled),
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool.is-primary:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--np-hp-ink);
+  background: var(--np-hp-hover);
+  box-shadow: none;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool.is-primary,
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool.is-primary > svg,
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool.is-primary:hover:not(:disabled) > svg {
+  border-color: transparent;
+  color: var(--np-hp-ink2);
+  background: transparent;
+  box-shadow: none;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool.is-primary > svg {
+  color: var(--np-hp-muted);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool.is-active {
+  border-color: transparent;
+  color: var(--np-hp-blue-ink);
+  background: var(--np-hp-blue-soft);
+  box-shadow: none;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool.is-active > svg {
+  color: var(--np-hp-blue);
+}
+
+/* Clearing is destructive: keep it last and neutral until hovered. */
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool[data-workbench-tool="clear"] {
+  order: 10;
+  color: var(--np-hp-ink2);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool[data-workbench-tool="clear"] > svg {
+  color: var(--np-hp-muted);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool[data-workbench-tool="clear"]:hover:not(:disabled) {
+  color: var(--np-theme-danger-text);
+  background: var(--np-theme-danger-soft);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool[data-workbench-tool="clear"]:hover:not(:disabled) > svg {
+  color: var(--np-theme-danger);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-canvas-stage {
+  flex: 1 1 auto;
+  min-height: var(--np-hp-canvas-min);
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-editor,
+.np-structure-workbench.np-homopolymer-prediction .np-sw-editor iframe,
+.np-structure-workbench.np-homopolymer-prediction .np-structure-editor,
+.np-structure-workbench.np-homopolymer-prediction .np-sw-preview-3d,
+.np-structure-workbench.np-homopolymer-prediction .np-sw-preview-3d__frame {
+  min-height: var(--np-hp-canvas-min);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-canvas-stage::before,
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles::before {
+  content: none;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles {
+  min-height: 0;
+  border: 0;
+  border-top: 1px solid var(--np-hp-line);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles:focus-within {
+  border-color: var(--np-hp-line);
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.22);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > label {
+  top: 14px;
+  left: 20px;
+  color: var(--np-hp-muted);
   font-family: var(--font-body);
-  font-size: 11.5px;
+  font-size: var(--np-hp-fs-xs);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > textarea {
+  min-height: 56px;
+  padding: 13px 52px 20px 78px;
+  color: var(--np-hp-ink2);
+  font-size: var(--np-hp-fs-sm);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > button {
+  top: 11px;
+  right: 14px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > button:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--np-hp-hover);
+  box-shadow: none;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p {
+  right: 52px;
+  bottom: 4px;
+  color: var(--np-hp-muted);
+  font-family: var(--font-body);
+  font-size: 11px;
+}
+
+/* Narrow structure zones keep every tool, but secondary labels collapse to icons. */
+/* Ketcher shows its full top toolbar from ~700px but needs ~754px; dropping the two
+   least-used items (About, full screen) lets it fit without a horizontal scroll. */
+@container np-hp-structure (max-width: 820px) {
+  .np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="about-button"], [data-testid="fullscreen-mode-button"]) {
+    display: none;
+  }
+}
+
+@container np-hp-structure (max-width: 760px) {
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-tool:is([data-workbench-tool="sync"], [data-workbench-tool="save-record"], [data-workbench-tool="clear"]) {
+    width: var(--np-hp-tool-h);
+    padding: 0;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-tool:is([data-workbench-tool="sync"], [data-workbench-tool="save-record"], [data-workbench-tool="clear"]) > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
+/* ---------- task panel ---------- */
+.np-structure-workbench.np-homopolymer-prediction .np-hp-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  font-size: var(--np-hp-fs);
+  line-height: 1.55;
+}
+
+.np-homopolymer-prediction .np-hp-task {
+  flex: 0 0 auto;
+  padding: var(--np-hp-pad) var(--np-hp-pad) 0;
+}
+
+.np-homopolymer-prediction .np-hp-label {
+  margin: 0 0 6px;
+  color: var(--np-hp-muted);
+  font-family: var(--font-body);
+  font-size: var(--np-hp-fs-sm);
   font-weight: 500;
   line-height: 1.4;
 }
 
-.np-homopolymer-prediction .np-sw-drawer__header h2 {
-  font-size: 16px;
+.np-homopolymer-prediction .np-hp-selection__summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.np-homopolymer-prediction .np-hp-parameters__form {
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 14px;
-  background: #f8fbfe;
+.np-homopolymer-prediction .np-hp-selection__summary strong {
+  display: block;
+  color: var(--np-hp-ink);
+  font-size: var(--np-hp-fs-lg);
+  font-weight: 600;
+  line-height: 1.4;
 }
 
-.np-homopolymer-prediction .np-hp-property-groups {
+.np-homopolymer-prediction .np-hp-selection__summary small {
+  display: block;
+  margin-top: 2px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-sm);
+}
+
+.np-homopolymer-prediction .np-hp-link {
+  flex: none;
+  padding: 2px 0;
+  border: 0;
+  color: var(--np-hp-blue-ink);
+  background: none;
+  font-size: var(--np-hp-fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .np-homopolymer-prediction .np-hp-link:hover:not(:disabled) {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+}
+
+.np-homopolymer-prediction .np-hp-link:disabled {
+  color: var(--np-hp-muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.np-homopolymer-prediction .np-hp-selection__editor {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--np-hp-line);
+  border-radius: 10px;
+  background: #fafbfc;
 }
 
-.np-homopolymer-prediction .np-hp-property-group {
-  display: grid;
-  grid-template-columns: 118px minmax(0, 1fr);
+.np-homopolymer-prediction .np-hp-group {
   min-width: 0;
   margin: 0;
   padding: 0;
-  border: 1px solid rgba(51, 83, 126, 0.14);
-  border-radius: 10px;
-  background: #fff;
-}
-
-.np-homopolymer-prediction .np-hp-property-group > header {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  justify-content: center;
-  flex-direction: column;
-  gap: 5px;
-  padding: 8px 9px;
-  border-right: 1px solid rgba(51, 83, 126, 0.11);
-  background: #fbfdff;
-}
-
-.np-homopolymer-prediction .np-hp-property-group > header > span {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.np-homopolymer-prediction .np-hp-property-group > header strong {
-  color: #183553;
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.np-homopolymer-prediction .np-hp-property-group > header button,
-.np-homopolymer-prediction .np-hp-parameters__footer > div button {
   border: 0;
-  padding: 2px 3px;
-  color: var(--np-sw-blue-strong);
-  background: transparent;
-  font-size: 11px;
-  font-weight: 700;
-  cursor: pointer;
 }
 
-.np-homopolymer-prediction .np-hp-property-group > header button:hover:not(:disabled),
-.np-homopolymer-prediction .np-hp-parameters__footer > div button:hover:not(:disabled) {
-  color: var(--np-sw-cyan);
-}
-
-.np-homopolymer-prediction .np-hp-property-group > header button:disabled,
-.np-homopolymer-prediction .np-hp-parameters__footer > div button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.np-homopolymer-prediction .np-hp-property-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-  padding: 8px;
-}
-
-.np-homopolymer-prediction .np-hp-property-group.is-thermal .np-hp-property-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.np-homopolymer-prediction .np-hp-property-group.is-mechanical .np-hp-property-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.np-homopolymer-prediction .np-hp-property-group.is-permeability .np-hp-property-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.np-homopolymer-prediction .np-hp-property-option {
+.np-homopolymer-prediction .np-hp-group > legend {
   display: flex;
+  width: 100%;
   align-items: center;
-  min-width: 0;
-  min-height: 42px;
   gap: 7px;
-  padding: 6px 7px;
-  border: 1px solid rgba(51, 83, 126, 0.13);
-  border-radius: 8px;
-  color: var(--np-sw-muted);
+  margin-bottom: 6px;
+  padding: 0;
+  color: var(--np-hp-ink2);
+  font-size: var(--np-hp-fs-sm);
+  font-weight: 600;
+}
+
+.np-homopolymer-prediction .np-hp-group > legend .np-hp-link {
+  margin-left: auto;
+  font-size: var(--np-hp-fs-xs);
+}
+
+.np-homopolymer-prediction .np-hp-group > legend > i,
+.np-homopolymer-prediction .np-hp-table__group i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+}
+
+.np-homopolymer-prediction .is-thermal > legend > i,
+.np-homopolymer-prediction tbody.is-thermal .np-hp-table__group i { background: var(--np-hp-thermal); }
+.np-homopolymer-prediction .is-mechanical > legend > i,
+.np-homopolymer-prediction tbody.is-mechanical .np-hp-table__group i { background: var(--np-hp-mechanical); }
+.np-homopolymer-prediction .is-permeability > legend > i,
+.np-homopolymer-prediction tbody.is-permeability .np-hp-table__group i { background: var(--np-hp-permeability); }
+
+.np-homopolymer-prediction .np-hp-group__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.np-homopolymer-prediction .np-hp-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--np-hp-control);
+  padding: 0 10px;
+  border: 1px solid var(--np-hp-line2);
+  border-radius: 7px;
+  color: var(--np-hp-ink2);
   background: #fff;
+  font-size: var(--np-hp-fs-sm);
   cursor: pointer;
-  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
 }
 
-.np-homopolymer-prediction .np-hp-property-option:hover {
-  border-color: rgba(37, 99, 235, 0.3);
-  background: #f8fbff;
-}
-
-.np-homopolymer-prediction .np-hp-property-option.is-selected {
-  border-color: rgba(37, 99, 235, 0.34);
-  background: linear-gradient(135deg, rgba(239, 246, 255, 0.96), rgba(236, 254, 255, 0.7));
-  box-shadow: 0 5px 14px rgba(37, 99, 235, 0.07);
-}
-
-.np-homopolymer-prediction .np-hp-property-option > input {
+.np-homopolymer-prediction .np-hp-chip > input {
   position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
-.np-homopolymer-prediction .np-hp-property-option:has(input:focus-visible) {
+.np-homopolymer-prediction .np-hp-chip:has(input:focus-visible) {
   outline: var(--np-theme-focus-width) solid var(--np-theme-focus);
   outline-offset: var(--np-theme-focus-offset);
 }
 
-.np-homopolymer-prediction .np-hp-property-option__check {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 18px;
-  width: 18px;
-  height: 18px;
-  border: 1px solid rgba(71, 100, 143, 0.34);
-  border-radius: 5px;
-  color: #fff;
+.np-homopolymer-prediction .np-hp-chip__check {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  place-items: center;
+  border: 1.5px solid var(--np-hp-line2);
+  border-radius: 4px;
   background: #fff;
 }
 
-.np-homopolymer-prediction .np-hp-property-option.is-selected .np-hp-property-option__check {
-  border-color: var(--np-sw-blue);
-  background: linear-gradient(135deg, var(--np-sw-blue), var(--np-sw-cyan));
+.np-homopolymer-prediction .np-hp-chip__check svg {
+  width: 10px;
+  height: 10px;
 }
 
-.np-homopolymer-prediction .np-hp-property-option__check svg {
-  width: 12px;
-  height: 12px;
+.np-homopolymer-prediction .np-hp-chip.is-selected {
+  border-color: rgba(37, 99, 235, 0.42);
+  color: var(--np-hp-blue-ink);
+  background: var(--np-hp-blue-soft);
 }
 
-.np-homopolymer-prediction .np-hp-property-option > span:last-child {
-  min-width: 0;
+.np-homopolymer-prediction .np-hp-chip.is-selected .np-hp-chip__check {
+  border-color: var(--np-hp-blue);
+  color: #fff;
+  background: var(--np-hp-blue);
 }
 
-.np-homopolymer-prediction .np-hp-property-option strong,
-.np-homopolymer-prediction .np-hp-property-option small {
-  display: block;
-}
-
-.np-homopolymer-prediction .np-hp-property-option strong {
-  color: #183553;
-  font-size: 12px;
-  font-weight: 650;
-  line-height: 1.35;
-}
-
-.np-homopolymer-prediction .np-hp-property-option small {
-  margin-top: 2px;
-  color: #6f849d;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 500;
-  line-height: 1.35;
-}
-
-.np-homopolymer-prediction .np-hp-parameters__footer {
+.np-homopolymer-prediction .np-hp-selection__bulk {
   display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-sm);
+}
+
+.np-homopolymer-prediction .np-hp-selection__bulk {
+  justify-content: flex-end;
+}
+
+.np-homopolymer-prediction .np-hp-run {
+  padding: 16px 0 2px;
+}
+
+.np-homopolymer-prediction .np-hp-primary {
+  display: flex;
+  width: 100%;
+  height: var(--np-hp-btn);
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--np-hp-blue);
+  font-size: var(--np-hp-fs-title);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--np-motion-control, 120ms) ease;
+}
+
+.np-homopolymer-prediction .np-hp-primary:hover:not(:disabled) {
+  background: var(--np-hp-blue-strong);
+}
+
+.np-homopolymer-prediction .np-hp-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.np-homopolymer-prediction .np-hp-primary svg {
+  width: 16px;
+  height: 16px;
+}
+
+.np-homopolymer-prediction .np-hp-hint {
+  margin: 8px 0 0;
+  color: var(--np-theme-danger-text);
+  font-size: var(--np-hp-fs-sm);
+}
+
+/* ---------- results ---------- */
+.np-homopolymer-prediction .np-hp-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 24px var(--np-hp-pad) 14px;
+}
+
+.np-homopolymer-prediction .np-hp-results__header {
+  display: flex;
+  min-height: var(--np-hp-control);
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 11px;
-  padding-top: 11px;
-  border-top: 1px solid rgba(51, 83, 126, 0.13);
+  margin-bottom: 6px;
 }
 
-.np-homopolymer-prediction .np-hp-parameters__footer > div {
+.np-homopolymer-prediction .np-hp-results__header h2 {
+  margin: 0;
+  color: var(--np-hp-ink);
+  font-family: var(--font-body);
+  font-size: var(--np-hp-fs-title);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.np-homopolymer-prediction .np-hp-results__header h2 small {
+  margin-left: 8px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-sm);
+  font-weight: 400;
+}
+
+.np-homopolymer-prediction .np-hp-button {
+  display: inline-flex;
+  min-height: var(--np-hp-control);
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--np-hp-line2);
+  border-radius: 7px;
+  color: var(--np-hp-ink2);
+  background: #fff;
+  font-size: var(--np-hp-fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.np-homopolymer-prediction .np-hp-button:hover {
+  background: #f9fafb;
+}
+
+.np-homopolymer-prediction .np-hp-button svg {
+  width: var(--np-hp-icon);
+  height: var(--np-hp-icon);
+  color: var(--np-hp-muted);
+}
+
+.np-homopolymer-prediction .np-hp-export {
+  position: relative;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.np-homopolymer-prediction .np-hp-parameters__footer > div > strong {
-  color: var(--np-sw-muted);
-  font-size: 12px;
-}
-
-.np-homopolymer-prediction .np-hp-parameters__footer > div > span {
-  display: inline-flex;
-  gap: 6px;
-}
-
-.np-homopolymer-prediction .np-hp-results {
-  display: grid;
   gap: 10px;
 }
 
-.np-homopolymer-prediction .np-hp-stale-notice {
-  padding: 9px 10px;
-  border: 1px solid rgba(245, 158, 11, 0.25);
-  border-radius: 8px;
-  color: #92400e;
-  background: #fffbeb;
-  font-size: 12px;
-  line-height: 1.5;
+.np-homopolymer-prediction .np-hp-export__feedback {
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  white-space: nowrap;
 }
 
-.np-homopolymer-prediction .np-hp-result-summary {
-  display: grid;
-  gap: 8px;
-}
-
-.np-homopolymer-prediction .np-hp-result-summary > div {
-  min-width: 0;
-  padding: 10px;
-  border: 1px solid rgba(51, 83, 126, 0.14);
-  border-radius: 9px;
-  background: #f7faff;
-}
-
-.np-homopolymer-prediction .np-hp-result-summary span {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: #6f849d;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.np-homopolymer-prediction .np-hp-result-summary span svg {
-  width: 12px;
-  height: 12px;
-}
-
-.np-homopolymer-prediction .np-hp-result-summary code,
-.np-homopolymer-prediction .np-hp-result-summary strong {
-  display: block;
-  margin-top: 5px;
-  color: var(--np-sw-ink);
-}
-
-.np-homopolymer-prediction .np-hp-result-summary code {
-  overflow-wrap: anywhere;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  line-height: 1.45;
-}
-
-.np-homopolymer-prediction .np-hp-result-summary strong {
-  font-size: 15px;
-}
-
-.np-homopolymer-prediction .np-hp-result-list {
-  display: grid;
-  gap: 8px;
-}
-
-.np-homopolymer-prediction .np-hp-result-card {
-  padding: 11px;
-  border: 1px solid rgba(51, 83, 126, 0.14);
+.np-homopolymer-prediction .np-hp-export__menu {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 140px;
+  padding: 4px;
+  border: 1px solid var(--np-hp-line);
   border-radius: 9px;
   background: #fff;
-  box-shadow: 0 5px 14px rgba(25, 55, 92, 0.045);
+  box-shadow: 0 10px 28px rgba(16, 24, 40, 0.12);
 }
 
-.np-homopolymer-prediction .np-hp-result-card.is-missing {
-  border-style: dashed;
-  background: #fbfdff;
+.np-homopolymer-prediction .np-hp-export__menu button {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--np-hp-ink2);
+  background: none;
+  font-size: var(--np-hp-fs-sm);
+  text-align: left;
+  cursor: pointer;
 }
 
-.np-homopolymer-prediction .np-hp-result-card header,
-.np-homopolymer-prediction .np-hp-result-card > div {
+.np-homopolymer-prediction .np-hp-export__menu button:hover,
+.np-homopolymer-prediction .np-hp-export__menu button:focus-visible {
+  background: var(--np-hp-hover);
+}
+
+.np-homopolymer-prediction .np-hp-status {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
+  margin: 2px 0 6px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-sm);
 }
 
-.np-homopolymer-prediction .np-hp-result-card header > span {
-  padding: 2px 6px;
-  border-radius: 999px;
-  color: var(--np-sw-blue-strong);
-  background: #eff6ff;
+.np-homopolymer-prediction .np-hp-status svg {
+  width: var(--np-hp-icon);
+  height: var(--np-hp-icon);
+}
+
+.np-homopolymer-prediction .np-hp-alert {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--np-theme-danger-border);
+  border-radius: 10px;
+  color: var(--np-theme-danger-text);
+  background: var(--np-theme-danger-soft);
+}
+
+.np-homopolymer-prediction .np-hp-alert > svg {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+
+.np-homopolymer-prediction .np-hp-alert strong {
+  display: block;
+  font-size: var(--np-hp-fs);
+}
+
+.np-homopolymer-prediction .np-hp-alert p {
+  margin: 2px 0 0;
+  font-size: var(--np-hp-fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.np-homopolymer-prediction .np-hp-notice {
+  margin: 2px 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: var(--np-theme-warning-text);
+  background: var(--np-theme-warning-soft);
+  font-size: var(--np-hp-fs-sm);
+}
+
+.np-homopolymer-prediction .np-hp-submitted,
+.np-homopolymer-prediction .np-hp-compare {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-sm);
+}
+
+.np-homopolymer-prediction .np-hp-submitted > span,
+.np-homopolymer-prediction .np-hp-compare > span {
+  flex: none;
+}
+
+.np-homopolymer-prediction .np-hp-submitted code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--np-hp-ink2);
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 700;
+  font-size: var(--np-hp-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.np-homopolymer-prediction .np-hp-result-card > div span {
-  color: #6f849d;
-  font-size: 11px;
+.np-homopolymer-prediction .np-hp-compare select {
+  min-width: 0;
+  height: calc(var(--np-hp-control) - 2px);
+  flex: 1 1 auto;
+  padding: 0 8px;
+  border: 1px solid var(--np-hp-line2);
+  border-radius: 6px;
+  color: var(--np-hp-ink2);
+  background: #fff;
+  font-family: var(--font-mono);
+  font-size: var(--np-hp-fs-xs);
 }
 
-.np-homopolymer-prediction .np-hp-result-card h3 {
-  margin: 8px 0 6px;
-  color: #183553;
-  font-size: 13px;
+.np-homopolymer-prediction .np-hp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--np-hp-fs);
 }
 
-.np-homopolymer-prediction .np-sw-result-state strong {
-  font-size: 15px;
+.np-homopolymer-prediction .np-hp-table thead th {
+  padding: 6px 0 4px;
+  border-bottom: 1px solid var(--np-hp-line);
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
 }
 
-.np-homopolymer-prediction .np-sw-result-state p {
-  font-size: 12.5px;
+.np-homopolymer-prediction .np-hp-table .is-num {
+  padding-left: 12px;
+  text-align: right;
+  white-space: nowrap;
 }
 
-.np-homopolymer-prediction .np-hp-result-card > div strong {
-  color: var(--np-sw-ink);
-  font-family: var(--font-heading);
-  font-size: 21px;
-  line-height: 1.1;
+.np-homopolymer-prediction .np-hp-table tbody th[scope="row"] {
+  height: var(--np-hp-row);
+  padding: 0;
+  color: var(--np-hp-ink2);
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
 }
 
-@container np-sw-workbench (max-width: 559px) {
-  .np-homopolymer-prediction .np-hp-property-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.np-homopolymer-prediction .np-hp-table tbody th[scope="row"] small {
+  margin-left: 5px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+}
 
-  .np-homopolymer-prediction .np-hp-property-group > header,
-  .np-homopolymer-prediction .np-hp-parameters__footer {
-    align-items: stretch;
-    flex-direction: column;
-  }
+.np-homopolymer-prediction .np-hp-table__group th {
+  height: auto;
+  padding: 12px 0 2px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  font-weight: 600;
+  text-align: left;
+}
 
-  .np-homopolymer-prediction .np-hp-parameters__footer .np-sw-primary-button {
-    width: 100%;
+.np-homopolymer-prediction .np-hp-table__group i {
+  margin: 0 7px 1px 0;
+}
+
+.np-homopolymer-prediction .np-hp-table td strong {
+  color: var(--np-hp-ink);
+  font-size: var(--np-hp-fs-value);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.np-homopolymer-prediction .np-hp-table__unit {
+  margin-left: 3px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+}
+
+.np-homopolymer-prediction .np-hp-table td.is-previous {
+  color: var(--np-hp-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.np-homopolymer-prediction .np-hp-table td.is-delta {
+  color: var(--np-hp-ink2);
+  font-size: var(--np-hp-fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.np-homopolymer-prediction .np-hp-table td.is-delta.is-large {
+  color: var(--np-hp-ink);
+  font-weight: 600;
+}
+
+.np-homopolymer-prediction .np-hp-table__missing {
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-sm);
+}
+
+.np-homopolymer-prediction .np-hp-table__placeholder {
+  color: #c9ced6;
+}
+
+.np-homopolymer-prediction .np-hp-table.is-placeholder tbody th[scope="row"] {
+  color: var(--np-hp-muted);
+}
+
+.np-homopolymer-prediction .np-hp-table-wrap.is-dimmed {
+  opacity: 0.45;
+}
+
+.np-homopolymer-prediction .np-hp-footnote,
+.np-homopolymer-prediction .np-hp-empty {
+  margin: 12px 0 0;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  line-height: 1.6;
+}
+
+.np-homopolymer-prediction .np-hp-empty {
+  margin: 2px 0 6px;
+  font-size: var(--np-hp-fs-sm);
+}
+
+.np-homopolymer-prediction .np-hp-next {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  padding: 13px var(--np-hp-pad) 15px;
+  border-top: 1px solid var(--np-hp-line);
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-sm);
+}
+
+/* ---------- tiers ---------- */
+@media (min-width: 1600px) {
+  .np-structure-workbench.np-homopolymer-prediction {
+    --np-hp-panel-w: 440px;
+    --np-hp-gutter: 32px;
+    --np-hp-pad: 24px;
   }
 }
 
-@container np-sw-workbench (max-width: 699px) {
-  .np-homopolymer-prediction .np-hp-property-groups {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .np-homopolymer-prediction .np-hp-property-group {
-    display: block;
-  }
-
-  .np-homopolymer-prediction .np-hp-property-group > header {
-    border-right: 0;
-    border-bottom: 1px solid rgba(51, 83, 126, 0.11);
-  }
-
-  .np-homopolymer-prediction .np-hp-property-group.is-thermal .np-hp-property-grid,
-  .np-homopolymer-prediction .np-hp-property-group.is-mechanical .np-hp-property-grid,
-  .np-homopolymer-prediction .np-hp-property-group.is-permeability .np-hp-property-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+@media (max-width: 1399px) {
+  .np-structure-workbench.np-homopolymer-prediction {
+    --np-hp-panel-w: 372px;
+    --np-hp-gutter: 20px;
+    --np-hp-pad: 20px;
+    --np-hp-row: 32px;
   }
 }
 
-@container np-sw-workbench (max-width: 899px) {
-  .np-homopolymer-prediction .np-hp-parameters {
-    width: auto;
-  }
-
-  .np-homopolymer-prediction .np-hp-parameters__form {
-    max-height: calc(78vh - 62px);
-    max-height: calc(78dvh - 62px);
+/* Keep the editor zone at or above Ketcher's ~530px compact minimum. */
+@media (max-width: 1279px) {
+  .np-structure-workbench.np-homopolymer-prediction {
+    --np-hp-panel-w: 340px;
+    --np-hp-pad: 18px;
   }
 }
 
+@media (max-width: 1199px) {
+  .np-structure-workbench.np-homopolymer-prediction {
+    --np-hp-gutter: 16px;
+  }
+}
+
+@media (min-width: 900px) and (max-height: 760px) {
+  .np-structure-workbench.np-homopolymer-prediction {
+    --np-hp-row: 28px;
+    --np-hp-btn: 38px;
+    --np-hp-pad: 18px;
+    --np-hp-canvas-min: 300px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-task {
+    padding-top: 14px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-results {
+    padding-top: 14px;
+    padding-bottom: 8px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-run {
+    padding-top: 12px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-table__group th {
+    padding-top: 6px;
+    padding-bottom: 0;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-footnote {
+    margin-top: 6px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-next {
+    padding-top: 10px;
+    padding-bottom: 11px;
+  }
+}
+
+/* Native 2K: the same layout, every panel measure scaled by about 1.3. */
 @media (min-width: 2000px) and (min-height: 1120px) {
-  .np-homopolymer-prediction .np-hp-parameters {
-    width: min(930px, calc(100% - 48px));
+  .np-structure-workbench.np-homopolymer-prediction {
+    --np-hp-panel-w: 560px;
+    --np-hp-gutter: 36px;
+    --np-hp-pad: 30px;
+    --np-hp-radius: 20px;
+    --np-hp-fs: 17.5px;
+    --np-hp-fs-sm: 16px;
+    --np-hp-fs-xs: 15.5px;
+    --np-hp-fs-title: 18px;
+    --np-hp-fs-lg: 19.5px;
+    --np-hp-fs-value: 18px;
+    --np-hp-row: 44px;
+    --np-hp-btn: 54px;
+    --np-hp-control: 40px;
+    --np-hp-icon: 19px;
+    --np-hp-tool-h: 42px;
+    --np-hp-tool-fs: 17px;
+    --np-hp-canvas-min: 460px;
   }
 
-  .np-homopolymer-prediction .np-hp-parameters .np-sw-popover__header h2 {
-    font-size: 24px;
-    line-height: 32px;
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-commandbar {
+    padding: 16px 18px 10px 26px;
   }
 
-  .np-homopolymer-prediction .np-hp-parameters .np-sw-popover__header small,
-  .np-homopolymer-prediction .np-sw-drawer__header p {
-    font-size: 15px;
-    line-height: 1.45;
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > label {
+    top: 19px;
+    left: 26px;
   }
 
-  .np-homopolymer-prediction .np-sw-drawer__header h2 {
-    font-size: 21px;
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > textarea {
+    min-height: 64px;
+    padding: 18px 64px 18px 100px;
   }
 
-  .np-homopolymer-prediction .np-hp-parameters__form {
-    padding: 21px;
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > button {
+    top: 15px;
+    right: 18px;
   }
 
-  .np-homopolymer-prediction .np-hp-parameters__footer > div > strong {
-    font-size: 15px;
+  .np-homopolymer-prediction .np-hp-primary svg {
+    width: 20px;
+    height: 20px;
   }
 
-  .np-homopolymer-prediction .np-hp-property-groups {
-    gap: 15px;
-  }
-
-  .np-homopolymer-prediction .np-hp-property-group {
-    border-radius: 15px;
-    grid-template-columns: 177px minmax(0, 1fr);
-  }
-
-  .np-homopolymer-prediction .np-hp-property-group > header {
-    padding: 14px 16px;
-  }
-
-  .np-homopolymer-prediction .np-hp-property-group > header strong {
-    font-size: 17px;
-  }
-
-  .np-homopolymer-prediction .np-hp-property-group > header button,
-  .np-homopolymer-prediction .np-hp-parameters__footer > div button {
-    font-size: 13px;
-  }
-
-  .np-homopolymer-prediction .np-hp-property-grid {
-    gap: 10px;
-    padding: 14px;
-  }
-
-  .np-homopolymer-prediction .np-hp-property-option {
-    min-height: 62px;
-    gap: 13px;
-    padding: 12px 14px;
-    border-radius: 12px;
-  }
-
-  .np-homopolymer-prediction .np-hp-property-option__check {
-    flex-basis: 27px;
-    width: 27px;
-    height: 27px;
-    border-radius: 8px;
-  }
-
-  .np-homopolymer-prediction .np-hp-property-option__check svg {
+  .np-homopolymer-prediction .np-hp-chip__check {
     width: 18px;
     height: 18px;
   }
+}
 
-  .np-homopolymer-prediction .np-hp-property-option strong {
-    font-size: 16px;
+/* Stacked layout for phones and narrow windows: structure card, then the task.
+   The run button stays reachable at the bottom while the task card is in view. */
+@container np-sw-workbench (max-width: 899px) {
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-page {
+    height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    /* No bottom padding: sticky bars rest on the padding edge, which would expose content below. */
+    padding: 0 12px;
   }
 
-  .np-homopolymer-prediction .np-hp-property-option small {
-    font-size: 13px;
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-workbench {
+    display: flex;
+    height: auto;
+    flex-direction: column;
+    margin-bottom: 16px;
+    /* clip, not hidden: the sticky run bar must keep the page as its scroller. */
+    overflow: clip;
   }
 
-  .np-homopolymer-prediction .np-hp-stale-notice,
-  .np-homopolymer-prediction .np-hp-result-summary code {
-    font-size: 14px;
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-structure {
+    overflow: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--np-hp-line);
   }
 
-  .np-homopolymer-prediction .np-hp-result-summary span,
-  .np-homopolymer-prediction .np-hp-result-card header > span {
-    font-size: 13px;
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-structure .np-sw-workspace,
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-structure .np-sw-surface {
+    height: auto;
   }
 
-  .np-homopolymer-prediction .np-hp-result-summary strong {
-    font-size: 19px;
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-commandbar {
+    flex-wrap: wrap;
+    padding: 10px 10px 6px 14px;
   }
 
-  .np-homopolymer-prediction .np-hp-result-card > div span {
-    font-size: 13.5px;
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-toolbar {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
-  .np-homopolymer-prediction .np-sw-result-state strong {
-    font-size: 21px;
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-canvas-stage {
+    flex: 0 0 auto;
+    height: 300px;
+    min-height: 300px;
   }
 
-  .np-homopolymer-prediction .np-sw-result-state p {
-    font-size: 16px;
+  .np-structure-workbench.np-homopolymer-prediction {
+    --np-hp-canvas-min: 300px;
+    --np-hp-pad: 16px;
   }
 
-  .np-homopolymer-prediction .np-hp-result-card {
-    padding: 16px;
-    border-radius: 14px;
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-task {
+    display: contents;
   }
 
-  .np-homopolymer-prediction .np-hp-result-card h3 {
-    font-size: 16px;
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-selection {
+    order: 1;
+    padding: var(--np-hp-pad) var(--np-hp-pad) 0;
   }
 
-  .np-homopolymer-prediction .np-hp-result-card > div strong {
-    font-size: 31px;
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-run {
+    position: sticky;
+    z-index: 5;
+    bottom: 0;
+    order: 3;
+    padding: 12px var(--np-hp-pad);
+    border-top: 1px solid var(--np-hp-line);
+    background: rgba(255, 255, 255, 0.97);
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-results {
+    order: 2;
+    overflow: visible;
+    padding-top: 18px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-next {
+    order: 4;
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .np-homopolymer-prediction .np-hp-property-option {
-    transition: none;
+@container np-sw-workbench (max-width: 559px) {
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-commandbar {
+    flex-wrap: nowrap;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-toolbar {
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    gap: 0;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-tool,
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-tool:not(.np-sw-tool--icon) {
+    width: 36px;
+    min-height: 36px;
+    flex: none;
+    padding: 0;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > textarea {
+    padding-left: 14px;
+    padding-top: 32px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > label {
+    top: 10px;
+    left: 14px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-tool > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 }

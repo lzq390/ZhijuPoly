@@ -95,9 +95,17 @@ function abortablePending(signal: AbortSignal) {
   });
 }
 
-function openParameters() {
-  fireEvent.click(screen.getByRole("button", { name: "预测参数" }));
-  return screen.getByRole("dialog", { name: "预测参数" });
+function panel() {
+  return screen.getByRole("complementary", { name: "性质预测" });
+}
+
+function openSelection() {
+  fireEvent.click(within(panel()).getByRole("button", { name: "调整" }));
+  return panel();
+}
+
+function run() {
+  fireEvent.click(within(panel()).getByRole("button", { name: /运行预测|重新预测/ }));
 }
 
 beforeEach(() => {
@@ -120,49 +128,52 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("HomopolymerPropertyPredictionPage", () => {
-  it("复用完整结构画板并默认全选九项性质", () => {
+  it("结构画板与常驻任务面板并排，默认全选九项并列出占位结果", () => {
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
 
     expect(screen.getByRole("heading", { name: "均聚物性质预测" })).toBeTruthy();
     expect(screen.getByTitle("均聚物性质预测结构编辑器")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "AI 助手" })).toBeNull();
-    expect(screen.queryByRole("dialog", { name: "性质预测结果" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "展开预测结果" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "预测参数" })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(within(panel()).getByText("全部 9 项性质")).toBeTruthy();
+    expect(within(panel()).getByRole("button", { name: "运行预测" })).toBeTruthy();
+    expect(within(panel()).getAllByText("—")).toHaveLength(9);
 
-    const panel = openParameters();
-    const checkboxes = within(panel).getAllByRole("checkbox") as HTMLInputElement[];
+    const editor = openSelection();
+    const checkboxes = within(editor).getAllByRole("checkbox") as HTMLInputElement[];
     expect(checkboxes).toHaveLength(9);
     expect(checkboxes.every((checkbox) => checkbox.checked)).toBe(true);
-    expect(within(panel).getByText("已选 9 / 9 项")).toBeTruthy();
+    expect(within(editor).getByText("全部 9 项性质")).toBeTruthy();
   });
 
   it("支持清空、分组和全选，并以固定顺序提交所选性质", async () => {
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
-    const panel = openParameters();
+    const editor = openSelection();
 
-    fireEvent.click(within(panel).getByRole("button", { name: "清空" }));
-    expect(within(panel).getByText("已选 0 / 9 项")).toBeTruthy();
-    expect((within(panel).getByRole("button", { name: "运行预测" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(editor).getByRole("button", { name: "清空" }));
+    expect(within(editor).getByText("未选择性质")).toBeTruthy();
+    expect((within(editor).getByRole("button", { name: "运行预测" }) as HTMLButtonElement).disabled).toBe(true);
 
-    fireEvent.click(within(panel).getAllByRole("button", { name: "选择本组" })[0]);
-    expect(within(panel).getByText("已选 4 / 9 项")).toBeTruthy();
-    fireEvent.click(within(panel).getByRole("button", { name: "全选" }));
-    fireEvent.click(within(panel).getByRole("button", { name: "运行预测" }));
+    fireEvent.click(within(editor).getAllByRole("button", { name: "选择本组" })[0]);
+    expect(within(editor).getByText("已选 4 / 9 项")).toBeTruthy();
+    expect(within(editor).getByText("Tg、Tm、Td、失重率")).toBeTruthy();
+    fireEvent.click(within(editor).getByRole("button", { name: "全选" }));
+    run();
 
     await waitFor(() => expect(mocks.predictSmiles).toHaveBeenCalledOnce());
     expect(mocks.predictSmiles).toHaveBeenCalledWith(
       { smiles: "*CC*", properties: [...PREDICTABLE_PROPERTIES] },
       expect.any(AbortSignal)
     );
+    expect(screen.queryByRole("button", { name: "全选" })).toBeNull();
   });
 
   it.each(["CCO", "*CC*"])("兼容结构 %s 且将缺失性质明确标记为未返回", async (smiles) => {
     mocks.resolveSmilesForSearch.mockResolvedValue(smiles);
     render(<HomopolymerPropertyPredictionPage structure={makeStructure(smiles)} />);
-    const panel = openParameters();
-    fireEvent.click(within(panel).getByRole("button", { name: "运行预测" }));
+    run();
 
-    expect(await screen.findByText("123.46")).toBeTruthy();
+    expect(await screen.findByText("123")).toBeTruthy();
     expect(screen.getAllByText("未返回")).toHaveLength(8);
     expect(screen.getByText("12.3 ms")).toBeTruthy();
     expect(mocks.predictSmiles).toHaveBeenCalledWith(
@@ -171,44 +182,27 @@ describe("HomopolymerPropertyPredictionPage", () => {
     );
   });
 
-  it("空画板不提交并保持参数浮层打开", async () => {
+  it("空画板不提交并在运行按钮下提示先画结构", async () => {
     mocks.resolveSmilesForSearch.mockResolvedValue("");
     render(<HomopolymerPropertyPredictionPage structure={makeStructure("")} />);
-    const panel = openParameters();
-    fireEvent.click(within(panel).getByRole("button", { name: "运行预测" }));
+    run();
 
     await waitFor(() => expect(mocks.resolveSmilesForSearch).toHaveBeenCalledOnce());
     expect(mocks.predictSmiles).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "预测参数" })).toBeTruthy();
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText(/请先在左侧画出结构/)).toBeTruthy();
   });
 
-  it("显示后端错误，关闭后可重开，并能从结果返回参数", async () => {
-    mocks.predictSmiles.mockRejectedValue(new Error("prediction service is disabled"));
+  it("显示后端错误，并能就地重试", async () => {
+    mocks.predictSmiles.mockRejectedValueOnce(new Error("prediction service is disabled"));
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
-    fireEvent.click(within(openParameters()).getByRole("button", { name: "运行预测" }));
+    run();
 
     expect(await screen.findByText("prediction service is disabled")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "关闭性质预测结果" }));
-    const reopen = await screen.findByRole("button", { name: "展开预测结果" });
-    fireEvent.click(reopen);
-    expect(screen.getByRole("dialog", { name: "性质预测结果" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "检查预测参数" }));
-    expect(screen.getByRole("dialog", { name: "预测参数" })).toBeTruthy();
-  });
-
-  it("关闭成功结果后显示右侧展开把手，重开不会再次运行预测", async () => {
-    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
-    fireEvent.click(within(openParameters()).getByRole("button", { name: "运行预测" }));
-    expect(await screen.findByText("123.46")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "关闭性质预测结果" }));
-    const reopen = await screen.findByRole("button", { name: "展开预测结果" });
-    expect(reopen.classList.contains("is-side-handle")).toBe(true);
-    expect(mocks.predictSmiles).toHaveBeenCalledOnce();
-
-    fireEvent.click(reopen);
-    expect(await screen.findByText("123.46")).toBeTruthy();
-    expect(mocks.predictSmiles).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("123")).toBeTruthy();
+    expect(mocks.predictSmiles).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("prediction service is disabled")).toBeNull();
   });
 
   it("加载中允许重新提交并取消旧请求", async () => {
@@ -227,22 +221,42 @@ describe("HomopolymerPropertyPredictionPage", () => {
       });
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
 
-    fireEvent.click(within(openParameters()).getByRole("button", { name: "运行预测" }));
+    run();
     await waitFor(() => expect(signals).toHaveLength(1));
-    fireEvent.click(screen.getByRole("button", { name: "关闭性质预测结果" }));
-    const panel = openParameters();
-    fireEvent.click(within(panel).getByRole("button", { name: "重新预测" }));
+    fireEvent.click(await within(panel()).findByRole("button", { name: "重新预测" }));
 
     await waitFor(() => expect(signals).toHaveLength(2));
     expect(signals[0].aborted).toBe(true);
-    expect(await screen.findByText("222.00")).toBeTruthy();
+    expect(await screen.findByText("222")).toBeTruthy();
+    expect(screen.queryByText(/第 2 次运行/)).toBeNull();
   });
 
-  it("结构变化后保留上次结果并显示中性快照提示", async () => {
+  it("第二次运行后自动与上次结果对比，可切换为不对比", async () => {
+    mocks.predictSmiles
+      .mockResolvedValueOnce({ predictions: { "Glass transition temperature": 100 }, query_time_ms: 5 })
+      .mockResolvedValueOnce({ predictions: { "Glass transition temperature": 150 }, query_time_ms: 6 });
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
+    run();
+    expect(await screen.findByText("100")).toBeTruthy();
+    expect(screen.queryByRole("columnheader", { name: "变化" })).toBeNull();
+
+    run();
+    expect(await screen.findByText(/第 2 次运行/)).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "上次" })).toBeTruthy();
+    const delta = screen.getByText("+50");
+    expect(delta.classList.contains("is-large")).toBe(true);
+
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "none" } });
+    expect(screen.queryByRole("columnheader", { name: "变化" })).toBeNull();
+    expect(screen.getByText("150")).toBeTruthy();
+  });
+
+  it("结构变化后保留上次结果并显示提交结构", async () => {
     const structure = makeStructure("*CC*");
     const view = render(<HomopolymerPropertyPredictionPage structure={structure} />);
-    fireEvent.click(within(openParameters()).getByRole("button", { name: "运行预测" }));
-    await screen.findByText("123.46");
+    run();
+    await screen.findByText("123");
+    expect(screen.queryByText("提交结构")).toBeNull();
 
     view.rerender(
       <HomopolymerPropertyPredictionPage structure={{ ...structure, smiles: "CCO" }} />
@@ -253,18 +267,46 @@ describe("HomopolymerPropertyPredictionPage", () => {
 
   it("性质选择变化后保留提交快照与旧结果", async () => {
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
-    fireEvent.click(within(openParameters()).getByRole("button", { name: "运行预测" }));
-    await screen.findByText("123.46");
+    run();
+    await screen.findByText("123");
 
-    fireEvent.click(screen.getByRole("button", { name: "关闭性质预测结果" }));
-    const panel = openParameters();
-    fireEvent.click(within(panel).getByRole("checkbox", { name: /玻璃化转变温度/ }));
-    fireEvent.click(within(panel).getByRole("button", { name: "收起预测参数" }));
-    fireEvent.click(await screen.findByRole("button", { name: "展开预测结果" }));
+    const editor = openSelection();
+    fireEvent.click(within(editor).getByRole("checkbox", { name: /玻璃化转变温度/ }));
+    fireEvent.click(within(editor).getByRole("button", { name: "完成" }));
 
     expect(screen.getByText(/当前结构或性质选择已变化/)).toBeTruthy();
-    expect(screen.getByText("123.46")).toBeTruthy();
+    expect(screen.getByText("123")).toBeTruthy();
     expect(screen.getAllByText("未返回")).toHaveLength(8);
+  });
+
+  it("导出菜单可复制制表符分隔的结果表", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
+    run();
+    await screen.findByText("123");
+
+    fireEvent.click(screen.getByRole("button", { name: "导出" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "复制表格" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+    const text = writeText.mock.calls[0][0] as string;
+    expect(text.split("\n")[0]).toBe("property_key\tproperty\tunit\tvalue\tsmiles");
+    expect(text).toContain("Glass transition temperature\t玻璃化转变温度\t°C\t123.456\t*CC*");
+    expect(await screen.findByText("已复制，可粘贴到表格")).toBeTruthy();
+  });
+
+  it("Ctrl+Enter 在页面内运行预测", async () => {
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
+    fireEvent.keyDown(screen.getByLabelText("SMILES 输入，自动同步到画板"), { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(mocks.predictSmiles).toHaveBeenCalledOnce());
+  });
+
+  it("用这个结构继续跳转到相关模块", () => {
+    const onOpenModule = vi.fn();
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} onOpenModule={onOpenModule} />);
+    const relay = screen.getByRole("navigation", { name: "用这个结构继续" });
+    fireEvent.click(within(relay).getByRole("button", { name: "相似性探索" }));
+    expect(onOpenModule).toHaveBeenCalledWith("explorer");
   });
 
   it("首次切换 3D 时才挂载三维预览", async () => {
@@ -274,15 +316,6 @@ describe("HomopolymerPropertyPredictionPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "3D构象" }));
     await waitFor(() => expect(mocks.toggle3D).toHaveBeenCalledOnce());
     expect(await screen.findByTestId("prediction-structure-3d")).toBeTruthy();
-  });
-
-  it("参数浮层支持 Escape 和焦点恢复", async () => {
-    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
-    const trigger = screen.getByRole("button", { name: "预测参数" });
-    fireEvent.click(trigger);
-    fireEvent.keyDown(document, { key: "Escape" });
-    await waitFor(() => expect(document.activeElement).toBe(trigger));
-    expect(screen.queryByRole("dialog", { name: "预测参数" })).toBeNull();
   });
 
   it("加载 *CC* 示例并暴露离页静默同步句柄", async () => {

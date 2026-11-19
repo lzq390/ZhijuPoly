@@ -39,7 +39,7 @@ async function geometry(page, title, viewport, state) {
     const header = h1.parentElement.getBoundingClientRect();
     const body = root.querySelector(".np-module-page-body").getBoundingClientRect();
     const rootStyle = getComputedStyle(root);
-    const surfaces = [...root.querySelectorAll('.np-sw-canvas-stage, .np-md-workbench-surface, .np-pmd-workbench-surface, .np-mp-surface, .np-batch-surface, .np-mmd-workbench-surface, .np-dft-workbench-surface, .dbf-filter-surface, .dba-analysis-surface, .ks-search-surface, .polytao-generation-surface, .ht-workbench-board')]
+    const surfaces = [...root.querySelectorAll('.np-sw-canvas-stage:not(.np-hp-structure *), .np-hp-workbench, .np-md-workbench-surface, .np-pmd-workbench-surface, .np-mp-surface, .np-batch-surface, .np-mmd-workbench-surface, .np-dft-workbench-surface, .dbf-filter-surface, .dba-analysis-surface, .ks-search-surface, .polytao-generation-surface, .ht-workbench-board')]
       .filter(visible).map(e => ({ radius: parseFloat(getComputedStyle(e).borderTopLeftRadius), shadow: getComputedStyle(e).boxShadow, background: getComputedStyle(e).backgroundColor }));
     const entries = [...document.querySelectorAll('[data-recording-entry]')].filter(visible);
     const entry = entries[0];

@@ -1,7 +1,6 @@
 import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
-import { SlidersHorizontal } from "lucide-react";
 import {
   forwardRef,
   useCallback,
@@ -9,7 +8,6 @@ import {
   useImperativeHandle,
   useRef,
   useState,
-  type CSSProperties,
   type FormEvent
 } from "react";
 import { PREDICTABLE_PROPERTIES } from "../constants/predictableProperties";
@@ -21,16 +19,18 @@ import "../styles/homopolymer-property-prediction.css";
 import type { StructureCanvasOwnerHandle } from "./StructureWorkbenchPage";
 import { StructureCanvasSurface } from "./structure-workbench/StructureCanvasSurface";
 import {
-  HomopolymerPredictionDrawer,
-  type HomopolymerPredictionSnapshot
-} from "./homopolymer-prediction/HomopolymerPredictionDrawer";
-import { HomopolymerPredictionParameters } from "./homopolymer-prediction/HomopolymerPredictionParameters";
+  HomopolymerPredictionPanel,
+  type PredictionRelayModule
+} from "./homopolymer-prediction/HomopolymerPredictionPanel";
+import type { PredictionRun } from "./homopolymer-prediction/predictionFormat";
 
 type HomopolymerPropertyPredictionPageProps = {
   structure: StructureWorkspaceContext;
+  onOpenModule?: (module: PredictionRelayModule) => void;
 };
 
 const HOMOPOLYMER_EXAMPLE_SMILES = "*CC*";
+const RUN_HISTORY_LIMIT = 10;
 
 function sameProperties(left: readonly PredictableProperty[], right: readonly PredictableProperty[]) {
   return left.length === right.length && left.every((property, index) => property === right[index]);
@@ -39,69 +39,26 @@ function sameProperties(left: readonly PredictableProperty[], right: readonly Pr
 export const HomopolymerPropertyPredictionPage = forwardRef<
   StructureCanvasOwnerHandle,
   HomopolymerPropertyPredictionPageProps
->(function HomopolymerPropertyPredictionPage({ structure }, forwardedRef) {
-  const [parametersOpen, setParametersOpen] = useState(false);
+>(function HomopolymerPropertyPredictionPage({ structure, onOpenModule }, forwardedRef) {
   const [selectedProperties, setSelectedProperties] = useState<PredictableProperty[]>(() => [
     ...PREDICTABLE_PROPERTIES
   ]);
+  const [selectionOpen, setSelectionOpen] = useState(false);
   const [hasActivated3D, setHasActivated3D] = useState(false);
   const [hasAttempt, setHasAttempt] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerWidth, setDrawerWidth] = useState(380);
-  const [snapshot, setSnapshot] = useState<HomopolymerPredictionSnapshot | null>(null);
-  const parameterPanelRef = useRef<HTMLElement | null>(null);
-  const parameterButtonRef = useRef<HTMLButtonElement | null>(null);
-  const restoreFocusFrameRef = useRef<number | null>(null);
+  const [structureMissing, setStructureMissing] = useState(false);
+  const [runs, setRuns] = useState<PredictionRun[]>([]);
+  // "latest" follows the newest previous run until the user picks another.
+  const [comparisonChoice, setComparisonChoice] = useState<number | null | "latest">("latest");
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const requestRef = useRef(0);
+  const runIdRef = useRef(0);
   const predict = usePredict();
   const canvas = useTgStructureCanvas({
     structure,
     onStructureChanged: useCallback(() => undefined, [])
   });
-
-  const closeParameters = useCallback((restoreFocus = true) => {
-    setParametersOpen(false);
-    if (!restoreFocus) return;
-    if (restoreFocusFrameRef.current !== null) window.cancelAnimationFrame(restoreFocusFrameRef.current);
-    restoreFocusFrameRef.current = window.requestAnimationFrame(() => {
-      restoreFocusFrameRef.current = null;
-      parameterButtonRef.current?.focus();
-    });
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (restoreFocusFrameRef.current !== null) {
-        window.cancelAnimationFrame(restoreFocusFrameRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!parametersOpen) return;
-    const frame = window.requestAnimationFrame(() => {
-      parameterPanelRef.current?.querySelector<HTMLElement>("input, button")?.focus();
-    });
-    function handlePointerDown(event: PointerEvent) {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (!parameterPanelRef.current?.contains(target) && !parameterButtonRef.current?.contains(target)) {
-        closeParameters(false);
-      }
-    }
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-    if (!requestServiceAccess()) return;
-      closeParameters(true);
-    }
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [closeParameters, parametersOpen]);
 
   useImperativeHandle(
     forwardedRef,
@@ -110,6 +67,22 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
     }),
     [canvas]
   );
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.defaultPrevented) return;
+      const target = event.target;
+      if (target instanceof Node && target !== document.body && !rootRef.current?.contains(target)) return;
+      event.preventDefault();
+      formRef.current?.requestSubmit();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (structure.smiles.trim()) setStructureMissing(false);
+  }, [structure.smiles]);
 
   async function toggle3D() {
     const activating = !canvas.isFlipped;
@@ -123,92 +96,91 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
     if (selectedProperties.length === 0) return;
     const smiles = await canvas.resolveSmilesForSearch();
     if (!smiles) {
-      setParametersOpen(true);
+      setStructureMissing(true);
       return;
     }
+    setStructureMissing(false);
     const properties = PREDICTABLE_PROPERTIES.filter((property) => selectedProperties.includes(property));
-    setSnapshot({ smiles, properties });
+    const request = ++requestRef.current;
     setHasAttempt(true);
-    setDrawerOpen(true);
-    closeParameters(false);
+    setSelectionOpen(false);
     try {
-      await predict.submit({ smiles, properties });
+      const data = await predict.submit({ smiles, properties });
+      if (request !== requestRef.current) return;
+      const run: PredictionRun = {
+        id: ++runIdRef.current,
+        smiles,
+        properties,
+        predictions: data.predictions,
+        queryTimeMs: data.query_time_ms,
+        finishedAt: new Date()
+      };
+      setRuns((current) => [...current, run].slice(-RUN_HISTORY_LIMIT));
+      setComparisonChoice("latest");
     } catch {
       // usePredict owns the visible error and ignores cancelled or stale responses.
     }
   }
 
-  function adjustParameters() {
-    setDrawerOpen(false);
-    setParametersOpen(true);
-  }
-
+  const latestRun = runs.at(-1) ?? null;
+  const comparisonOptions = runs.slice(0, -1).reverse();
+  const comparison =
+    comparisonChoice === "latest"
+      ? comparisonOptions[0] ?? null
+      : comparisonChoice === null
+        ? null
+        : comparisonOptions.find((run) => run.id === comparisonChoice) ?? null;
   const stale = Boolean(
-    snapshot &&
-      (structure.smiles.trim() !== snapshot.smiles ||
-        !sameProperties(selectedProperties, snapshot.properties))
+    latestRun &&
+      (structure.smiles.trim() !== latestRun.smiles ||
+        !sameProperties(selectedProperties, latestRun.properties))
   );
   const operationBusy = canvas.isBusy || predict.isLoading;
-  const workbenchStyle = { "--np-sw-drawer-width": `${drawerWidth}px` } as CSSProperties;
 
   return (
     <div
+      ref={rootRef}
       className="np-module-page np-structure-workbench np-homopolymer-prediction"
       data-module="homopolymer-property-prediction"
-      style={workbenchStyle}
     >
       <ModulePageHeader actions={<BrowsingRecordingControls module="homopolymerPrediction" />}>均聚物性质预测</ModulePageHeader>
-      <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>
-        <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
-          <main className="np-sw-workspace">
+      <div className="np-sw-page np-module-page-body np-hp-page">
+        <div className="np-hp-workbench">
+          <main className="np-sw-workspace np-hp-structure">
             <StructureCanvasSurface
               structure={structure}
               canvas={canvas}
               hasActivated3D={hasActivated3D}
               operationBusy={operationBusy}
               editorTitle="均聚物性质预测结构编辑器"
-              utilityActions={[
-                {
-                  id: "prediction-parameters",
-                  label: "预测参数",
-                  icon: <SlidersHorizontal aria-hidden="true" />,
-                  active: parametersOpen,
-                  buttonRef: parameterButtonRef,
-                  controls: "homopolymer-prediction-parameters",
-                  onClick: () => setParametersOpen((current) => !current)
-                }
-              ]}
+              commandbarLabel="结构"
               onLoadExample={() => canvas.loadStructure(HOMOPOLYMER_EXAMPLE_SMILES)}
               onImportFile={(file) => canvas.importImageFile(file)}
               onClear={() => canvas.clearCanvas()}
               onSync={() => canvas.syncSmilesFromCanvas()}
               onToggle3D={toggle3D}
             />
-
-            <HomopolymerPredictionParameters
-              open={parametersOpen}
-              panelRef={parameterPanelRef}
-              selectedProperties={selectedProperties}
-              submitting={predict.isLoading}
-              onClose={closeParameters}
-              onSelectedPropertiesChange={setSelectedProperties}
-              onSubmit={submitPrediction}
-            />
           </main>
 
-          <HomopolymerPredictionDrawer
-            open={drawerOpen}
-            hasAttempt={hasAttempt}
-            width={drawerWidth}
+          <HomopolymerPredictionPanel
+            formRef={formRef}
+            selectedProperties={selectedProperties}
+            onSelectedPropertiesChange={setSelectedProperties}
+            selectionOpen={selectionOpen}
+            onSelectionOpenChange={setSelectionOpen}
             loading={predict.isLoading}
             error={predict.error}
-            data={predict.data}
-            snapshot={snapshot}
+            hasAttempt={hasAttempt}
+            structureMissing={structureMissing}
+            latestRun={predict.error ? null : latestRun}
+            runCount={runs.length}
             stale={stale}
-            onWidthChange={setDrawerWidth}
-            onClose={() => setDrawerOpen(false)}
-            onOpen={() => setDrawerOpen(true)}
-            onAdjustParameters={adjustParameters}
+            comparison={comparison}
+            comparisonOptions={comparisonOptions}
+            onComparisonChange={setComparisonChoice}
+            onSubmit={submitPrediction}
+            onRetry={() => formRef.current?.requestSubmit()}
+            onOpenModule={onOpenModule}
           />
         </div>
       </div>
