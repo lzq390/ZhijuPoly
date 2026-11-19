@@ -282,7 +282,8 @@ async def get_literature_fulltext_route(
     return {**result, "generation_id": generation_id}
 
 
-@router.api_route("/literature/{document_uid}/files/{asset_uid}/content", methods=["GET", "HEAD"])
+@router.head("/literature/{document_uid}/files/{asset_uid}/content", name="head_literature_file")
+@router.get("/literature/{document_uid}/files/{asset_uid}/content")
 async def get_literature_file(
     document_uid: str, asset_uid: str, request: Request,
     generation_id: str = Query(min_length=1, max_length=64),
