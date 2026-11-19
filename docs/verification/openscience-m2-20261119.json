@@ -1,0 +1,100 @@
+{
+  "start": "2026-11-19T08:53:17.091Z",
+  "status": "passed",
+  "browser": "153.0.8010.12",
+  "authority": "real NexPoly AuthService + dedicated PostgreSQL",
+  "origins": {
+    "parent": "https://app.m2.test:18760",
+    "agent": "https://agent.m2.test:18761"
+  },
+  "environment": "dev-m1",
+  "retained_volumes": {
+    "test-user-a": "nexpoly-m1-67e4414ac390-463fc2f89367468bb7fc6e048d522c9e-data",
+    "test-user-b": "nexpoly-m1-67e4414ac390-3c137e9c236d4998bed842786c0f4548-data"
+  },
+  "stages": {
+    "initial": {
+      "real_ui": true,
+      "host_scoped_httponly_cookies": true,
+      "ticket_replay_refused": true,
+      "owner": {
+        "same_project": true,
+        "own_sessions": 2,
+        "attachment": true,
+        "own_file": true,
+        "foreign_markers": 0
+      },
+      "visible": {
+        "parent_general_session": true,
+        "parent_project": true,
+        "general_prompt": true,
+        "project_prompt": true,
+        "project_attachment": "notebook.txt",
+        "attachment_file_contents": true,
+        "foreign_visible": false
+      }
+    },
+    "device_logout": {
+      "server_closed_sse_ms": 2063,
+      "private_page_denied_ms": 2059,
+      "old_document_invalid_ms": 273,
+      "private_sidebar_cleared_ms": 386,
+      "stream_reconnect_status": 401,
+      "other_device_still_reads": true
+    },
+    "account_switch": {
+      "owner": {
+        "same_project": true,
+        "own_sessions": 2,
+        "attachment": true,
+        "own_file": true,
+        "foreign_markers": 0
+      },
+      "foreign_session_status": [
+        404,
+        404
+      ],
+      "old_page_still_denied": true,
+      "visible": {
+        "parent_general_session": true,
+        "parent_project": true,
+        "general_prompt": true,
+        "project_prompt": true,
+        "project_attachment": "notebook.txt",
+        "attachment_file_contents": true,
+        "foreign_visible": false
+      },
+      "embedded_refresh_restored_bridge": true,
+      "refresh_restored_own": true
+    },
+    "event_visibility": {
+      "a_received_own": true,
+      "b_received_own": true,
+      "foreign_markers": 0,
+      "temporary_sessions_removed": 2
+    },
+    "pilot_revocation": {
+      "server_closed_sse_ms": 742,
+      "private_page_denied_ms": 740,
+      "old_document_invalid_ms": 2777,
+      "private_sidebar_cleared_ms": 2862,
+      "stream_reconnect_status": 401,
+      "parent_snapshot_cleared": true,
+      "other_user_still_reads": true,
+      "old_context_denied_after_reenable": true
+    },
+    "authority_unavailable": {
+      "server_closed_sse_ms": 23729,
+      "private_page_denied_ms": 2857,
+      "old_document_invalid_ms": 20140,
+      "private_sidebar_cleared_ms": 20068,
+      "stream_reconnect_status": 401
+    },
+    "ticket_expiration": {
+      "ttl_seconds": 60,
+      "unused_expired_ticket_refused": true,
+      "same_login_fresh_ticket_accepted": true
+    }
+  },
+  "end": "2026-11-19T08:54:56.168Z"
+}

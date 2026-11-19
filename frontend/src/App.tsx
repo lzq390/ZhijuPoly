@@ -29,6 +29,7 @@ import {
   type AppShellModuleItem
 } from "./components/AppShell";
 import { AgentWorkspaceHomePage, agentWorkspaceUrl } from "./components/AgentWorkspaceHomePage";
+import { privateWorkspaceEnabled } from "./components/PrivateAgentFrame";
 import type { DatasetKey } from "./components/database-analysis/types";
 import type { LabDataView } from "./components/LabDataPage";
 import type { StructureCanvasOwnerHandle } from "./components/StructureWorkbenchPage";
@@ -178,15 +179,27 @@ function AppContent() {
   const [agentWorkspaceFrameUrl, setAgentWorkspaceFrameUrl] = useState(agentWorkspaceUrl);
   const [agentWorkspaceReloadKey, setAgentWorkspaceReloadKey] = useState(0);
   const [agentWorkspaceView, setAgentWorkspaceView] = useState<AgentWorkspaceView>("general");
-  const [projectSnapshot, setProjectSnapshot] = useState<OpenScienceProjectsSnapshot | null>(null);
-  const [generalSessionSnapshot, setGeneralSessionSnapshot] =
+  const [storedProjectSnapshot, setProjectSnapshot] = useState<OpenScienceProjectsSnapshot | null>(null);
+  const [storedGeneralSessionSnapshot, setGeneralSessionSnapshot] =
     useState<OpenScienceGeneralSessionsSnapshot | null>(null);
+  const privateSnapshotsVerified = useRef(false);
+  const privateAccessRemoved = privateWorkspaceEnabled() && !canUseSharedWorkspace;
+  const projectSnapshot = privateAccessRemoved ? null : storedProjectSnapshot;
+  const generalSessionSnapshot = privateAccessRemoved ? null : storedGeneralSessionSnapshot;
+  useEffect(() => {
+    if (privateAccessRemoved) {
+      privateSnapshotsVerified.current = false;
+      setProjectSnapshot(null);
+      setGeneralSessionSnapshot(null);
+    }
+  }, [privateAccessRemoved]);
   const projectBridge = useMemo(
     () =>
       createOpenScienceProjectBridge({
         workspaceUrl: agentWorkspaceUrl(),
         getFrameWindow: () => agentWorkspaceIframeRef.current?.contentWindow ?? null,
         onSnapshot: (snapshot) => {
+          if (privateWorkspaceEnabled() && (!privateSnapshotsVerified.current || document.hidden)) return;
           setProjectSnapshot(snapshot);
           if (snapshot.activeDirectory) {
             setAgentWorkspaceView("project");
@@ -200,7 +213,10 @@ function AppContent() {
       createOpenScienceGeneralSessionBridge({
         workspaceUrl: agentWorkspaceUrl(),
         getFrameWindow: () => agentWorkspaceIframeRef.current?.contentWindow ?? null,
-        onSnapshot: setGeneralSessionSnapshot
+        onSnapshot: (snapshot) => {
+          if (privateWorkspaceEnabled() && (!privateSnapshotsVerified.current || document.hidden)) return;
+          setGeneralSessionSnapshot(snapshot);
+        }
       }),
     []
   );
@@ -866,6 +882,16 @@ function AppContent() {
           iframeRef={agentWorkspaceIframeRef}
           src={agentWorkspaceFrameUrl}
           reloadKey={agentWorkspaceReloadKey}
+          onUnavailable={() => {
+            privateSnapshotsVerified.current = false;
+            setProjectSnapshot(null);
+            setGeneralSessionSnapshot(null);
+          }}
+          onVerified={() => {
+            privateSnapshotsVerified.current = true;
+            projectBridge.requestProjects();
+            generalSessionBridge.requestSessions();
+          }}
           onLoad={() => {
             setProjectSnapshot(null);
             projectBridge.requestProjects();

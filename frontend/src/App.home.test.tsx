@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { AuthProvider } from "./auth/AuthProvider";
+import * as authLock from "./auth/authMutationLock";
 import { GUEST_SESSION } from "./auth/session";
 import { preloadPage } from "./pages";
 
@@ -144,6 +145,82 @@ describe("智聚万物首页", () => {
     render(<App />);
 
     expect(screen.getByTitle("智聚万物智能体工作台").getAttribute("src")).toBe(WORKSPACE_URL);
+  });
+
+  it.each([undefined, "http://agent.example.test/", "https://workspace.example.test:9011/"])(
+    "个人模式拒绝无效独立来源 %s，即使已配置共享地址",
+    (value) => {
+      vi.stubEnv("VITE_OPENSCIENCE_PER_USER", "true");
+      vi.stubEnv("VITE_OPENSCIENCE_ROUTER_URL", value);
+      const fetch = vi.spyOn(globalThis, "fetch");
+      render(<App />);
+      expect(screen.getByRole("alert").textContent).toContain("个人工作区地址未配置或无效");
+      expect(screen.queryByTitle("智聚万物智能体工作台")).toBeNull();
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it("同一登录撤销个人工作区后清除两份侧栏快照，恢复权限须等新快照", async () => {
+    vi.stubEnv("VITE_OPENSCIENCE_PER_USER", "true");
+    const origin = "https://agent.example.test";
+    vi.stubEnv("VITE_OPENSCIENCE_ROUTER_URL", origin);
+    let allowed = true;
+    vi.spyOn(authLock, "withAuthMutationLock").mockImplementation(async work => work());
+    const submitted = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+    vi.spyOn(globalThis, "fetch").mockImplementation(async url => {
+      if (String(url).endsWith("/workspace-ticket")) {
+        return Response.json({ticket: "ticket", handoff_id: "handoff", exchange_url: origin + "/_nexpoly/auth/exchange"});
+      }
+      return Response.json({authenticated: true, user: {id: "member", username: "member", must_change_password: false},
+        session_id: "same-login", csrf_token: "csrf", account_type: "member", capabilities: {"openscience.use": allowed}});
+    });
+    render(<AuthProvider><App /></AuthProvider>);
+    await waitFor(() => expect(submitted).toHaveBeenCalledOnce());
+    const frame = screen.getByTitle("智聚万物智能体工作台") as HTMLIFrameElement;
+    const send = (data: Record<string, unknown>) => fireEvent(window, new MessageEvent("message", {
+      source: frame.contentWindow, origin, data,
+    }));
+    send({type: "nexpoly:openscience:ready", handoff_id: "handoff", page_context: "page"});
+    const messages = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => {});
+    const nonce = () => messages.mock.calls.filter(([message]) => message.type === "nexpoly:openscience:recheck").at(-1)![0].nonce;
+    const verified = (value: string) => send({type: "nexpoly:openscience:verified", page_context: "page", nonce: value});
+    const snapshots = () => {
+      send({namespace: "openscience.zhijupoly", version: 1, type: "projects.snapshot", activeDirectory: null,
+        projects: [{directory: "/owned", name: "私有项目", displayPath: "/owned", updatedAt: 1, favorite: false}]});
+      send({namespace: "openscience.zhijupoly", version: 1, type: "general.sessions.snapshot", activeSessionID: null,
+        sessions: [{id: "owned", title: "私有会话", updatedAt: 1}]});
+    };
+    fireEvent.load(frame);
+    const oldNonce = nonce();
+    verified(oldNonce);
+    snapshots();
+    fireEvent.click(screen.getByRole("button", {name: "展开项目"}));
+    expect(screen.getByText("私有项目")).toBeTruthy();
+    expect(screen.getByText("私有会话")).toBeTruthy();
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    fireEvent(document, new Event("visibilitychange"));
+    expect(screen.queryByText("私有会话")).toBeNull();
+    hidden.mockReturnValue(false);
+    fireEvent(document, new Event("visibilitychange"));
+    verified(oldNonce);
+    snapshots();
+    expect(screen.queryByText("私有项目")).toBeNull();
+    expect(screen.queryByText("私有会话")).toBeNull();
+    verified(nonce());
+    snapshots();
+    expect(screen.getByText("私有项目")).toBeTruthy();
+    expect(screen.getByText("私有会话")).toBeTruthy();
+    expect(submitted).toHaveBeenCalledOnce();
+    allowed = false;
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(screen.queryByTitle("智聚万物智能体工作台")).toBeNull());
+    expect(screen.queryByText("私有项目")).toBeNull();
+    expect(screen.queryByText("私有会话")).toBeNull();
+    allowed = true;
+    fireEvent(window, new Event("focus"));
+    await screen.findByTitle("智聚万物智能体工作台");
+    expect(screen.queryByText("私有项目")).toBeNull();
+    expect(screen.queryByText("私有会话")).toBeNull();
   });
 
   it("使用部署环境配置的智能体工作台地址", () => {

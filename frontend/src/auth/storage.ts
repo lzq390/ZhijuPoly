@@ -1,4 +1,6 @@
 import { clearAllTgAssistantImagePreviews } from "../services/tgAssistantImagePreviews";
+// Non-secret browser grouping survives login changes so late iframe exchanges can be retired.
+export const AUTH_BROWSER_ID_KEY = "nexpoly.auth.browser-id";
 export const AUTH_SYNC_KEY = "nexpoly.auth.event";
 export const AUTH_OWNER_KEY = "nexpoly.auth.owner";
 // A server-confirmed owner AND session for origin-shared private storage. This
@@ -8,7 +10,7 @@ function clearPrivateStorage(name: "localStorage" | "sessionStorage") {
   try {
     const storage = window[name];
     for (const key of Object.keys(storage)) {
-      if (/^(nexpoly[.:]|polyprop[._:])/.test(key) && key !== AUTH_SYNC_KEY) storage.removeItem(key);
+      if (/^(nexpoly[.:]|polyprop[._:])/.test(key) && key !== AUTH_SYNC_KEY && key !== AUTH_BROWSER_ID_KEY) storage.removeItem(key);
     }
   } catch { /* Disabled storage cannot retain accessible private state. */ }
 }

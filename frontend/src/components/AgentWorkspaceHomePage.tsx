@@ -1,3 +1,4 @@
+import { PrivateAgentFrame, privateWorkspaceEnabled } from "./PrivateAgentFrame";
 import { isLocalOnly } from "../auth/access";
 import { useId, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import { useAuth } from "../auth/AuthProvider";
@@ -87,12 +88,21 @@ function GuestConversation({ draft, setDraft }: { draft: string; setDraft: (valu
 }
 
 export function agentWorkspaceUrl() {
+  if (privateWorkspaceEnabled()) {
+    const configured = resolveAgentWorkspaceUrl(import.meta.env.VITE_OPENSCIENCE_ROUTER_URL ?? "");
+    if (!configured) return "";
+    const router = new URL(configured);
+    if (router.protocol !== "https:" || router.port === "9011") return "";
+    return configured;
+  }
   return resolveAgentWorkspaceUrl(import.meta.env.VITE_AGENT_WORKSPACE_URL ?? "") ?? "";
 }
 
 type AgentWorkspaceHomePageProps = {
   iframeRef?: Ref<HTMLIFrameElement>;
   onLoad?: () => void;
+  onVerified?: () => void;
+  onUnavailable?: () => void;
   src?: string;
   reloadKey?: number;
 };
@@ -133,6 +143,8 @@ function PreservedQuestion({ draft, onClear }: { draft: string; onClear: () => v
 function IdentityWorkspace({
   iframeRef,
   onLoad,
+  onVerified,
+  onUnavailable,
   src = agentWorkspaceUrl(),
   reloadKey = 0,
   localOnly
@@ -141,12 +153,17 @@ function IdentityWorkspace({
   if (localOnly) {
     return <GuestConversation draft={draft} setDraft={setDraft} />;
   }
+  const privateMode = privateWorkspaceEnabled();
   const workspaceUrl = resolveAgentWorkspaceUrl(src);
+  const configuredRouter = privateMode ? agentWorkspaceUrl() : "";
+  const trustedRouter = Boolean(workspaceUrl && configuredRouter &&
+    new URL(workspaceUrl).origin === new URL(configuredRouter).origin);
 
   return (
     <div className="np-member-conversation">
       {draft && <PreservedQuestion draft={draft} onClear={() => setDraft("")} />}
-      {workspaceUrl ? <iframe
+      {privateMode && !trustedRouter ? <div role="alert">个人工作区地址未配置或无效。</div>
+      : workspaceUrl && privateMode ? <PrivateAgentFrame key={`${reloadKey}:${workspaceUrl}`} url={workspaceUrl} iframeRef={iframeRef} onLoad={onLoad} onVerified={onVerified} onUnavailable={onUnavailable} /> : workspaceUrl ? <iframe
         key={reloadKey}
         ref={iframeRef}
         onLoad={onLoad}

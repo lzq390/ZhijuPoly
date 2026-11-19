@@ -26,6 +26,8 @@ PREFIX = "org.nexpoly.m1."
 FIXTURE = Path(__file__).resolve().parents[1] / "docs/verification/openscience-m0-fixture"
 FIXTURE_HASHES = {"config.json": "8cb573057c482ecbc2b7c9efb189c7f084aaf90d810fc2bdefc737e256bd5554",
                   "fixture.py": "3bd6deddf2429e0e9ec0b176157e856bf55da8043beab4bc383fa3eff454c6f1"}
+M2_TRANSPORT = Path(__file__).resolve().parents[1] / "ops/openscience-per-user-dev/m2_loopback.py"
+M2_TRANSPORT_HASH = "2ee753da4cf136e41732a1a37f4df6d6d6e9b171942f8dd6b9e034854dc05415"
 MOUNT = "/openscience"
 TOKEN_DIR = "/run/nexpoly-m1"
 CONTROL = "/run/nexpoly-m1-control"
@@ -330,6 +332,18 @@ class Workspace:
             self.row["initialized"] = True
             self.registry.save()
 
+    def transport_program(self):
+        # A registry and its live containers may outlast a source checkout.
+        path = self.registry.root / "m2-loopback-v1.py"
+        if not path.exists() and not path.is_symlink():
+            source = M2_TRANSPORT.read_bytes()
+            if hashlib.sha256(source).hexdigest() != M2_TRANSPORT_HASH:
+                raise Problem("Unexpected M2 loopback program")
+            write_atomic(path, source, 0o444)
+        if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != M2_TRANSPORT_HASH:
+            raise Problem("Stored M2 loopback program differs from its registered version")
+        return path
+
     def create_pair(self):
         self.runtime.mkdir(mode=0o700, exist_ok=True)
         for path in (self.secret_dir, self.control):
@@ -338,11 +352,16 @@ class Workspace:
         write_atomic(self.secret_dir / "token", secrets.token_hex(32).encode(), 0o444)
         (self.control / "draining").unlink(missing_ok=True)
         secret = self.bind(self.secret_dir, TOKEN_DIR)
+        transport = self.runtime / "transport"
+        transport.mkdir(exist_ok=True)
+        transport.chmod(0o733)  # Only accessible through the deployment owner's private runtime directory.
         fixture_id = docker("run", "-d", *RUNTIME, *self.label_flags("fixture"), "--name", self.fixture,
                             "--network", "none", "--user", "65534:65534", "--memory", "96m", "--memory-swap", "96m",
                             "--cpus", "0.5", "--pids-limit", "32", "--mount", secret, "--mount",
-                            self.bind(self.registry.root / "fixture.py", "/fixture.py"), PYTHON,
-                            "python", "-B", "/fixture.py", "serve")
+                            self.bind(self.registry.root / "fixture.py", "/fixture.py"), "--mount",
+                            self.bind(self.transport_program(), "/m2-loopback.py"), "--mount",
+                            f"type=bind,src={transport},dst=/m2-transport", PYTHON,
+                            "python", "-B", "/m2-loopback.py")
         env = [arg for k, v in ENV.items() for arg in ["--env", k + "=" + v]]
         return docker("run", "-d", *RUNTIME, *self.label_flags("backend"), "--name", self.backend, "--network",
                       "container:" + fixture_id, "--user", self.identity, "--memory", "2g", "--memory-swap", "2g",
@@ -365,13 +384,18 @@ class Workspace:
                 or fuser != "65534:65534" or ports or fports):
             raise Problem("Workspace network namespace, user or port bindings differ from the M1 template")
         if (set(mounts) != {MOUNT, TOKEN_DIR, CONTROL, "/m1-config.json"}
-                or set(fm) != {TOKEN_DIR, "/fixture.py"}
+                or set(fm) not in ({TOKEN_DIR, "/fixture.py"}, {TOKEN_DIR, "/fixture.py", "/m2-loopback.py", "/m2-transport"})
                 or mounts[MOUNT].get("Type") != "volume" or mounts[MOUNT].get("Name") != self.volume
                 or not mounts[MOUNT]["RW"]):
             raise Problem("Workspace private mounts differ from the M1 template")
         bindings = [(mounts[TOKEN_DIR], self.secret_dir), (mounts[CONTROL], self.control),
                     (mounts["/m1-config.json"], self.registry.root / "config.json"),
                     (fm[TOKEN_DIR], self.secret_dir), (fm["/fixture.py"], self.registry.root / "fixture.py")]
+        if "/m2-transport" in fm:
+            channel = fm["/m2-transport"]
+            if channel["Type"] != "bind" or not channel["RW"] or channel["Source"] != str(self.runtime / "transport"):
+                raise Problem("Unexpected workspace Unix transport mount")
+            bindings.append((fm["/m2-loopback.py"], self.transport_program()))
         if any(m["Type"] != "bind" or m["RW"] or m["Source"] != str(path) for m, path in bindings):
             raise Problem("Unexpected private template or secret binding")
 
