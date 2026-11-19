@@ -315,14 +315,14 @@ it("renders aggregate tasks initially, supports task-to-GPU navigation and resto
   </>);
   render(<ServerMonitoringPage control={control({ snapshot })} renderGpuTasks={renderGpuTasks} />);
   const tasks = screen.getByRole("complementary", { name: "GPU 任务" });
-  expect(within(tasks).getByText("全部 GPU")).toBeTruthy();
+  expect(tasks.querySelector(".sm-gpu-tasks-header")?.textContent).toBe("GPU 任务");
   expect(within(tasks).getByTestId("linked-gpu-tasks").textContent).toBe("全部任务内容");
   expect(renderGpuTasks).toHaveBeenLastCalledWith(expect.objectContaining({ gpuUuid: null, gpus: snapshot.gpus }));
   fireEvent.click(screen.getByRole("button", { name: "查看GPU 0详情" }));
-  expect(within(tasks).getByText("GPU 0")).toBeTruthy();
+  expect(tasks.querySelector(".sm-gpu-tasks-header button")).toBeNull();
   expect(renderGpuTasks).toHaveBeenLastCalledWith(expect.objectContaining({ gpuUuid: first.uuid }));
   fireEvent.click(screen.getByRole("button", { name: "查看GPU 3详情" }));
-  expect(within(tasks).getByText("GPU 3")).toBeTruthy();
+  expect(tasks.querySelector(".sm-gpu-tasks-header")?.textContent).toBe("GPU 任务");
   expect(within(tasks).getByTestId("linked-gpu-tasks").textContent).toBe("gpu-second");
   expect(renderGpuTasks).toHaveBeenLastCalledWith(expect.objectContaining({ gpuUuid: "gpu-second" }));
   renderGpuTasks.mockClear();
@@ -335,22 +335,23 @@ it("renders aggregate tasks initially, supports task-to-GPU navigation and resto
   expect(screen.getByRole("button", { name: "查看GPU 3详情" }).getAttribute("aria-pressed")).toBe("true");
   expect(screen.getByRole("combobox", { name: "选择趋势显卡" }).querySelector("strong")?.textContent).toBe("GPU 3");
   expect(within(tasks).getByTestId("linked-gpu-tasks").textContent).toBe("gpu-second");
-  fireEvent.click(screen.getByRole("button", { name: "查看全部 GPU 任务" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "选择趋势显卡" }));
+  fireEvent.click(screen.getByRole("option", { name: /^全部 GPU / }));
   expect(screen.getByRole("button", { name: "GPU 显存" }).getAttribute("aria-pressed")).toBe("true");
   expect(screen.getByRole("combobox", { name: "选择趋势显卡" }).querySelector("strong")?.textContent).toBe("全部 GPU");
   expect(within(tasks).getByTestId("linked-gpu-tasks").textContent).toBe("全部任务内容");
   fireEvent.click(screen.getByRole("button", { name: "CPU / 内存" }));
   fireEvent.click(screen.getByRole("button", { name: "查看汇总记录的 GPU 3" }));
-  fireEvent.click(screen.getByRole("button", { name: "查看全部 GPU 任务" }));
+  fireEvent.click(screen.getByRole("button", { name: "查看当前服务器详情" }));
   expect(screen.getByRole("button", { name: "CPU / 内存" }).getAttribute("aria-pressed")).toBe("true");
-  expect(within(tasks).getByText("全部 GPU")).toBeTruthy();
+  expect(within(tasks).getByTestId("linked-gpu-tasks").textContent).toBe("全部任务内容");
 });
 
 it("does not infer an empty task history and removes supplied task content when access is lost", () => {
   const view = render(<ServerMonitoringPage control={control()} />);
   fireEvent.click(screen.getByRole("button", { name: "查看GPU 0详情" }));
   const tasks = screen.getByRole("complementary", { name: "GPU 任务" });
-  expect(tasks.textContent).toBe("GPU 任务GPU 0");
+  expect(tasks.textContent).toBe("GPU 任务");
   const renderGpuTasks = vi.fn(() => <p>实际来源任务内容</p>);
   view.rerender(<ServerMonitoringPage control={control()} renderGpuTasks={renderGpuTasks} />);
   expect(within(tasks).getByText("实际来源任务内容")).toBeTruthy();

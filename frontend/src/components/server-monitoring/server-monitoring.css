@@ -80,10 +80,7 @@
 .sm-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .sm-section-heading h2, .sm-gpu-tasks-header h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; color: var(--np-theme-ink); font-size: var(--sm-font-size-heading); font-weight: var(--sm-font-weight-heading); }
 .sm-section-heading h2 svg, .sm-gpu-tasks-header h2 svg { color: var(--np-theme-blue); stroke-width: 1.7; }
-.sm-section-heading h2 > span, .sm-gpu-tasks-scope { flex: none; padding: 1px 6px; border: 1px solid var(--np-theme-border-soft); border-radius: 5px; color: var(--np-theme-muted); background: var(--np-theme-surface); font-family: inherit; font-size: var(--sm-font-size-caption); font-weight: var(--sm-font-weight-body); line-height: var(--sm-line-height-compact); }
-.sm-gpu-tasks-scope { display: inline-flex; align-items: center; gap: 4px; min-height: 22px; }
-button.sm-gpu-tasks-scope { border-color: var(--np-theme-info-border); color: var(--np-theme-blue); transition: border-color 160ms, background-color 160ms; }
-button.sm-gpu-tasks-scope:hover { border-color: var(--np-theme-blue); background: var(--np-theme-info-soft); }
+.sm-section-heading h2 > span { flex: none; padding: 1px 6px; border: 1px solid var(--np-theme-border-soft); border-radius: 5px; color: var(--np-theme-muted); background: var(--np-theme-surface); font-family: inherit; font-size: var(--sm-font-size-caption); font-weight: var(--sm-font-weight-body); line-height: var(--sm-line-height-compact); }
 .sm-history-layout { display: grid; grid-template-columns: minmax(280px, .85fr) minmax(0, 2.15fr); align-items: stretch; gap: 14px; margin-top: 16px; }
 .sm-trends, .sm-gpu-tasks { min-width: 0; display: flex; flex-direction: column; padding: 16px 18px; border: 1px solid var(--np-theme-surface-border); border-radius: var(--np-theme-surface-radius); background: var(--np-theme-surface); box-shadow: 0 2px 8px #14304b05; }
 .sm-gpu-tasks { padding: 16px 14px; }
@@ -132,5 +129,5 @@ button.sm-gpu-tasks-scope:hover { border-color: var(--np-theme-blue); background
   .sm-trend-controls, .sm-trend-tabs { width: 100%; }
   .sm-chart { min-height: 175px; }
 }
-@media (pointer: coarse) { .sm-page { --sm-control-height: 40px; }.sm-refresh { min-height: var(--sm-control-height); }.sm-trend-tabs button { min-height: calc(var(--sm-control-height) - 8px); }button.sm-gpu-tasks-scope { min-height: 32px; } }
+@media (pointer: coarse) { .sm-page { --sm-control-height: 40px; }.sm-refresh { min-height: var(--sm-control-height); }.sm-trend-tabs button { min-height: calc(var(--sm-control-height) - 8px); } }
 @media (prefers-reduced-motion: reduce) { .sm-spin { animation: none; }.sm-page *, .sm-page *::before { transition: none !important; } }
