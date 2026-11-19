@@ -370,8 +370,10 @@ try {
     assert.equal(await page.getByRole("combobox", { name: "筛选完成任务类型", exact: true }).count(), 0);
     const assertGpuTasks = async (index, { desktopLayout = true } = {}) => {
       const evidence = currentTaskEvidence();
-      assert.equal((await taskPanel.locator(".sm-gpu-tasks-scope").innerText()).trim(), index === null ? "全部 GPU" : `GPU ${index}`);
-      assert.equal(await taskPanel.getByRole("button", { name: "查看全部 GPU 任务", exact: true }).count(), index === null ? 0 : 1);
+      const header = taskPanel.locator(".sm-gpu-tasks-header");
+      assert.equal((await header.innerText()).trim(), "GPU 任务", "the task header displays only its title");
+      assert.equal(await header.getByRole("heading", { name: "GPU 任务", exact: true }).count(), 1);
+      assert.equal(await header.getByRole("button").count(), 0, "the task header has no GPU scope button");
       assert.equal(await taskPanel.locator(".sm-gpu-tasks-placeholder").count(), 0, "all-GPU mode displays aggregated tasks instead of an empty selection prompt");
       assert.equal(await taskPanel.getByRole("heading", { name: /^当前正在进行/ }).count(), 1);
       assert.equal(await taskPanel.getByRole("heading", { name: /^近期完成任务/ }).count(), 1);
@@ -570,7 +572,7 @@ try {
     await assertSelectedCard(linkedGpu); await assertSelectedGpu(linkedGpu);
     await assertTrend("GPU 利用率", [`GPU ${linkedGpu}`]);
     await assertGpuTasks(linkedGpu);
-    await taskPanel.getByRole("button", { name: "查看全部 GPU 任务", exact: true }).click();
+    await chooseGpu(null);
     await assertSelectedCard(null); await assertSelectedGpu(null);
     await assertTrend("GPU 利用率", ["GPU 0", "GPU 1", "GPU 2", "GPU 3"]);
     await assertGpuTasks(null);
@@ -614,11 +616,11 @@ try {
       await plot.press("Escape");
       await tooltip.waitFor({ state: "hidden" });
       report.trend_readouts = { hover: "passed", keyboard: "passed", selected_gpu_values: "passed" };
-      // System trends have no GPU dropdown: task scope still provides a return path.
+      // The current server card restores aggregate tasks in the CPU/memory view.
       await taskPanel.locator(".gth-list > .gth-task").first().getByRole("button", { name: `切换到 GPU ${linkedGpu}`, exact: true }).click();
       await assertSelectedCard(linkedGpu); await assertTrend("CPU / 内存", ["CPU", "内存"]);
       await assertGpuTasks(linkedGpu);
-      await taskPanel.getByRole("button", { name: "查看全部 GPU 任务", exact: true }).click();
+      await page.getByRole("button", { name: "查看当前服务器详情", exact: true }).click();
       await assertSelectedCard(null); await assertTrend("CPU / 内存", ["CPU", "内存"]);
       await assertGpuTasks(null);
       await assertBottomReachable(page, "desktop aggregate tasks");
@@ -679,7 +681,7 @@ try {
       await assertSelectedGpu(linkedGpu); await assertSelectedCard(linkedGpu);
       await assertTrend("GPU 显存", [`GPU ${linkedGpu}`]);
       await assertGpuTasks(linkedGpu, { desktopLayout: false });
-      await taskPanel.getByRole("button", { name: "查看全部 GPU 任务", exact: true }).click();
+      await chooseGpu(null);
       await assertSelectedGpu(null); await assertSelectedCard(null);
       await assertTrend("GPU 显存", ["GPU 0", "GPU 1", "GPU 2", "GPU 3"]);
       await assertGpuTasks(null, { desktopLayout: false });

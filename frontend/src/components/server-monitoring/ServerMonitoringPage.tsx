@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { Activity, ArrowLeft, ArrowUpRight, Clock3, Cpu, HardDrive, LoaderCircle, LockKeyhole, MemoryStick, RefreshCw, Server, TriangleAlert } from "lucide-react";
+import { Activity, ArrowUpRight, Clock3, Cpu, HardDrive, LoaderCircle, LockKeyhole, MemoryStick, RefreshCw, Server, TriangleAlert } from "lucide-react";
 import type { ServerMonitoringControl } from "../../hooks/useServerMonitoring";
 import type { MonitoringGpu } from "../../types/serverMonitoring";
 import { ModulePageHeader } from "../ModulePageHeader";
@@ -139,9 +139,7 @@ export function ServerMonitoringPage({ control, renderGpuTasks }: { control: Ser
             ]} />)}
         </div>{!snapshot?.gpus.length && <div className="sm-small-empty">{gpuCount === 0 ? "当前服务器未检测到 GPU" : "等待显卡硬件与指标采样"}</div>}
       </section>
-      <div className="sm-history-layout"><aside className="sm-gpu-tasks" aria-label="GPU 任务"><div className="sm-gpu-tasks-header"><h2><Clock3 size={16} />GPU 任务</h2>{selectedGpuInfo
-        ? <button type="button" className="sm-gpu-tasks-scope" aria-label="查看全部 GPU 任务" title="返回全部 GPU" onClick={() => setSelectedGpu("all")}><ArrowLeft size={12} aria-hidden="true" />GPU {selectedGpuInfo.index}</button>
-        : <span className="sm-gpu-tasks-scope">全部 GPU</span>}</div><div className="sm-gpu-tasks-body">{renderGpuTasks?.({ gpuUuid: selectedGpuInfo?.uuid ?? null, gpus: snapshot?.gpus ?? [], onSelectGpu: selectResource })}</div></aside>
+      <div className="sm-history-layout"><aside className="sm-gpu-tasks" aria-label="GPU 任务"><div className="sm-gpu-tasks-header"><h2><Clock3 size={16} />GPU 任务</h2></div><div className="sm-gpu-tasks-body">{renderGpuTasks?.({ gpuUuid: selectedGpuInfo?.uuid ?? null, gpus: snapshot?.gpus ?? [], onSelectGpu: selectResource })}</div></aside>
       <section className="sm-trends"><div className="sm-section-heading"><div><h2><Activity size={17} />资源趋势<span>最近 1 小时</span></h2></div><div className="sm-trend-controls">
         {trend !== "system" && Boolean(snapshot?.gpus.length) && <div className="sm-gpu-picker">
           <Cpu className="sm-gpu-picker-icon" size={15} aria-hidden="true" />
