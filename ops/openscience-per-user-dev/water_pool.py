@@ -127,51 +127,71 @@ def verify_pool(cfg):
     return node
 
 
-def topology():
+def source_layout(policy):
     cfg = pins()
+    if policy is not None:
+        check(
+            cfg["filesystem_uuid"] == policy["filesystem_uuid"],
+            "Shared disk differs from its registered pool",
+        )
     verify_pool(cfg)
     users = json.loads(Path("/inputs/spec.json").read_bytes())["users"]
-    result = {}
-    for role, owner in users.items():
-        pin = cfg["sources"][role]
-        root = ROOTS / ("src-" + role)
-        image = POOL / ("src-" + role + ".raw")
+    check(set(users) == {"a", "b"}, "Expected both dev-m1 owners")
+    return cfg, users
+
+
+def workspace_volume(cfg, role, owner, policy):
+    pin = cfg["sources"][role]
+    owner = quota._identity(owner)
+    check(owner["user_id"] == "test-user-" + role, "Unexpected quota workspace owner")
+    if policy is not None:
         check(
-            image.is_file()
-            and not image.is_symlink()
-            and image.stat().st_dev == POOL.stat().st_dev
-            and image.stat().st_nlink == 1
-            and image.stat().st_size == 3 * 1024**3,
-            "Missing sparse quota image on the shared development disk",
+            pin["filesystem_uuid"] == policy["claim"]["filesystem_uuids"][role],
+            "Workspace differs from its registered disk",
         )
-        block = block_for(root)
-        backing = Path((block / "loop/backing_file").read_text().strip())
-        check(
-            backing == image and backing.samefile(image),
-            "Workspace is not backed by its pinned image in the observed pool",
-        )
-        node, fs = quota._filesystem(root, owner, "src")
-        q = quota._on_device(node, owner, fs)
-        check(
-            (q["filesystem_uuid"], q["uid"], q["hard_bytes"])
-            == (pin["filesystem_uuid"], pin["uid"], 2_000_000_000)
-            and owner["workspace"] == pin["workspace"],
-            "Workspace identity or user quota changed",
-        )
-        result[role] = (
-            node,
-            {
-                "uid": q["uid"],
-                "filesystem_uuid": q["filesystem_uuid"],
-                "user_hard_bytes": q["hard_bytes"],
-                **group_state(node, q["uid"]),
-            },
-        )
+    root = ROOTS / ("src-" + role)
+    image = POOL / ("src-" + role + ".raw")
     check(
-        set(result) == {"a", "b"} and result["a"][0] != result["b"][0],
-        "Expected two distinct user filesystems",
+        image.is_file()
+        and not image.is_symlink()
+        and image.stat().st_dev == POOL.stat().st_dev
+        and image.stat().st_nlink == 1
+        and image.stat().st_size == 3 * 1024**3,
+        "Missing sparse quota image on the shared development disk",
     )
-    return cfg, result
+    block = block_for(root)
+    backing = Path((block / "loop/backing_file").read_text().strip())
+    check(
+        backing == image and backing.samefile(image),
+        "Workspace is not backed by its pinned image in the observed pool",
+    )
+    node, fs = quota._filesystem(root, owner, "src")
+    q = quota._on_device(node, owner, fs)
+    check(
+        (q["filesystem_uuid"], q["uid"], q["hard_bytes"])
+        == (pin["filesystem_uuid"], pin["uid"], 2_000_000_000)
+        and owner["workspace"] == pin["workspace"],
+        "Workspace identity or user quota changed",
+    )
+    return (
+        node,
+        {
+            "uid": q["uid"],
+            "filesystem_uuid": q["filesystem_uuid"],
+            "user_hard_bytes": q["hard_bytes"],
+            **group_state(node, q["uid"]),
+        },
+    )
+
+
+def topology(policy=None):
+    cfg, users = source_layout(policy)
+    roles = {
+        role: workspace_volume(cfg, role, owner, policy)
+        for role, owner in users.items()
+    }
+    check(roles["a"][0] != roles["b"][0], "Expected two distinct user filesystems")
+    return cfg, roles
 
 
 def observation(cfg, roles):
@@ -189,19 +209,67 @@ def sample():
     return observation(*topology())
 
 
-def gate(mode):
+VOLUME_ERRORS = (
+    OSError,
+    ValueError,
+    KeyError,
+    TypeError,
+    RuntimeError,
+    subprocess.SubprocessError,
+)
+
+
+class IncompleteBlock(RuntimeError):
+    def __init__(self, sample, errors):
+        super().__init__(
+            "Could not confirm blocked allocation for " + ", ".join(errors)
+        )
+        self.sample = sample
+        self.errors = errors
+
+
+def set_group_gate(node, row, mode):
+    if row["group_gate"] != mode:
+        limit = int(mode == "block")
+        limits = quota._DiskQuota(block_hard=limit, inode_hard=limit, valid=LIMIT_MASK)
+        group_call(node, quota.Q_SETQUOTA, row["uid"], limits)
+    row.update(group_state(node, row["uid"]))
+    check(row["group_gate"] == mode, "Group allocation gate failed kernel readback")
+
+
+def block_allocations(policy):
+    cfg, users = source_layout(policy)
+    confirmed = {}
+    errors = {}
+    for role, owner in users.items():
+        try:
+            node, row = workspace_volume(cfg, role, owner, policy)
+            set_group_gate(node, row, "block")
+            confirmed[role] = (node, row)
+        except VOLUME_ERRORS as error:
+            # A missing/foreign volume or a failed quota call must not prevent
+            # enforcing the limit on the other independently attested device.
+            errors[role] = type(error).__name__
+    measured = observation(cfg, confirmed)
+    if errors:
+        raise IncompleteBlock(measured, errors)
+    return measured
+
+
+def gate(mode, policy=None):
     check(mode in ("block", "open"), "Unexpected global allocation gate")
-    cfg, roles = topology()
-    target = int(mode == "block")
-    for node, row in roles.values():
-        if row["group_gate"] != mode:
-            limits = quota._DiskQuota(
-                block_hard=target, inode_hard=target, valid=LIMIT_MASK
-            )
-            group_call(node, quota.Q_SETQUOTA, row["uid"], limits)
-        row.update(group_state(node, row["uid"]))
-        check(row["group_gate"] == mode, "Group allocation gate failed kernel readback")
-    return observation(cfg, roles)
+    if mode == "block":
+        return block_allocations(policy)
+    # Verify both volumes before relaxing either limit, and compensate a partial
+    # open even when the caller is the operator CLI rather than the monitor.
+    try:
+        cfg, roles = topology(policy)
+        for node, row in roles.values():
+            set_group_gate(node, row, "open")
+        return observation(cfg, roles)
+    except VOLUME_ERRORS:
+        block_allocations(policy)
+        raise
 
 
 def initial_receipt(cfg):

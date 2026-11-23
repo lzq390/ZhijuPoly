@@ -18,6 +18,7 @@ sys.path.insert(0, str(OPS))
 sys.path.insert(0, str(OPS.parents[1] / "scripts"))
 from openscience_per_user_dev import write_atomic  # noqa: E402
 import quota_nfs  # noqa: E402
+import water_pool  # noqa: E402
 
 ROOT = Path("/var/lib/nexpoly-m5-watermark")
 SERVICE = "m5-global-disk.service"
@@ -120,51 +121,41 @@ def observe(root, policy, pool, *, stopped=False):
     deliver(root, previous.get("last_transition"))
     old = previous.get("state")
     sample = None
+    gate_errors = {}
     try:
-        sample = checked_sample(policy, pool.sample())
+        # A failed block can leave a readable but still-open quota. Confirm
+        # that both gates can actually close before allowing recovery.
+        raw = pool.gate("block", policy) if old == "unavailable" else pool.sample()
+        sample = checked_sample(policy, raw)
         if stopped:
             raise ValueError("Disk monitor is inactive")
         low = low_water(policy, old, sample["available_bytes"])
         state = "low" if low else "normal"
         target = "block" if low else "open"
         if any(v["group_gate"] != target for v in sample["workspaces"].values()):
-            sample = checked_sample(policy, pool.gate(target))
+            sample = checked_sample(policy, pool.gate(target, policy))
             # Background I/O can consume the recovered margin while the two
             # kernel limits are opening. Check the returned physical sample.
             if target == "open" and low_water(policy, old, sample["available_bytes"]):
                 state, target = "low", "block"
-                sample = checked_sample(policy, pool.gate(target))
+                sample = checked_sample(policy, pool.gate(target, policy))
         if any(v["group_gate"] != target for v in sample["workspaces"].values()):
             raise ValueError(
                 "Both workspace block and inode caps must confirm the same gate"
             )
         reason = None
-    except (
-        OSError,
-        ValueError,
-        KeyError,
-        TypeError,
-        RuntimeError,
-        subprocess.SubprocessError,
-    ) as exc:
+    except water_pool.VOLUME_ERRORS as exc:
         state, reason = (
             "unavailable",
             "monitor_inactive" if stopped else type(exc).__name__,
         )
-        # Never report admission open after a partial quota update or wrong/missing device.
-        # gate() revalidates physical devices before modifying either kernel quota.
+        # A whole-pool sample can fail because just one workspace is missing.
+        # Gate the independent, policy-pinned volumes before reporting the fault.
         try:
-            sample = checked_sample(policy, pool.sample())
-            if any(v["group_gate"] != "block" for v in sample["workspaces"].values()):
-                sample = checked_sample(policy, pool.gate("block"))
-        except (
-            OSError,
-            ValueError,
-            KeyError,
-            TypeError,
-            RuntimeError,
-            subprocess.SubprocessError,
-        ):
+            sample = checked_sample(policy, pool.gate("block", policy))
+        except water_pool.IncompleteBlock as failure:
+            sample, gate_errors = failure.sample, failure.errors
+        except water_pool.VOLUME_ERRORS:
             sample = None
     now = datetime.now(timezone.utc).isoformat()
     last = previous.get("last_transition")
@@ -204,6 +195,10 @@ def observe(root, policy, pool, *, stopped=False):
         available_bytes=sample["available_bytes"] if sample else None,
         workspaces=sample["workspaces"] if sample else {},
     )
+    if gate_errors:
+        current["gate_errors"] = gate_errors
+        if old != state:
+            last["gate_errors"] = gate_errors
     publish(state_file, current)
     deliver(root, last)
     return current
@@ -213,9 +208,7 @@ def stop_guard(root, policy, pool, *, shutting_down):
     # A broken/full control filesystem can itself stop the monitor. Close the
     # kernel gates before touching its status file or sending any notification.
     try:
-        sample = checked_sample(policy, pool.sample())
-        if any(v["group_gate"] != "block" for v in sample["workspaces"].values()):
-            checked_sample(policy, pool.gate("block"))
+        checked_sample(policy, pool.gate("block", policy))
     finally:
         # During an orderly VM shutdown systemd has already stopped the NFS
         # export. Keep the last observed disk condition and its resolved receipt.
@@ -262,8 +255,6 @@ WantedBy=multi-user.target
 
 
 def main():
-    import water_pool
-
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
     for name in ("configure", "preflight", "sample", "observed", "alerts"):

@@ -2,6 +2,7 @@
 
 from contextlib import ExitStack
 import argparse
+import errno
 import hashlib
 from importlib import import_module
 import json
@@ -22,6 +23,7 @@ from openscience_m5_archive import (
 from openscience_m5_backup import (
     destination_path,
     digest,
+    extent_bytes,
     private_dir,
     private_file,
     publish,
@@ -150,35 +152,67 @@ def restore(mount, binding, bundle_dir, trusted_manifest_sha256):
             raise ValueError("Use separate backup and restore filesystems")
         if digest(archive) != meta["archive_sha256"]:
             raise ValueError("Workspace archive does not match the quota package")
+        block = os.statvfs(mount).f_frsize
+        user_bytes = total_bytes = 0
+        legacy = False
+
+        def allocation(member, ranges, old_format):
+            nonlocal legacy, user_bytes, total_bytes
+            legacy = old_format
+            if legacy:
+                size = block if member.isdir() else extent_bytes(ranges, block)
+                total_bytes += size
+                if member.uid == binding["uid"]:
+                    user_bytes += size
+
         archive.seek(0)
         if (
-            process_archive(archive, binding["uid"], binding["workspace"])
+            process_archive(archive, binding["uid"], binding["workspace"], allocation=allocation)
             != meta["inventory"]
         ):
             raise ValueError("Unexpected archived workspace contents")
-        archive.seek(0)
         target = destination_path(mount / "workspace")
         policy = meta["quota"]
-        quota.restore(mount, binding, policy, quota.snapshot_digest(policy))
-        with TemporaryDirectory(dir=mount, prefix=".m5-quota-restore-") as tmp:
-            restored = Path(tmp) / "workspace"
-            restored.mkdir(mode=0o700)
-            restored_tree = process_archive(
-                archive, binding["uid"], binding["workspace"], restored
-            )
-            if (
-                restored_tree != meta["inventory"]
-                or inventory(restored, binding) != restored_tree
-            ):
-                raise ValueError("Restored files differ from backup")
-            effective = quota.read(mount, binding)
-            if (
-                effective["hard_bytes"] != policy["hard_bytes"]
-                or effective["used_bytes"] > effective["hard_bytes"]
-            ):
-                raise ValueError("Restored workspace exceeds its recovered quota")
-            publish(restored, target)
-    return {"inventory": restored_tree, "quota": effective}
+        effective = quota.restore(mount, binding, policy, quota.snapshot_digest(policy))
+        fs = os.statvfs(mount)
+        recover_zeros = legacy and (
+            user_bytes > effective["hard_bytes"] - effective["used_bytes"]
+            or total_bytes > fs.f_bavail * fs.f_frsize
+        )
+        while True:
+            archive.seek(0)
+            with TemporaryDirectory(dir=mount, prefix=".m5-quota-restore-") as tmp:
+                restored = Path(tmp) / "workspace"
+                restored.mkdir(mode=0o700)
+                try:
+                    restored_tree = process_archive(
+                        archive, binding["uid"], binding["workspace"], restored,
+                        recover_legacy_zeros=recover_zeros,
+                    )
+                except OSError as error:
+                    # Directory growth and extent metadata may exceed the estimate. The
+                    # failed tree is private and removed before a single legacy retry.
+                    if not legacy or recover_zeros or error.errno not in (errno.EDQUOT, errno.ENOSPC):
+                        raise
+                    recover_zeros = True
+                    continue
+                effective = quota.read(mount, binding)
+                if effective["hard_bytes"] != policy["hard_bytes"]:
+                    raise ValueError("Restored quota differs from backup")
+                if effective["used_bytes"] > effective["hard_bytes"]:
+                    # Extraction can run with privileges to reinstate owners.
+                    # Still enforce the measured final hard limit before publication.
+                    if legacy and not recover_zeros:
+                        recover_zeros = True
+                        continue
+                    raise OSError(errno.EDQUOT, "Restored workspace exceeds its recovered quota")
+                if restored_tree != meta["inventory"] or inventory(restored, binding) != restored_tree:
+                    raise ValueError("Restored files differ from backup")
+                publish(restored, target)
+                result = {"inventory": restored_tree, "quota": effective}
+                if recover_zeros:
+                    result["legacy_zero_recovery"] = True
+                return result
 
 
 def main():

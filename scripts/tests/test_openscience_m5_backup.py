@@ -117,6 +117,74 @@ class ArchiveTests(unittest.TestCase):
             self.assertGreater(space, self.archive.stat().st_size)
             self.assertEqual(backup.restore_space_required([(data, archive)] * 2), 2 * space)
 
+    def test_dense_version_one_package_still_matches_its_original_tree_digest(self):
+        self.assertEqual(
+            hashlib.sha256(self.archive.read_bytes()).hexdigest(),
+            "c48237ec1e110bf14d6a2bdd986b201484b23989ccc2ac315903aac68fa69d7e",
+        )
+        legacy_tree = {
+            "tree_sha256": "76ddb223bcf24fefb9c546683f135f8e5e7513364e3794666e1952cd359c8a87",
+            "files": 2,
+            "directories": 9,
+            "file_bytes": 39,
+        }
+        pin = self.manifest(inventory=legacy_tree)
+        restored = self.root / "restore"
+        restored.mkdir()
+        with ExitStack() as stack:
+            _, stream = backup.verify_package(stack, "dev-test", "test-a", self.package, pin)
+            with patch.object(codec.os, "chown"):
+                self.assertEqual(codec.process_archive(stream, UID, WORKSPACE, restored), legacy_tree)
+        self.assertEqual((restored / "files/example.txt").read_bytes(), b"fixture")
+
+    def test_restore_space_counts_partial_sparse_blocks_and_rewinds_input(self):
+        block = 4096
+        # Two bytes share a block. The other bytes are in independent blocks
+        # separated by large holes. The logical file length should not dominate
+        # admission, and compact payload size alone would underestimate it.
+        offsets = [0, 3, *(i * 1024**2 + 1 for i in range(1, 17))]
+        with tarfile.open(self.archive, mode="w") as tar:
+            member = tarfile.TarInfo("files/regions")
+            member.size = len(offsets)
+            member.pax_headers = {
+                "GNU.sparse.size": str(offsets[-1] + 1),
+                "GNU.sparse.name": member.name,
+                "GNU.sparse.numblocks": str(len(offsets)),
+                "GNU.sparse.map": ",".join(f"{offset},1" for offset in offsets),
+            }
+            tar.addfile(member, io.BytesIO(b"x" * len(offsets)))
+        with self.archive.open("rb") as stream:
+            verified = [({"inventory": {"files": 1, "directories": 0}}, stream)]
+            reserved = backup.restore_space_required(verified)
+            self.assertEqual(stream.tell(), 0)
+        self.assertEqual(reserved, self.archive.stat().st_size + block + 17 * block - len(offsets))
+        self.assertLess(reserved, offsets[-1] + 1)
+
+    def test_restore_space_counts_unwritten_reservations_past_eof_and_shared_blocks(self):
+        block = 4096
+        with tarfile.open(self.archive, mode="w") as tar:
+            dense = tarfile.TarInfo("files/dense")
+            dense.size = 3
+            dense.pax_headers[codec.RESERVATION_MAP] = "4096,8192"
+            tar.addfile(dense, io.BytesIO(b"abc"))
+            empty = tarfile.TarInfo("files/empty")
+            empty.pax_headers[codec.RESERVATION_MAP] = "16777216,4096"
+            tar.addfile(empty)
+            sparse = tarfile.TarInfo("files/sparse")
+            sparse.size = 1
+            sparse.pax_headers = {
+                "GNU.sparse.size": "1048576", "GNU.sparse.name": sparse.name,
+                "GNU.sparse.numblocks": "1", "GNU.sparse.map": "0,1",
+                codec.RESERVATION_MAP: "1,128,16777216,8192",
+            }
+            tar.addfile(sparse, io.BytesIO(b"x"))
+        with self.archive.open("rb") as stream:
+            required = backup.restore_space_required([({"inventory": {"files": 3, "directories": 0}}, stream)])
+            self.assertEqual(stream.tell(), 0)
+        # Dense: three occupied blocks. Empty: one. Sparse: one shared by
+        # data and a reservation, plus two beyond EOF. Four bytes were packed.
+        self.assertEqual(required, self.archive.stat().st_size + 3 * block + 7 * block - 4)
+
     def test_scope_and_complete_private_inventory(self):
         results = self.inventory()
         self.assertEqual(results["directories"], len(codec.SKELETON))

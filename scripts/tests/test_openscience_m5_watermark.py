@@ -17,6 +17,7 @@ import openscience_per_user_dev as m1  # noqa: E402
 import openscience_per_user_service as service  # noqa: E402
 
 import water_monitor as monitor  # noqa: E402
+import water_pool  # noqa: E402
 
 
 class Pool:
@@ -40,7 +41,8 @@ class Pool:
             },
         }
 
-    def gate(self, mode):
+    def gate(self, mode, policy):
+        assert self.policy == policy
         self.modes = dict.fromkeys(self.modes, mode)
         return self.sample()
 
@@ -99,7 +101,7 @@ class WatermarkTest(unittest.TestCase):
         self.observed()
         self.pool.free = 50
 
-        def partial(mode):
+        def partial(mode, policy):
             self.pool.modes["a"] = mode
             raise OSError("interrupted kernel update")
 
@@ -142,14 +144,107 @@ class WatermarkTest(unittest.TestCase):
     def test_probe_rejects_unrelated_filesystem_without_touching_its_limits(self):
         foreign = self.pool.sample()
         foreign["filesystem_uuid"] = str(uuid4())
+        self.pool = water_pool
         with (
-            patch.object(self.pool, "sample", return_value=foreign),
-            patch.object(self.pool, "gate") as mutate,
+            patch.object(water_pool, "sample", return_value=foreign),
+            patch.object(water_pool, "pins", return_value=foreign),
+            patch.object(water_pool, "group_call") as mutate,
         ):
             result = self.observed()
             self.assertEqual(result["state"], "unavailable")
             self.assertFalse(result["write_allowed"])
             mutate.assert_not_called()
+
+    def test_one_workspace_fault_guards_peer_and_recovers_at_the_high_watermark(self):
+        self.pool = water_pool
+        uuids = self.claim["filesystem_uuids"]
+        for failed, peer in (("a", "b"), ("b", "a")):
+            for fault in ("inspect", "set", "readback"):
+                with self.subTest(failed=failed, fault=fault):
+                    free = 300
+                    modes = dict.fromkeys("ab", "open")
+                    broken = False
+                    writes = []
+                    broken_readback = False
+
+                    def volume(cfg, role, owner, policy):
+                        if broken and role == failed and fault == "inspect":
+                            raise ValueError("unverified source")
+                        return role, {
+                            "uid": owner,
+                            "filesystem_uuid": uuids[role],
+                            "group_gate": modes[role],
+                        }
+
+                    def write(role, cmd, uid, value):
+                        nonlocal broken_readback
+                        self.assertEqual(cmd, water_pool.quota.Q_SETQUOTA)
+                        self.assertEqual(value.block_hard, value.inode_hard)
+                        writes.append(role)
+                        if broken and role == failed:
+                            if fault == "set":
+                                raise OSError("kernel quota update failed")
+                            if fault == "readback":
+                                broken_readback = True
+                        modes[role] = "block" if value.block_hard else "open"
+
+                    def read(role, uid):
+                        if broken and role == failed and broken_readback:
+                            raise OSError("quota readback unavailable")
+                        return {"group_gate": modes[role]}
+
+                    def measure(cfg, roles):
+                        return {
+                            "filesystem_uuid": self.policy["filesystem_uuid"],
+                            "filesystem_type": "ext4",
+                            "available_bytes": free,
+                            "total_bytes": 500,
+                            "workspaces": {k: row for k, (_, row) in roles.items()},
+                        }
+
+                    with (
+                        patch.object(
+                            water_pool,
+                            "source_layout",
+                            return_value=({}, {"a": 410000, "b": 410001}),
+                        ),
+                        patch.object(
+                            water_pool, "workspace_volume", side_effect=volume
+                        ),
+                        patch.object(water_pool, "group_call", side_effect=write),
+                        patch.object(water_pool, "group_state", side_effect=read),
+                        patch.object(water_pool, "observation", side_effect=measure),
+                    ):
+                        self.assertTrue(self.observed()["write_allowed"])
+                        seq = len(self.events())
+                        free, broken = 70, True
+                        result = self.observed()
+                        self.assertFalse(result["write_allowed"])
+                        self.assertEqual(result["state"], "unavailable")
+                        self.assertEqual(modes[peer], "block")
+                        self.assertEqual(set(result["workspaces"]), {peer})
+                        self.assertEqual(set(result["gate_errors"]), {failed})
+                        self.assertEqual(
+                            result["last_transition"]["gate_errors"],
+                            result["gate_errors"],
+                        )
+                        if fault == "inspect":
+                            self.assertNotIn(failed, writes)
+                        free = 200
+                        self.assertEqual(self.observed()["state"], "unavailable")
+                        self.assertEqual(modes[peer], "block")
+                        # A repaired workspace must rejoin the block until the
+                        # recovery margin is met, even after a service retry.
+                        broken, free = False, 120
+                        self.assertEqual(self.observed()["state"], "low")
+                        self.assertEqual(modes, dict.fromkeys("ab", "block"))
+                        free = 160
+                        self.assertTrue(self.observed()["write_allowed"])
+                        self.assertEqual(modes, dict.fromkeys("ab", "open"))
+                        self.assertEqual(
+                            [e["notification"] for e in self.events()[seq:]],
+                            ["degraded", "firing", "resolved"],
+                        )
 
     def test_guarded_registry_admission_and_rpc_do_not_fall_back(self):
         r = m1.Registry(self.root)
@@ -268,10 +363,10 @@ class WatermarkTest(unittest.TestCase):
         self.pool.free = 180
         apply = self.pool.gate
 
-        def compete(mode):
+        def compete(mode, policy):
             if mode == "open":
                 self.pool.free = 120
-            return apply(mode)
+            return apply(mode, policy)
 
         with patch.object(self.pool, "gate", side_effect=compete):
             state = self.observed()

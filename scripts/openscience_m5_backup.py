@@ -13,11 +13,19 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 from types import SimpleNamespace
 
 import openscience_per_user_dev as m1
-from openscience_m5_archive import CHUNK, process_archive
+from openscience_m5_archive import (
+    CHUNK,
+    WorkspaceTarInfo,
+    allocated_ranges,
+    file_layout,
+    process_archive,
+    reservation_extents,
+)
 
 
 HELPER = Path(__file__).with_name("openscience_m5_archive.py").resolve()
@@ -335,13 +343,39 @@ def delete_owned_empty_instance_volume(workspace, stamp):
         m1.docker("volume", "rm", workspace.volume)
 
 
+def extent_bytes(ranges, block):
+    """Count destination blocks touched by ordered, non-overlapping data ranges."""
+    total = end_block = 0
+    for offset, length in ranges:
+        if length:
+            end = (offset + length + block - 1) // block
+            total += (end - max(offset // block, end_block)) * block
+            end_block = end
+    return total
+
+
 def restore_space_required(verified):
-    # Include file allocation slack and directory blocks on top of all archive sizes.
-    return sum(
-        os.fstat(archive.fileno()).st_size
-        + (item["inventory"]["files"] + item["inventory"]["directories"]) * 4096
-        for item, archive in verified
-    )
+    block = 4096  # Development Docker volume's ext4 block size.
+    required = 0
+    for item, archive in verified:
+        # Keep the existing archive and metadata reserve. A sparse tar stores
+        # only written data. A restored KEEP_SIZE reservation costs real blocks
+        # even beyond EOF; data and reservations can also share a block.
+        required += os.fstat(archive.fileno()).st_size
+        required += (item["inventory"]["files"] + item["inventory"]["directories"]) * block
+        try:
+            archive.seek(0)
+            with tarfile.open(fileobj=archive, mode="r:", tarinfo=WorkspaceTarInfo) as reader:
+                for member in reader:
+                    reservations = reservation_extents(member)
+                    if member.sparse is None and not reservations:
+                        continue
+                    _, data = file_layout(reader, member)
+                    allocated = allocated_ranges(data, reservations)
+                    required += extent_bytes(allocated, block) - sum(length for _, length in data)
+        finally:
+            archive.seek(0)  # The same pinned descriptor feeds the unpack helper.
+    return required
 
 
 def restore(destination, environment, packages):
