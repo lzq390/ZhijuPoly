@@ -88,6 +88,18 @@ class ManagerTest(TestCase):
         self.assertEqual(m1.Registry(self.registry.root).data["image"], "image-b")
         self.assertEqual(self.registry.workspace("dev-alpha", "member").uid, self.a.uid)
 
+    def test_idle_reap_rechecks_the_water_level_before_removing_the_warm_instance(self):
+        self.registry.data["format"] = 5
+        self.a.control.mkdir(parents=True)
+        refused = m1.CapacityRefusal("global_disk", "workspace_disk_low_watermark")
+        with patch.object(self.registry, "check_disk_admission", side_effect=[None, refused]), \
+                patch.object(self.a, "resource", return_value={"id": "A", "state": "running"}), \
+                patch.object(self.a, "verify_pair"), patch.object(self.a, "activity", return_value=None), \
+                patch.object(self.a, "state", side_effect=lambda reason: reason), patch.object(self.a, "remove_pair") as remove:
+            self.assertEqual(self.a.drain("reap"), "disk_recovery")
+        remove.assert_not_called()
+        self.assertFalse((self.a.control / "draining").exists())
+
     def test_capacity_defaults_apply_to_legacy_registry_and_settings_persist(self):
         fresh = m1.Registry(self.registry.root)
         self.assertNotIn("capacity", fresh.data)

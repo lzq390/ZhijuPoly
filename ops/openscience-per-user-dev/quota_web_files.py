@@ -1,5 +1,6 @@
 """Install the quota-aware file operations for the immutable development workspace."""
 import hashlib
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -71,15 +72,34 @@ def patch(name, source):
 ''' + anchor)
 
 
-def prepare(registry_root, image_id):
+def overlay_path(registry_root, image_id):
     if not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
         raise ValueError("Expected a local immutable image ID")
-    root = Path(registry_root)
-    target = root / "quota-web-code"
-    if target.exists():
-        if (target / "image-id").read_text().strip() != image_id:
-            raise ValueError("Quota file overlay belongs to a different workspace image")
-    else:
+    root = Path(registry_root).resolve()
+    target = root / ("quota-web-code-" + image_id.removeprefix("sha256:"))
+    if not target.exists() and not target.is_symlink():
+        # Keep active bind sources and the original rollback image addressable.
+        legacy = root / "quota-web-code"
+        if legacy.exists() or legacy.is_symlink():
+            if overlay_image(legacy) == image_id:
+                return legacy
+    return target
+
+
+def overlay_image(directory):
+    marker = directory / "image-id"
+    if directory.is_symlink() or marker.is_symlink() or not marker.is_file():
+        raise ValueError("Unexpected quota overlay image marker")
+    value = marker.read_text().strip()
+    if not re.fullmatch(r"sha256:[a-f0-9]{64}", value):
+        raise ValueError("Invalid quota overlay image marker")
+    return value
+
+
+def prepare(registry_root, image_id):
+    target = overlay_path(registry_root, image_id)
+    if not target.exists() and not target.is_symlink():
+        root = target.parent
         with tempfile.TemporaryDirectory(dir=root) as temporary:
             code = Path(temporary) / "code"
             code.mkdir()
@@ -96,12 +116,30 @@ def prepare(registry_root, image_id):
             (code / "image-id").write_text(image_id + "\n")
             for path in code.iterdir():
                 path.chmod(0o444)
+                with path.open("rb") as stream:
+                    os.fsync(stream.fileno())
+            verified_mounts(code, image_id)
+            sync_directory(code)
             code.rename(target)
-    return mounts(root)
+            sync_directory(root)
+    return verified_mounts(target, image_id)
 
 
-def mounts(registry_root):
-    root = Path(registry_root).resolve() / "quota-web-code"
+def mounts(registry_root, image_id):
+    return verified_mounts(overlay_path(registry_root, image_id), image_id)
+
+
+def sync_directory(directory):
+    fd = os.open(directory, os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def verified_mounts(root, image_id):
+    if overlay_image(root) != image_id:
+        raise ValueError("Quota file overlay belongs to a different workspace image")
     expected = {**PATCHED, "quota-file-io.mjs": hashlib.sha256(Path(__file__).with_name("quota-file-io.mjs").read_bytes()).hexdigest()}
     for name, digest in expected.items():
         path = root / name

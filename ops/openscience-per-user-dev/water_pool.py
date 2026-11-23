@@ -380,20 +380,27 @@ def mount_pool():
     verify_ready(cfg)
 
 
+def install_config(cfg):
+    sys.path.insert(0, "/opt/nexpoly/scripts")
+    from openscience_per_user_dev import write_atomic
+
+    # The lock survives atomic replacement of CONFIG and serializes competing installers.
+    with CONFIG.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if CONFIG.exists() or CONFIG.is_symlink():
+            check(not CONFIG.is_symlink() and CONFIG.is_file()
+                  and json.loads(CONFIG.read_bytes()) == cfg, "Water-pool binding has changed")
+            return
+        write_atomic(CONFIG, json.dumps(cfg, sort_keys=True).encode() + b"\n", 0o600)
+
+
 def install(cfg):
     disk = pool_device()
     check(
         run("blkid", "-p", "-s", "UUID", "-o", "value", disk) == cfg["filesystem_uuid"],
         "Refusing to install against a different disk",
     )
-    if CONFIG.exists():
-        check(json.loads(CONFIG.read_bytes()) == cfg, "Water-pool binding has changed")
-    else:
-        with CONFIG.open("x") as stream:
-            os.fchmod(stream.fileno(), 0o600)
-            json.dump(cfg, stream, sort_keys=True)
-            stream.flush()
-            os.fsync(stream.fileno())
+    install_config(cfg)
     active = subprocess.call(["systemctl", "is-active", "--quiet", UNIT]) == 0
     exported = subprocess.call(["systemctl", "is-active", "--quiet", NFS]) == 0
     if active and exported:

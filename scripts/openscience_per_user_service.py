@@ -18,6 +18,15 @@ MANAGER = Path(__file__).with_name("openscience_per_user_dev.py")
 WORKSPACE_KEYS = {"operation", "environment", "user_id"}
 OPERATIONS = {"ensure", "status", "stop", "touch", "begin", "end", "check-write"}
 MAX_REQUEST = 2048
+# Life-cycle work is serialized in the registry; disk samples are serialized in
+# the guest. Queue peers before forking, with a separate worker for each.
+LIFECYCLE_WORKER = threading.Lock()
+WRITE_CHECK_WORKER = threading.Lock()
+
+
+def ensure_timeout_seconds(root):
+    # Admission, Docker setup and checked teardown share the original 120s allowance.
+    return 150 + Registry(root).readiness_seconds() - DEFAULT_READY_SECONDS
 
 
 def manager(root, *args):
@@ -25,7 +34,7 @@ def manager(root, *args):
     if args[0] == "ensure":
         # Leave the same budget for admission, Docker creation and checked teardown as a normal
         # start, in addition to the guest's explicitly configured readiness allowance.
-        timeout += Registry(root).readiness_seconds() - DEFAULT_READY_SECONDS
+        timeout = ensure_timeout_seconds(root)
     result = subprocess.run(
         [sys.executable, str(MANAGER), "--state-dir", str(root), *args],
         capture_output=True, text=True, timeout=timeout,
@@ -48,7 +57,8 @@ def dispatch(root, request):
     args = ["recycle" if op == "stop" else op, "--environment", request["environment"], "--user-id", request["user_id"]]
     if op == "end":
         args.extend(["--lease", request["lease"]])
-    return manager(root, *args)
+    with (WRITE_CHECK_WORKER if op == "check-write" else LIFECYCLE_WORKER):
+        return manager(root, *args)
 
 
 class Handler(socketserver.StreamRequestHandler):
@@ -100,7 +110,9 @@ def serve(root, interval):
             address.unlink()
         if address.exists() or address.is_symlink():
             raise ValueError("Unexpected file at supervisor socket path")
-        with socketserver.UnixStreamServer(str(address), Handler) as server:
+        # A slow ensure must not hold the socket accept loop while another
+        # running workspace samples the disk guard before a write.
+        with socketserver.ThreadingUnixStreamServer(str(address), Handler) as server:
             address.chmod(0o600)
             server.registry = root
             server.timeout = 0.5

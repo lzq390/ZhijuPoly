@@ -52,6 +52,8 @@ python3 scripts/ci/prepare_openscience_m5_water_pool.py prepare --vm "$vm"
 python3 scripts/ci/start_openscience_m5_web_vm.py --resume --work "$vm"
 ```
 
+新版启动器从虚机目录的 `vm.json` 读取已登记的存储布局。已有共享池升级时，先从留存注册表的 `disk_watermark.filesystem_uuid` 取得 UUID，在停机状态执行一次 `prepare --vm "$vm" --legacy-pool-uuid "$uuid"`。程序核对原卷和验收清单后写入登记。池丢失、UUID 不符或清单改变时，启动会被拒绝。没有登记且缺少共享池的旧目录无法证明迁移状态，应在新目录从已核验备份恢复。
+
 等待存储虚机的 `m5-storage.service` 就绪后安装共享盘及监控脚本，然后启动私有转发。验收程序负责设置阈值、打开真实网页登录、施加和释放测试负载，并在结束时回收实例。使用带 Node 22、Chromium 和原 M2 登录状态的开发宿主，指定全新的验收目录和结果文件。
 
 ```bash

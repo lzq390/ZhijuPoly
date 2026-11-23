@@ -4,6 +4,8 @@ import errno
 import hashlib
 import io
 import json
+import os
+import signal
 from pathlib import Path
 import sys
 import tarfile
@@ -50,6 +52,95 @@ def dense_quota_package(directory, owner, content, marked):
 
 
 class BundleGuardTests(unittest.TestCase):
+    def test_dense_backups_share_the_disk_floor_and_preserve_the_previous_package(self):
+        if not Path("/dev/shm").is_dir():
+            self.skipTest("Two filesystems are needed for quota bundles")
+        uid = os.getuid()
+        owner = {"uid": uid, "workspace": "a" * 32}
+        with TemporaryDirectory() as source_dir, TemporaryDirectory(dir="/dev/shm") as backup_dir:
+            mount, directory = Path(source_dir), Path(backup_dir)
+            if mount.stat().st_dev == directory.stat().st_dev:
+                self.skipTest("Two filesystems are needed for quota bundles")
+            ws = mount / "workspace"
+            ws.mkdir(mode=0o700)
+            for name in sorted(codec.SKELETON - {"."}):
+                (ws / name).mkdir(mode=0o700)
+            (ws / ".m1-owner").write_text(owner["workspace"])
+            (ws / "files/dense").write_bytes(os.urandom(2 * 1024**2))
+            # Ordinary test files exercise the real PAX encoder and fallocate,
+            # independent of root-only ownership and ext4 quota installation.
+            with (
+                patch.object(bundle.quota, "snapshot", return_value={"identity": owner}),
+                patch.object(bundle, "validate_entry"),
+                patch.object(codec, "validate_entry"),
+            ):
+                result = bundle.backup(mount, owner, directory / "one", reserve_bytes=1024**2)
+                previous = directory / "one" / "workspace.tar"
+                self.assertEqual(previous.stat().st_size, result["capacity"]["archive_bytes"])
+                self.assertGreater(previous.stat().st_size, 2 * 1024**2)
+                old = hashlib.sha256(previous.read_bytes()).hexdigest()
+                # Leave room for a small write, but not another generation plus the floor.
+                floor = bundle.available_bytes(directory) - 1024**2
+                with self.assertRaisesRegex(RuntimeError, "Insufficient free space"):
+                    bundle.backup(mount, owner, directory / "two", reserve_bytes=floor)
+                self.assertEqual(hashlib.sha256(previous.read_bytes()).hexdigest(), old)
+                self.assertEqual(list(directory.iterdir()), [directory / "one"])
+
+                # Terminate the actual standalone writer immediately after fallocate.
+                # A retry to the exact output must recognize and release the provisional allocation.
+                destination = directory / "interrupted"
+                original = os.posix_fallocate
+                def kill_after_allocation(*args):
+                    original(*args)
+                    os.kill(os.getpid(), signal.SIGKILL)
+
+                pid = os.fork()
+                if pid == 0:
+                    try:
+                        with patch.object(bundle.os, "posix_fallocate", kill_after_allocation):
+                            bundle.backup(mount, owner, destination, reserve_bytes=1024**2)
+                    finally:
+                        os._exit(17)
+                _, status = os.waitpid(pid, 0)
+                self.assertEqual(os.waitstatus_to_exitcode(status), -signal.SIGKILL)
+                pending, _ = bundle.backup_staging(destination, {"identity": owner})
+                self.assertGreater((pending / "package/workspace.tar").stat().st_blocks, 0)
+                self.assertFalse(destination.exists())
+                recovered = bundle.backup(mount, owner, destination, reserve_bytes=1024**2)
+                self.assertEqual(recovered["manifest_sha256"], result["manifest_sha256"])
+                self.assertFalse(pending.exists())
+                self.assertEqual(hashlib.sha256(previous.read_bytes()).hexdigest(), old)
+
+    def test_unknown_backup_claim_and_unrecognized_staged_files_survive_retry(self):
+        with TemporaryDirectory() as tmp:
+            pending, receipt = bundle.backup_staging(Path(tmp) / "new", {"identity": "a"})
+            bundle.claim_stage(pending, receipt)
+            with self.assertRaisesRegex(ValueError, "Unrecognized"):
+                bundle.reclaim_backup_stage(pending, b"wrong-owner")
+            unexpected = pending / "preserve"
+            unexpected.write_text("keep")
+            with self.assertRaisesRegex(ValueError, "Unexpected entries"):
+                bundle.reclaim_backup_stage(pending, receipt)
+            self.assertEqual(unexpected.read_text(), "keep")
+
+    def test_interrupted_restore_reclaims_only_its_pinned_private_stage(self):
+        with TemporaryDirectory() as tmp:
+            mount = Path(tmp)
+            pin = "a" * 64
+            interrupted = mount / (".m5-quota-restore-" + pin)
+            bundle.claim_stage(interrupted, ("m5-quota-restore-stage-v1 " + pin).encode())
+            attempt = interrupted / "attempt-interrupted"
+            attempt.mkdir(mode=0o700)
+            (attempt / "workspace").mkdir()
+            other = mount / (".m5-quota-restore-" + "b" * 64)
+            other.mkdir(mode=0o700)
+            with bundle.restore_stage(mount, pin) as (stage, reclaimed):
+                self.assertTrue(reclaimed)
+                self.assertTrue(stage.is_dir())
+                self.assertFalse(attempt.exists())
+            self.assertFalse(interrupted.exists())
+            self.assertTrue(other.is_dir())
+
     def test_quota_restore_preserves_dense_layout_unless_legacy_needs_space(self):
         # Local ordinary files exercise real tar extraction. Mock only ext4 quota,
         # ownership and observability that require root and mounted quota devices.

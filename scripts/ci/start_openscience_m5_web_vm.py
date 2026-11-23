@@ -11,6 +11,8 @@ import subprocess
 import verify_openscience_m5_quota as offline
 from openscience_m5_quota_inputs import stage_inputs
 from openscience_m5_native_storage import ssh_config_text
+from openscience_per_user_dev import write_atomic
+from prepare_openscience_m5_water_pool import DEDICATED, registered_pool, storage_lock
 
 BOOT = """#!/bin/sh
 set -eu
@@ -151,6 +153,7 @@ def build(work, registry, packages, evidence, base, modules):
 def pin_existing(work, base, port):
     data = {
         "format": "nexpoly-m5-isolated-browser-v1",
+        "storage": DEDICATED,
         "ssh_port": port,
         "base": str(base.resolve()),
         "media": {
@@ -158,8 +161,11 @@ def pin_existing(work, base, port):
             for name in ("kernel", "initrd", "seed.iso", "inputs.iso")
         },
     }
-    with (work / "vm.json").open("x") as pin:
-        json.dump(data, pin, sort_keys=True)
+    pin = work / "vm.json"
+    with storage_lock(work):
+        if pin.exists() or pin.is_symlink():
+            raise FileExistsError(pin)
+        write_atomic(pin, json.dumps(data, sort_keys=True).encode() + b"\n", 0o600)
 
 
 def resume(work):
@@ -219,11 +225,11 @@ def resume(work):
 
 
 def launch(work, port):
-    water = (work / "waterpool").exists()
-    if water:
-        from prepare_openscience_m5_water_pool import verify_layout
+    with storage_lock(work):
+        launch_pinned(work, port, registered_pool(work) is not None)
 
-        verify_layout(work)
+
+def launch_pinned(work, port, water):
     with socket.socket() as listener:
         # Match a restarting TCP listener: a completed loopback SSH connection
         # may still be in TIME_WAIT after the previous QEMU has exited.

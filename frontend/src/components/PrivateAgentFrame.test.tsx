@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { PrivateAgentFrame } from "./PrivateAgentFrame";
 
@@ -46,6 +46,26 @@ it("drops a ticket response arriving after the signed-in frame unmounts", async 
   complete(ticket());
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(submit).not.toHaveBeenCalled();
+});
+
+it("keeps a queued cold handoff hidden past the ticket TTL and honors the startup deadline", async () => {
+  vi.useFakeTimers();
+  try {
+    issue.mockResolvedValue(Response.json({ticket:"once", handoff_id:"queued",
+      exchange_url:origin + "/_nexpoly/auth/exchange", startup_timeout_seconds:90}));
+    const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+    render(<PrivateAgentFrame url={origin} />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(submit).toHaveBeenCalledOnce();
+    await act(() => vi.advanceTimersByTimeAsync(65_000));
+    expect((screen.getByTitle("智聚万物智能体工作台") as HTMLIFrameElement).hidden).toBe(true);
+    expect(screen.queryByRole("alert")).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(35_001));
+    expect(screen.getByText("工作区启动超时，请重试。")).toBeTruthy();
+    expect(screen.queryByTitle("智聚万物智能体工作台")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("shows a retryable capacity refusal before opening a workspace", async () => {

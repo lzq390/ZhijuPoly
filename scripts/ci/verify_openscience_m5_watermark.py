@@ -132,6 +132,9 @@ class Trial:
                     "low_observed", self.wait_observed("low", maximum=LOW_MIB * MIB)
                 )
                 self.record("kernel_blocked", self.pool("probe", "block"))
+                retained = self.record("low_reap", self.workspace("reap", OWNERS[0]))
+                require(retained["state"] == "running" and retained.get("reason") == "disk_recovery",
+                        "The idle reaper must retain the warm user's low-water recovery path")
                 self.signal("watermark-low")
                 wait_file(work / "watermark-browser-denied", process, 300)
                 denied = subprocess.run(
@@ -317,8 +320,22 @@ class Trial:
         )
         self.record("seed", self.pool("seed"))
         try:
-            with web_stack("src", args):
+            with web_stack("src", args, args.combined_gateway_image, verify_retries=bool(args.combined_gateway_image)) as stack:
                 self.browser()
+                if args.combined_gateway_image:
+                    self.record("combined_services", {
+                        key: stack[key] for key in ("gateway_image", "adapter_images", "model_manifest_sha256", "quota_files")
+                    })
+                    for stage in ("m3_adapters", "m3", "m4"):
+                        output = args.work / (stage + ".json")
+                        with (args.work / (stage + ".log")).open("x") as log:
+                            subprocess.run(
+                                ["node", ROOT / f"scripts/ci/verify_openscience_{stage}.mjs",
+                                 "--state", args.state, "--output", output],
+                                stdout=log, stderr=subprocess.STDOUT, check=True,
+                            )
+                        require(json.loads(output.read_bytes())["status"] == "passed", f"{stage} browser verification failed")
+                        self.record(stage + "_verification", "passed")
         finally:
             # Only release the operator fixture on the pinned private pool.
             self.record("operator_cleanup", self.pool("release"))
@@ -341,6 +358,8 @@ def main():
         "--work", type=Path, required=True, help="New private checkpoint directory"
     )
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--combined-gateway-image",
+                        help="Also verify six gateway tools, both adapters, model and knowledge on this quota candidate")
     parser.add_argument(
         "--state",
         type=Path,

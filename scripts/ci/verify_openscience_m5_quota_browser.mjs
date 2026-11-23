@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, open, readFile, realpath, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { posix, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { developmentBrowser } from "./openscience_dev_browser.mjs";
 
@@ -16,7 +16,10 @@ const state = resolve(option("--state"));
 const phase = option("--phase");
 const stack = JSON.parse(await readFile(resolve(state, "running.json"), "utf8"));
 assert.equal(stack.quota_files, true, "Only a quota-backed clone can run the browser drill");
-assert.ok(["full", "readback", "watermark"].includes(phase));
+assert.ok(["full", "readback", "watermark", "rollback-full"].includes(phase));
+const rollback = phase === "rollback-full";
+const runId = rollback ? option("--run-id") : "";
+if (rollback) assert.match(runId, /^[a-f0-9]{32}$/);
 const markers = resolve(option("--markers"));
 const dir = await lstat(markers);
 assert.equal(await realpath(markers), markers, "Marker directory and its parents must be real directories");
@@ -34,11 +37,11 @@ async function exists(path) {
     return false;
   }
 }
-if (phase === "full" && ((await exists(ready)) || (await exists(full)))) throw Error("Stale quota drill markers");
+if ((phase === "full" || rollback) && ((await exists(ready)) || (await exists(full)))) throw Error("Stale quota drill markers");
 
 const project = "/openscience/files/projects/same-project";
 const notebook = "notebook.txt";
-const release = phase === "watermark" ? "m5-watermark-release.txt" : "m5-release.txt";
+const release = rollback ? "m5-rb-" + runId + "-release.txt" : phase === "watermark" ? "m5-watermark-release.txt" : "m5-release.txt";
 // The dedicated PostgreSQL seed verifies these existing account IDs on each run.
 const owners = {
   "test-user-a": "10000000-0000-4000-8000-000000000001",
@@ -57,27 +60,54 @@ function stage(label) {
   console.error("[M5]", label);
 }
 
-// Match the response to the very action clicked, including its selected file.
+// The native SDK can use the project itself or an enclosing workspace
+// directory plus a relative path. Match the resolved on-volume target.
+function requestedPath(req) {
+  const url = new URL(req.url());
+  const directory = url.searchParams.get("directory") || req.headers()["x-openscience-directory"] || "";
+  let base;
+  try { base = decodeURIComponent(directory); } catch { return; }
+  if (!posix.isAbsolute(base)) return;
+  const path = req.method() === "GET" ? url.searchParams.get("path") : req.postDataJSON()?.path;
+  return posix.resolve(base, typeof path === "string" ? path : ".");
+}
+
 function operation(frame, method, name) {
   return frame.page().waitForResponse(response => {
     const req = response.request(), url = new URL(response.url());
-    if (req.method() !== method || url.origin !== stack.agent || !url.pathname.endsWith("/file/content")) return false;
-    const path = method === "GET" ? url.searchParams.get("path") : req.postDataJSON()?.path;
-    const dir = url.searchParams.get("directory") || req.headers()["x-openscience-directory"] || "";
-    return (dir === project || decodeURIComponent(dir) === project) && (path === name || path === project + "/" + name);
+    return req.method() === method && url.origin === stack.agent && url.pathname === "/openscience-api/file/content"
+      && requestedPath(req) === project + "/" + name;
   }, {timeout: 90000});
 }
-async function readVisible(frame, expected) {
+function fileToolbar(frame, filename) {
+  // The November UI retains an editor for every open file and hides inactive tabs.
+  return frame.getByRole("button", {name: "删除文件", exact: true}).locator("..")
+    .filter({has: frame.getByText(filename, {exact: true})});
+}
+
+async function editableFile(frame, filename) {
+  const toolbar = fileToolbar(frame, filename);
+  const document = toolbar.locator("..");
+  // Refresh temporarily replaces the content pane with a loading indicator.
+  // The toolbar and its edit-mode flag remain mounted during that interval.
+  await document.locator(".atlas-file-content:visible").waitFor();
+  const edit = toolbar.locator('button[title="edit source"]');
+  if (await edit.isVisible()) await edit.click();
+  const field = document.locator("textarea.atlas-scroll:visible");
+  await field.waitFor();
+  return field;
+}
+
+async function readVisible(frame, expected, filename = notebook) {
   const [reply] = await Promise.all([
-    operation(frame, "GET", notebook),
-    frame.getByRole("button", {name: "删除文件", exact: true}).locator("..").locator('button[title="refresh"]').click(),
+    operation(frame, "GET", filename),
+    fileToolbar(frame, filename).locator('button[title="refresh"]').click(),
   ]);
   assert.equal(reply.status(), 200);
   assert.equal((await reply.json()).content, expected);
-  const editor = frame.locator("textarea.atlas-scroll:visible");
-  if (!(await editor.count())) await frame.locator('button[title="edit source"]:visible').click();
+  await editableFile(frame, filename);
   await frame.waitForFunction(value => [...document.querySelectorAll("textarea.atlas-scroll")]
-    .some(node => node.getClientRects().length && node.value === value), expected, {timeout: 15000});
+    .some(node => node.getClientRects().length && node.value === value), expected, {polling: 100, timeout: 15000});
 }
 async function projectFileList(frame) {
   const pathBar = frame.locator('input[placeholder="/absolute/path"]:visible');
@@ -85,41 +115,47 @@ async function projectFileList(frame) {
   await pathBar.waitFor();
   return pathBar.locator("../../..");
 }
+function fileRow(panel, name) {
+  // November list and grid views both expose the real absolute path as the row's title.
+  return panel.getByRole("button").and(panel.getByTitle(project + "/" + name, {exact: true}));
+}
 async function selectProjectFile(frame, panel, name) {
-  await panel.getByText(name, {exact: true}).click({timeout: 90000});
-  const toolbar = frame.getByRole("button", {name: "删除文件", exact: true}).locator("..");
-  await toolbar.getByText(name, {exact: true}).waitFor();
+  await fileRow(panel, name).click({timeout: 15000});
+  await fileToolbar(frame, name).waitFor();
 }
 async function openProjectFile(frame, name) {
   const panel = await projectFileList(frame);
-  if (!(await panel.getByText(name, {exact: true}).isVisible()))
+  if (!(await fileRow(panel, name).isVisible())) {
     await panel.locator('button[title="refresh"]').click();
+  }
   await selectProjectFile(frame, panel, name);
 }
 async function refreshProjectFileList(frame, panel) {
-  const [response] = await Promise.all([
-    frame.page().waitForResponse(r => {
-      const url = new URL(r.url()), req = r.request();
-      const dir = url.searchParams.get("directory") || req.headers()["x-openscience-directory"] || "";
+  // Follow the request *started by this refresh*, not a late response to
+  // a previous directory, tab activation or automatic load.
+  const [request] = await Promise.all([
+    frame.page().waitForRequest(req => {
+      const url = new URL(req.url());
       return req.method() === "GET" && url.origin === stack.agent && url.pathname === "/openscience-api/file"
-        && (dir === project || decodeURIComponent(dir) === project);
-    }, {timeout: 90000}),
+        && requestedPath(req) === project;
+    }, {timeout: 20000}),
     panel.locator('button[title="refresh"]').click(),
   ]);
-  assert.equal(response.status(), 200);
+  const response = await request.response();
+  assert.equal(response?.status(), 200, "The explicitly selected project directory must be readable");
+  return response;
 }
-async function save(frame, value) {
-  const editor = frame.locator("textarea.atlas-scroll:visible");
-  if (!(await editor.count())) await frame.locator('button[title="edit source"]:visible').click();
+async function save(frame, value, filename = notebook) {
+  const editor = await editableFile(frame, filename);
   await editor.fill(value);
   const [reply] = await Promise.all([
-    operation(frame, "PUT", notebook),
-    frame.getByRole("button", {name: "save", exact: true}).click(),
+    operation(frame, "PUT", filename),
+    fileToolbar(frame, filename).getByRole("button", {name: "save", exact: true}).click(),
   ]);
   return {status: reply.status(), body: await reply.json()};
 }
 
-async function removeFile(frame, release) {
+async function removeFile(frame, release, nextFile = notebook) {
   await openProjectFile(frame, release);
   const button = frame.getByRole("button", {name: "删除文件", exact: true});
   await button.click();
@@ -136,8 +172,69 @@ async function removeFile(frame, release) {
   const files = await projectFileList(frame);
   await refreshProjectFileList(frame, files);
   await files.getByText(release, {exact: true}).waitFor({state: "detached"});
-  await selectProjectFile(frame, files, notebook);
+  await selectProjectFile(frame, files, nextFile);
   return deleted;
+}
+
+// Rollback reads the persisted bytes through the same authenticated endpoints
+// as the editor. The interactive editor is exercised by the full and watermark phases.
+async function rollbackFile(frame, method, name, content) {
+  return frame.evaluate(async ({project, method, name, content}) => {
+    const query = new URLSearchParams({directory: project});
+    const headers = {"x-openscience-directory": project};
+    const options = {method, headers};
+    if (method === "GET") query.set("path", name);
+    else {
+      headers["Content-Type"] = "application/json";
+      options.body = JSON.stringify({path: name, content});
+    }
+    const res = await fetch("/openscience-api/file/content?" + query, options);
+    return {status: res.status, body: await res.json()};
+  }, {project, method, name, content});
+}
+
+async function rollbackRead(frame, expected, filename = notebook) {
+  const r = await rollbackFile(frame, "GET", filename);
+  report.last_file_check = {status: r.status, expected_sha256: sha(expected),
+    received_sha256: typeof r.body.content === "string" ? sha(r.body.content) : null};
+  assert.equal(r.status, 200);
+  assert.equal(r.body.content, expected, "Rollback file must match its owner's retained bytes");
+  delete report.last_file_check;
+}
+
+async function verifyRetainedTurns(people) {
+  const candidate = resolve(option("--candidate-reports"));
+  const reports = await Promise.all(["m3", "m4"].map(async stage =>
+    JSON.parse(await readFile(resolve(candidate, stage + ".json"), "utf8"))));
+  for (const record of reports) assert.equal(record.status, "passed");
+  const sessions = tag => [reports[0].users[tag].workspace_session, reports[1].users[tag].model.workspace_session];
+  const evidence = {};
+  for (const [index, tag, peer] of [[0, "a", "b"], [1, "b", "a"]]) {
+    const model = reports[1].users[tag].model;
+    const own = sessions(tag), foreign = sessions(peer);
+    for (const value of [...own, ...foreign]) assert.match(value, /^ses_[a-zA-Z0-9_-]+$/);
+    const observed = await people[index].f.evaluate(async ({own, foreign, turn}) => {
+      const get = async path => {
+        const query = new URLSearchParams({directory:"/openscience/files/general"});
+        const response = await fetch("/openscience-api/session" + path + "?" + query);
+        if (response.status !== 200) throw Error("Private rollback history returned " + response.status);
+        return response.json();
+      };
+      const ids = new Set((await get("")).map(row => row.id));
+      const tool = await get("/" + own[0] + "/message");
+      const history = await get("/" + own[1] + "/message");
+      const answer = history.filter(m => m.info.role === "assistant" && m.info.parentID === turn)
+        .flatMap(m => m.parts.filter(p => p.type === "text" && !p.synthetic).map(p => p.text)).join("").trim();
+      return {own:own.filter(id => ids.has(id)).length, foreign:foreign.filter(id => ids.has(id)).length,
+        tool:tool.some(m => m.parts.some(p => p.type === "tool")), answer};
+    }, {own, foreign, turn:model.turn_id});
+    assert.equal(observed.own, 2);
+    assert.equal(observed.foreign, 0);
+    assert.equal(observed.tool, true);
+    assert.equal(sha(observed.answer), model.answer_sha256);
+    evidence[tag] = {own_sessions:2, foreign_sessions:0, completed_tool_history:true, model_answer_sha256:model.answer_sha256};
+  }
+  return evidence;
 }
 
 async function verifyWatermark(signIn, openNotebook) {
@@ -210,7 +307,9 @@ async function verifyWatermark(signIn, openNotebook) {
   async function verifyAndRestore(frame, user) {
     stage("Save and read at recovered water level for " + user);
     const value = change(user);
+    const start = Date.now();
     const written = await save(frame, value);
+    const completed = Date.now();
     assert.equal(written.status, 200);
     try {
       assert.equal(written.body.content, value);
@@ -220,12 +319,17 @@ async function verifyWatermark(signIn, openNotebook) {
       assert.equal(restored.status, 200);
       await readVisible(frame,updated(user));
     }
-    return {save:written.status,read:200,written_sha256:sha(value),baseline_restored_sha256:sha(updated(user))};
+    return {save:written.status,read:200,save_ms:completed-start,save_completed_ms:completed,
+      written_sha256:sha(value),baseline_restored_sha256:sha(updated(user))};
   }
-  report.stages.a_recovered = {same_save_retried:true,...await verifyAndRestore(a, aUser)};
   stage("B retries the cold workspace launch from the same logged-in page after recovery");
   activePage = bPage;
-  await retry.click();
+  const exchange = r => new URL(r.url()).pathname === "/_nexpoly/auth/exchange";
+  const exchangeDone = bPage.waitForResponse(exchange).then(() => Date.now());
+  await Promise.all([bPage.waitForRequest(exchange), retry.click()]);
+  const [saved, exchangeCompleted] = await Promise.all([verifyAndRestore(a, aUser), exchangeDone]);
+  report.stages.a_recovered = {same_save_retried:true,...saved,
+    saved_before_b_exchange_completed:saved.save_completed_ms <= exchangeCompleted};
   const b = await openNotebook(bPage, bUser, updated(bUser));
   report.stages.b_recovered = {cold_start_retried:true,...await verifyAndRestore(b, bUser)};
 }
@@ -290,8 +394,11 @@ try {
     stage("Read the original project conversation for " + user);
     await f.getByText("M1 synthetic " + user + " project prompt", {exact: true}).first().waitFor({timeout: 150000});
     stage("Project opened, read notebook for " + user);
-    await openProjectFile(f, notebook);
-    await readVisible(f, expected);
+    if (rollback) await rollbackRead(f, expected);
+    else {
+      await openProjectFile(f, notebook);
+      await readVisible(f, expected);
+    }
     stage("Notebook verified for " + user);
     report.stages[user] = {real_login: true, user_id: owners[user], project_conversation_visible: true, notebook_sha256: sha(expected)};
     return f;
@@ -299,14 +406,39 @@ try {
   const people = [];
   if (phase === "watermark") {
     await verifyWatermark(signIn, openNotebook);
+  } else if (rollback) {
+    const started = Date.now();
+    const pages = await Promise.all(users.map(async user => {
+      const page = await signIn(user);
+      const f = await driver.workbench(page);
+      return {user, page, f, readyMs: Date.now() - started};
+    }));
+    report.stages.concurrent_login_to_frame_ms = Object.fromEntries(pages.map(p => [p.user, p.readyMs]));
+    stage("Verify retained candidate tool and model conversations in both authenticated workspaces");
+    report.stages.retained_candidate_turns = await verifyRetainedTurns(pages);
+    for (const {user, page} of pages) {
+      people.push({f: await openNotebook(page, user, updated(user))});
+    }
   } else {
     for (const user of users) {
       const page = await signIn(user);
       people.push({f: await openNotebook(page, user, phase === "full" ? original(user) : updated(user))});
     }
   }
-  if (phase === "full") {
+  if (phase === "full" || rollback) {
     const [{f: a}, {f: b}] = people;
+    const filename = rollback ? "m5-rb-" + runId + "-edit.txt" : notebook;
+    const initial = rollback ? user => "M5 rollback " + runId + " " + user + "\n" : original;
+    const next = rollback ? user => initial(user) + "saved\n" : updated;
+    const readFileContent = rollback ? rollbackRead : readVisible;
+    const saveFile = rollback ? (frame, value, name) => rollbackFile(frame, "PUT", name, value) : save;
+    if (rollback) {
+      report.stages.file_interface = "real browser login, authenticated native file API";
+      for (let i = 0; i < users.length; i++) {
+        stage("Verify the seeded rollback file for " + users[i]);
+        await readFileContent(people[i].f, initial(users[i]), filename);
+      }
+    }
     activePage = a.page();
     stage("Wait for A to reach the kernel quota");
     await writeFile(ready, "both browsers ready\n", {flag: "wx", mode: 0o600});
@@ -315,37 +447,55 @@ try {
       if (Date.now() >= deadline) throw Error("Timed out waiting for the clone's kernel quota fill");
       await sleep(250);
     }
-    await readVisible(a, original(users[0]));
+    await readFileContent(a, initial(users[0]), filename);
     stage("A attempts to save at hard quota");
-    const refused = await save(a, updated(users[0]));
+    const refused = await saveFile(a, next(users[0]), filename);
     assert.equal(refused.status, 507);
     assert.equal(refused.body.error, "workspace_quota_exceeded");
-    await a.getByText("工作区磁盘配额已用完。删除文件后可重试。").first().waitFor();
-    await readVisible(a, original(users[0]));
+    if (!rollback) await a.getByText("工作区磁盘配额已用完。删除文件后可重试。").first().waitFor();
+    await readFileContent(a, initial(users[0]), filename);
     report.stages.a_full = {save_status: 507, code: refused.body.error, original_read_after_failed_save: true};
 
     activePage = b.page();
     stage("B saves while A is full");
-    const independent = await save(b, updated(users[1]));
+    const independent = await saveFile(b, next(users[1]), filename);
     assert.equal(independent.status, 200);
-    assert.equal(independent.body.content, updated(users[1]));
-    await readVisible(b, updated(users[1]));
+    assert.equal(independent.body.content, next(users[1]));
+    await readFileContent(b, next(users[1]), filename);
     activePage = a.page();
-    const stillFull = await save(a, updated(users[0]));
+    const stillFull = await saveFile(a, next(users[0]), filename);
     assert.equal(stillFull.status, 507);
     assert.equal(stillFull.body.error, "workspace_quota_exceeded");
-    await readVisible(a, original(users[0]));
-    report.stages.b_while_a_full = {save_status: 200, notebook_sha256: sha(updated(users[1])), a_still_full_status: 507};
+    await readFileContent(a, initial(users[0]), filename);
+    report.stages.b_while_a_full = {save_status: 200, file: filename, notebook_sha256: sha(next(users[1])), a_still_full_status: 507};
 
     stage("A reclaims space and retries the save");
-    const deleted = await removeFile(a, release);
+    let deletedStatus, absence;
+    if (rollback) {
+      const deleted = await rollbackFile(a, "DELETE", release);
+      assert.deepEqual(deleted, {status: 200, body: {deleted: true}});
+      deletedStatus = deleted.status;
+      const repeated = await rollbackFile(a, "DELETE", release);
+      assert.deepEqual(repeated, {status: 404, body: {error: "file_missing"}});
+      absence = {repeat_delete_status: repeated.status};
+    } else {
+      deletedStatus = (await removeFile(a, release, filename)).status();
+      absence = {refreshed_list_status: 200, absent_from_refreshed_list: true};
+    }
     stage("A retries the same save after deleting the release file");
-    const retried = await save(a, updated(users[0]));
+    const retried = await saveFile(a, next(users[0]), filename);
     assert.equal(retried.status, 200);
-    assert.equal(retried.body.content, updated(users[0]));
-    await readVisible(a, updated(users[0]));
-    report.stages.a_recovered = {removed_in_browser: release, delete_status: deleted.status(), refreshed_list_status: 200,
-      absent_from_refreshed_list: true, same_save_retried: true, save_status: retried.status, notebook_sha256: sha(updated(users[0]))};
+    assert.equal(retried.body.content, next(users[0]));
+    await readFileContent(a, next(users[0]), filename);
+    report.stages.a_recovered = {removed_in_browser: release, delete_status: deletedStatus, ...absence, same_save_retried: true, save_status: retried.status, file: filename, notebook_sha256: sha(next(users[0]))};
+    if (rollback) {
+      for (let i = 0; i < users.length; i++) {
+        await readFileContent(people[i].f, updated(users[i]));
+      }
+      report.stages.retained_notebooks = Object.fromEntries(users.map(user => [user, sha(updated(user))]));
+      assert.deepEqual(await verifyRetainedTurns(people), report.stages.retained_candidate_turns,
+        "The same private candidate conversations must remain readable after quota recovery");
+    }
   }
   report.status = "passed";
   delete report.step;

@@ -457,7 +457,7 @@ def trial():
         for role in ROLES:
             row = users[role]
             workspace = volumes[("src", role)] / "workspace"
-            receipt = bundle.backup(workspace.parent, row, BACKUP / role)
+            receipt = bundle.backup(workspace.parent, row, BACKUP / role, reserve_bytes=bundle.DRILL_BACKUP_FLOOR)
             expected = inventory(workspace, row)
             check(receipt["inventory"] == expected, "Backup archive inventory differs")
             packages[role] = receipt["manifest_sha256"]

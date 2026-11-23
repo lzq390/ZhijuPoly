@@ -1,8 +1,9 @@
-"""Prepare a read-only M3 overlay from the exact retained M1 image."""
+"""Prepare a read-only tooling overlay for the reviewed November workspace runtime."""
 
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -20,9 +21,46 @@ def anchor(source, old, new):
     return source.replace(old, new)
 
 
-def prepare(root, registry, adapters=False, m4=False):
-    if json.loads((registry / "registry.json").read_text())["image"] != IMAGE:
-        raise ValueError("The M3 overlay requires the verified M1 image")
+def reviewed_image(image):
+    if image == IMAGE:
+        return
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+        raise ValueError("Expected immutable development image ID")
+    # A release may have a new digest for its build metadata alone. Retain
+    # the original scoped-runtime pin for changes to executable code/config.
+    original, candidate = json.loads(subprocess.check_output(["docker", "image", "inspect", IMAGE, image]))
+
+    def runtime(data):
+        config = dict(data["Config"])
+        config.pop("Labels", None)
+        return data["RootFS"], data["Architecture"], data["Os"], data.get("Variant"), config
+
+    if runtime(original) != runtime(candidate):
+        raise ValueError("The scoped workspace requires an explicitly reviewed runtime image")
+
+
+def model_settings(fixture=None):
+    protocols = {"m4local": "@ai-sdk/openai-compatible", "m4local-responses": "@ai-sdk/openai"}
+    providers = {
+        name: {
+            "npm": sdk,
+            "name": "Qwen2.5-7B · " + ("Responses" if name.endswith("-responses") else "Chat Completions"),
+            "options": {"baseURL": "http://m4-model.invalid/v1", "apiKey": "local-transport", "timeout": 300000},
+            "models": {"qwen2.5-7b": {"name": "Qwen2.5-7B", "limit": {"context": 16384, "output": 12}}},
+        } for name, sdk in protocols.items()
+    }
+    if fixture is not None:
+        providers["m0fixture"] = fixture
+    # The November runtime titles each turn via the global small_model, including
+    # deterministic M3 tool calls. Only the explicit verification stack uses a local title model.
+    main = "m4local/qwen2.5-7b"
+    return dict(model=main, small_model="m0fixture/m0" if fixture is not None else main,
+                enabled_providers=list(providers), provider=providers)
+
+
+def prepare(root, registry, adapters=False, m4=False, verify_retries=False):
+    image = json.loads((registry / "registry.json").read_text())["image"]
+    reviewed_image(image)
     root.mkdir()
     cid = subprocess.check_output(
         [
@@ -33,7 +71,7 @@ def prepare(root, registry, adapters=False, m4=False):
             "none",
             "--entrypoint",
             "/bin/true",
-            IMAGE,
+            image,
         ],
         text=True,
     ).strip()
@@ -158,26 +196,14 @@ def prepare(root, registry, adapters=False, m4=False):
         }
     )
     if m4:
-        # The transport container exposes only the API relay. Model calls go via the
-        # SDK Unix socket, which requires a live turn and carries no provider key.
-        (root / "model.py").write_text(
-            "import asyncio, runpy\nasyncio.run(runpy.run_path('/m2-loopback.py')['main']())\n"
-        )
-        protocols = {"m4local": "@ai-sdk/openai-compatible", "m4local-responses": "@ai-sdk/openai"}
-        config.update(
-            model="m4local/qwen2.5-7b",
-            small_model="m4local/qwen2.5-7b",
-            enabled_providers=list(protocols),
-            provider={
-                provider: {
-                    "npm": sdk,
-                    "name": "Qwen2.5-7B · " + ("Responses" if provider.endswith("-responses") else "Chat Completions"),
-                    "options": {"baseURL": "http://m4-model.invalid/v1", "apiKey": "local-transport", "timeout": 300000},
-                    "models": {"qwen2.5-7b": {"name": "Qwen2.5-7B", "limit": {"context": 16384, "output": 12}}},
-                }
-                for provider, sdk in protocols.items()
-            },
-        )
+        # Qwen always uses its delegated Unix socket. The isolated retry drill
+        # also keeps the deterministic, loopback-only M3 tool-selection model.
+        if not verify_retries:
+            (root / "model.py").write_text(
+                "import asyncio, runpy\nasyncio.run(runpy.run_path('/m2-loopback.py')['main']())\n"
+            )
+        fixture = config["provider"]["m0fixture"] if verify_retries else None
+        config.update(model_settings(fixture))
         for tool in [
             "knowledge_service_kb_search",
             "knowledge_service_kb_read_citation",
@@ -185,6 +211,8 @@ def prepare(root, registry, adapters=False, m4=False):
             config["permission"][tool] = "allow"
             config["permission"]["mcp"][tool] = "allow"
     (root / "config.json").write_text(json.dumps(config))
+    if image != IMAGE:
+        (root / "workspace-image").write_text(image + "\n")
     root.chmod(0o755)
     for f in root.iterdir():
         f.chmod(0o444)

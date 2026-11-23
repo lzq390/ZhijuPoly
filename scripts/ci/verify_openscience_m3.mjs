@@ -5,7 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
-import { developmentBrowser } from "./openscience_dev_browser.mjs";
+import { developmentBrowser, retainedBindings } from "./openscience_dev_browser.mjs";
 
 function option(name) {
   const i = process.argv.indexOf(name);
@@ -18,10 +18,14 @@ const stack = JSON.parse(
   await readFile(resolve(state, "running.json"), "utf8"),
 );
 assert.match(stack.gateway_image, /^sha256:[a-f0-9]{64}$/);
+const registry = JSON.parse(await readFile(resolve(stack.registry, "registry.json"), "utf8"));
+const bindings = retainedBindings(stack, registry);
 const { browser, device, app, login, logout, workbench } =
   await developmentBrowser(state, stack);
 const report = {
   environment: "dev-m1",
+  workspace_image: registry.image,
+  workspace_bindings: bindings,
   start: new Date().toISOString(),
   browser: browser.version(),
   gateway_base:

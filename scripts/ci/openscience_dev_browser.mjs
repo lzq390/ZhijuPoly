@@ -6,6 +6,32 @@ import { resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 const require = createRequire(new URL("../../frontend/package.json", import.meta.url));
 const { chromium } = require("playwright");
+
+export function retainedBindings(stack, registry) {
+  const users = ["test-user-a", "test-user-b"];
+  assert.deepEqual(Object.keys(stack.user_volumes).sort(), users);
+  const bindings = {};
+  for (const user of users) {
+    const owner = "dev-m1/" + user;
+    const row = registry.workspaces[owner], volume = stack.user_volumes[user];
+    assert.ok(row.initialized && row.uid > 0);
+    if (stack.quota_files) {
+      const pin = registry.quota_storage[owner], endpoint = registry.nfs_endpoints[owner];
+      assert.deepEqual([pin.environment, pin.user_id, pin.workspace, pin.uid], ["dev-m1", user, row.id, row.uid]);
+      assert.ok(["src-", "dst-"].some(prefix => endpoint.slot === prefix + user.at(-1)));
+      assert.match(endpoint.run_id, /^[0-9a-f]{12}$/);
+      assert.equal(endpoint.volume, "nexpoly-m5-" + endpoint.run_id + "-" + endpoint.slot);
+      assert.equal(volume, endpoint.volume);
+    } else {
+      assert.equal(volume, "nexpoly-m1-" + registry.deployment.slice(0, 12) + "-" + row.id + "-data");
+    }
+    bindings[user] = { workspace_id: row.id, uid: row.uid, volume };
+  }
+  for (const field of ["workspace_id", "uid", "volume"])
+    assert.notEqual(bindings[users[0]][field], bindings[users[1]][field]);
+  return bindings;
+}
+
 export async function developmentBrowser(state, stack) {
   const A = "test-user-a";
   const authorizedContexts = [];
@@ -72,7 +98,8 @@ export async function developmentBrowser(state, stack) {
       .waitFor();
   }
   async function workbench(p) {
-    const end = Date.now() + 65000;
+    const startupMs = (stack.startup_timeout_seconds ?? 50) * 1000;
+    const end = Date.now() + startupMs + 15000;
     while (Date.now() < end) {
       const f = p.frames().find((x) => x.url().startsWith(agent + "/") && !x.url().includes("/_nexpoly/"));
       if (
@@ -88,6 +115,8 @@ export async function developmentBrowser(state, stack) {
           .catch(() => false))
       )
         return f;
+      const refused = p.getByRole("alert").filter({has:p.getByRole("button", {name:"重试", exact:true})});
+      if (await refused.isVisible()) throw Error("Workspace handoff failed: " + (await refused.innerText()));
       await sleep(150);
     }
     throw Error("Authenticated November workspace did not render");

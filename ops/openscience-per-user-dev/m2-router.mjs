@@ -59,12 +59,12 @@ async function body(req, limit) {
   }
   return Buffer.concat(parts)
 }
-function rpc(socketPath, data) {
+function rpc(socketPath, data, timeoutMs = 35000) {
   return new Promise((accept, reject) => {
     const client = net.createConnection(socketPath)
     let result = ""
     client.setEncoding("utf8")
-    client.setTimeout(35000, () => client.destroy(new Error("workspace_timeout")))
+    client.setTimeout(timeoutMs, () => client.destroy(new Refusal(503, "workspace_timeout")))
     client.on("connect", () => client.write(JSON.stringify(data) + "\n"))
     client.on("error", reject)
     client.on("data", chunk => {
@@ -116,6 +116,9 @@ async function pinnedUi(uiRoot, parents) {
   return {boot, index, patchedApp}
 }
 export async function startRouter(c, loadUi = pinnedUi) {
+  const startupSeconds = c.startup_timeout_seconds ?? 35
+  if (!Number.isInteger(startupSeconds) || startupSeconds < 1 || startupSeconds > 605)
+    throw Error("Invalid supervisor startup deadline")
   const origin = new URL(c.public_origin)
   const parents = c.parent_origins
   if (c.environment !== "dev-m1" || origin.origin !== c.public_origin || origin.port !== String(c.listen_port) ||
@@ -128,10 +131,6 @@ export async function startRouter(c, loadUi = pinnedUi) {
   const {boot, index:baseIndex, patchedApp} = await loadUi(uiRoot, parents)
   const developmentAssets = new Map()
   let index = baseIndex
-  if (c.quota_files === true) {
-    const {installQuotaUi} = await import("./quota-ui.mjs")
-    await installQuotaUi(developmentAssets, uiRoot)
-  }
   if (c.m3?.adapters) {
     for (const file of ["results-controller.mjs","results-view.mjs","results-view.css"]) {
       developmentAssets.set("/assets/m3/"+file, await readFile(resolve(HERE,"../openscience-mcp-dev",file)))
@@ -143,6 +142,10 @@ export async function startRouter(c, loadUi = pinnedUi) {
     developmentAssets.set(knowledgeChunk, await privateKnowledgeChunk(uiRoot))
     developmentAssets.set("/assets/m4/knowledge-ui.mjs", await readFile(resolve(HERE,"../openscience-m4-dev/knowledge-ui.mjs")))
     index = index.replace("</head>", '<script type="module" src="/assets/m4/knowledge-ui.mjs"></script></head>')
+  }
+  if (c.quota_files === true) {
+    const {installQuotaUi} = await import("./quota-ui.mjs")
+    await installQuotaUi(developmentAssets, uiRoot)
   }
   const pages = new Map(), profiles = new Map(), startups = new Map()
   const secure = origin.protocol === "https:"
@@ -193,7 +196,7 @@ export async function startRouter(c, loadUi = pinnedUi) {
   }
   function workspace(owner) {
     if (!startups.has(owner)) {
-      startups.set(owner, rpc(c.supervisor_socket, {operation:"ensure",environment:c.environment,user_id:owner})
+      startups.set(owner, rpc(c.supervisor_socket, {operation:"ensure",environment:c.environment,user_id:owner}, startupSeconds * 1000)
         .then(async r => {
           if (r.environment !== c.environment || r.user_id !== owner || r.state !== "running" || !/^[0-9a-f]{32}$/.test(r.workspace))
             throw new Refusal(503,"workspace_unavailable")
@@ -252,11 +255,26 @@ export async function startRouter(c, loadUi = pinnedUi) {
         if (prior && prior.login !== r.session_id)
           for (const page of pages.values()) if (page.profile === profile && page.login !== r.session_id) retire(page)
       }
-      const route = await workspace(r.workspace_user_id)
-      const current = await auth("sessions/validate", {agent_session:r.agent_session})
-      if (current.session_id !== r.session_id || current.user_id !== r.user_id || current.workspace_user_id !== r.workspace_user_id ||
-          current.environment !== c.environment || profiles.get(profile)?.login !== r.session_id || !(expires(current) > Date.now()))
-        throw new Refusal(401,"stale_handoff")
+      const recheck = async () => {
+        const current = await auth("sessions/validate", {agent_session:r.agent_session})
+        if (current.session_id !== r.session_id || current.user_id !== r.user_id || current.workspace_user_id !== r.workspace_user_id ||
+            current.environment !== c.environment || profiles.get(profile)?.login !== r.session_id || !(expires(current) > Date.now()))
+          throw new Refusal(401,"stale_handoff")
+        return current
+      }
+      // No page or cookie exists while waiting. A shared ensure can finish even
+      // when one login expires. Recheck each waiting login on its own deadline.
+      const startup = workspace(r.workspace_user_id)
+      let grant = r, route
+      while (!route) {
+        let timer
+        try {
+          const interval = Math.max(100, Math.min(20000, expires(grant) - Date.now()))
+          route = await Promise.race([startup, new Promise(done => {timer = setTimeout(done, interval)})])
+        } finally { clearTimeout(timer) }
+        grant = await recheck()
+      }
+      const current = grant
       const key = id(), cookie = id()
       pages.set(key, {key,cookie,grant:r.agent_session,login:r.session_id,user:r.user_id,owner:r.workspace_user_id,profile,
         checked:Date.now(),until:expires(current),expiry:Number(current.expires_at)*1000,route,active:new Set()})

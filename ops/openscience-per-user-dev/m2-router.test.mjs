@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { once } from "node:events"
+import { EventEmitter, once } from "node:events"
 import { copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import http from "node:http"
 import net from "node:net"
@@ -47,6 +47,7 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
   t.after(() => stop(authority))
   const owners = new Map(), disconnected = new Set()
   let capacityRefusal
+  let startupPause
   let diskAdmission, nativeOwner, forwardedCount = 0
   const checkedOwners = []
   let repairs = 0, writes = 0, fileDeletes = 0
@@ -76,7 +77,7 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
     t.after(() => stop(backend))
     owners.set(owner,workspace)
   }
-  const supervisor = await listen(net.createServer(socket => socket.once("data", raw => {
+  const supervisor = await listen(net.createServer(socket => socket.once("data", async raw => {
     const r = JSON.parse(raw)
     if (r.operation === "check-write") {
       checkedOwners.push(r.user_id)
@@ -85,6 +86,10 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
       return
     }
     assert.equal(r.operation, "ensure")
+    if (startupPause && r.user_id === "test-user-b") {
+      startupPause.emit("started")
+      await once(startupPause, "release")
+    }
     if (r.user_id === "test-user-b" && capacityRefusal) {
       socket.end(JSON.stringify({ok:false,error:"workspace_capacity: " + capacityRefusal})+"\n")
       return
@@ -212,6 +217,43 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
     assert.deepEqual(await (await read(a,"/openscience-api/session")).json(),{owner:"test-user-a"})
   }
   capacityRefusal = undefined
+  // Two logins can share one pending ensure. Revoking one must end that
+  // exchange before startup finishes, without issuing a cookie or page.
+  startupPause = new EventEmitter()
+  const started = once(startupPause, "started")
+  const issued = Date.now() / 1000
+  const pending = exchange("waiting-revoked","test-user-b","browser_waiting_1",issued,issued,1.5)
+  await started
+  const stillAllowed = exchange("waiting-allowed","test-user-b","browser_waiting_2",issued)
+  for (const entry of logins.values()) if (entry.session_id === "waiting-revoked") entry.revoked = true
+  let revoked
+  try {
+    revoked = await pending
+    assert.match(revoked.html, /session_expired/)
+    assert.equal(revoked.page, undefined)
+    assert.equal(revoked.cookie, undefined)
+  } finally {
+    startupPause.emit("release")
+    startupPause = undefined
+  }
+  assert.ok((await stillAllowed).page)
+  await t.test("a bounded startup timeout returns a retryable refusal without a page", async () => {
+    const reserved = await listen(net.createServer(), 0, "127.0.0.1")
+    const port = reserved.address().port, origin = "http://127.0.0.1:" + port
+    await stop(reserved)
+    const bounded = await startRouter({...config, public_origin:origin, listen_port:port, startup_timeout_seconds:1}, testUi)
+    startupPause = new EventEmitter()
+    try {
+      const denied = await exchange("timed-out","test-user-b","browser_timed_out",issued,issued,30,origin)
+      assert.match(denied.html, /"reason":"workspace_timeout"/)
+      assert.equal(denied.page, undefined)
+      assert.equal(denied.cookie, undefined)
+    } finally {
+      startupPause.emit("release")
+      startupPause = undefined
+      await stop(bounded)
+    }
+  })
   const sibling = await exchange("login-A1","test-user-a","browser_profile_1",10)
   const leave = (cookie, origin = parent) => fetch(base+"/_nexpoly/auth/leave", {method:"POST",
     headers:{Origin:origin, Cookie:cookie}, body:new URLSearchParams({page_context:sibling.page})})

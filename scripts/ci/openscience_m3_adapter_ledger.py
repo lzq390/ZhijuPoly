@@ -91,11 +91,12 @@ def browser_signature(module, result):
 # Qualifying operations across both modules and all owners plus the durable native retrosynthesis jobs.
 # Scope by the database clock so any extra, wrongly owned, incomplete or abandoned operation fails the run.
 WINDOW_SQL = """
-WITH i AS (SELECT (:'spec'::jsonb->>'since')::timestamptz at)
+WITH i AS (SELECT (:'spec'::jsonb->>'since')::timestamptz at, :'spec'::jsonb->>'module' scope)
 SELECT jsonb_build_object(
   'ops',(SELECT count(*) FROM usage_entitlements.operations,i
-         WHERE created_at>=at AND module IN ('polytao','retrosynthesis') AND pool_id IS NOT NULL),
-  'jobs',(SELECT count(*) FROM retrosynthesis.jobs,i WHERE created_at>=at));
+         WHERE created_at>=at AND module IN ('polytao','retrosynthesis') AND pool_id IS NOT NULL
+           AND (scope IS NULL OR module=scope)),
+  'jobs',(SELECT count(*) FROM retrosynthesis.jobs,i WHERE created_at>=at AND (scope IS NULL OR scope='retrosynthesis')));
 """
 
 PROOF_SQL = """
@@ -152,9 +153,13 @@ def main():
     require(
         set(users) == set(OWNERS) and before["deployment"] == spec["deployment"], "Development run mismatch"
     )
-    after, window = query(pg, other_counts_sql() + WINDOW_SQL, {"since": before["at"]})
+    scope = spec.get("module")
+    require(scope is None or scope in MODULES, "Unknown adapter")
+    modules = tuple(MODULES) if scope is None else (scope,)
+    after, window = query(pg, other_counts_sql() + WINDOW_SQL, {"since": before["at"], "module": scope})
     require(after["other_owners"] == before["other_owners"], "Unrelated owner received new records")
-    require(window == {"ops": 4, "jobs": 2}, f"Unexpected native operations in test window: {window}")
+    expected = {"ops": 2 * len(modules), "jobs": 2 if "retrosynthesis" in modules else 0}
+    require(window == expected, f"Unexpected native operations in test window: {window}")
     output = {}
     for label, user in users.items():
         owner = OWNERS[label]
@@ -164,7 +169,7 @@ def main():
         )
         login = user["session_ids"][0]
         output[label] = {}
-        for module in MODULES:
+        for module in modules:
             sample = user["adapters"][module]
             other = users["b" if label == "a" else "a"]["adapters"][module]
             require(

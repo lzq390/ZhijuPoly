@@ -21,6 +21,7 @@ import urllib.request
 from uuid import UUID, uuid4
 
 from openscience_per_user_dev import local_engine
+from openscience_per_user_service import ensure_timeout_seconds
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -109,7 +110,7 @@ def workspace_overlay(args, state, transport):
     with tempfile.TemporaryDirectory(dir=cache) as tmp:
         code = Path(tmp) / "code"
         runpy.run_path(str(ROOT / "ops/openscience-m3-dev/workspace.py"))["prepare"](
-            code, args.registry, args.m3_adapters, args.m4
+            code, args.registry, args.m3_adapters, args.m4, args.verify_retries
         )
         signature = hashlib.sha256(json.dumps([args.m3_gateway_image, args.m3_adapters, args.m4]).encode())
         sources = {path.name: hashlib.sha256(path.read_bytes()).digest() for path in sorted(code.iterdir())}
@@ -264,12 +265,12 @@ def require_quota_workspaces(rows):
 
 def run_stack(args, stack):
     if args.m5_quota_files:
-        if args.m3_gateway_image or args.m3_adapters or args.m4 or args.verify:
-            raise ValueError("Quota file mode requires M2 and the dedicated M5 browser verifier")
         args.registry = args.registry.resolve()
     local_engine()
     if args.m3_adapters and not args.m3_gateway_image:
         raise ValueError("--m3-adapters requires the reviewed --m3-gateway-image")
+    if args.verify_retries and not args.m3_gateway_image:
+        raise ValueError("--verify-retries requires the development M3 gateway")
     if args.verify:
         if args.verify.exists():
             raise FileExistsError(f"Choose a new verification output: {args.verify}")
@@ -425,6 +426,9 @@ def run_stack(args, stack):
     def dsn(role):
         return "host=/m2pg dbname=nexpoly_m2_dev user=m2_" + role + " password=" + secret(cred / role)
 
+    # The pilot has two distinct owners. Simultaneous cold handoffs can queue
+    # behind each other while the manager serializes capacity reservations.
+    startup_seconds = 2 * ensure_timeout_seconds(args.registry) + 5
     env = {
         "APP_POSTGRES_DSN": dsn("api"),
         "AUTH_POSTGRES_DSN": dsn("auth"),
@@ -434,6 +438,7 @@ def run_stack(args, stack):
         "OPENSCIENCE_M2_ROUTER_TOKEN_FILE": "/m2key",
         "OPENSCIENCE_M2_PARENT_ORIGIN": PARENT,
         "OPENSCIENCE_M2_AGENT_ORIGIN": AGENT,
+        "OPENSCIENCE_M2_STARTUP_SECONDS": str(startup_seconds),
     }
     common = [
         "--label",
@@ -694,9 +699,9 @@ def run_stack(args, stack):
         wait(lambda: (peer_dir / "gateway.sock").is_socket(), "isolated capability gateway")
         if args.m3_adapters:
             tool_config["adapters"], adapter_evidence = start_adapters(
-                stack, state, transport, api_socket, cred, deploy, args.verify
+                stack, state, transport, api_socket, cred, deploy, args.verify or args.verify_retries
             )
-        if args.verify and not args.m3_adapters and not args.m4:
+        if args.verify_retries or (args.verify and not args.m3_adapters and not args.m4):
             retry_evidence = transport / "retry.json"
             replay = transport / "retry.sock"
             launch(
@@ -800,6 +805,7 @@ def run_stack(args, stack):
         "authority_url": "http://127.0.0.1:18762",
         "service_token_file": str(cred / "router"),
         "supervisor_socket": str(supervisor_socket),
+        "startup_timeout_seconds": startup_seconds,
         "ui_root": str(web),
         "environment": "dev-m1",
         "tls_key_file": str(key),
@@ -895,6 +901,7 @@ http {{
         "parent": PARENT,
         "agent": AGENT,
         "user_volumes": {k: v["volume"] for k, v in retained.items()},
+        "startup_timeout_seconds": startup_seconds,
     }
     if args.m5_quota_files:
         ready["quota_files"] = True
@@ -903,11 +910,13 @@ http {{
         if args.m3_adapters:
             ready.update(
                 adapter_images=ADAPTER_IMAGES,
-                model_manifest_sha256=hashlib.sha256(
+                adapter_manifest_sha256=hashlib.sha256(
                     (model.parent.parent / "ASSET-MANIFEST.json").read_bytes()
                 ).hexdigest(),
                 adapter_retry_evidence=adapter_evidence,
             )
+            if not args.m4:
+                ready["model_manifest_sha256"] = ready["adapter_manifest_sha256"]
         if retry_evidence:
             ready["retry_evidence"] = str(retry_evidence)
     if args.m4:
@@ -964,9 +973,12 @@ def main():
     parser.add_argument("--state-dir", type=Path, default=DEFAULT / "nexpoly-openscience-m2-dev")
     parser.add_argument("--registry", type=Path, default=REGISTRY)
     parser.add_argument("--m5-quota-files", action="store_true",
-                        help="Use local M2 with the retained accounts on a verified NFS/ext4 quota registry")
+                        help="Enable quota-aware files on verified dev-m1 NFS volumes, with the selected M3/M4 services")
+    parser.add_argument("--verify-retries", action="store_true",
+                        help="Enable the private M3 tool-selection fixture and lost-receipt injectors during an acceptance drill")
     parser.add_argument(
-        "--verify", type=Path, help="Run browser acceptance and write a new JSON report, then stop."
+        "--verify", type=Path,
+        help="Run the selected M2/M3/M4 browser suite and stop. Use the coordinated M5 drills for quota and disk pressure.",
     )
     parser.add_argument(
         "--m3-gateway-image", help="Enable the six-tool M3 pilot with this reviewed derived image ID"

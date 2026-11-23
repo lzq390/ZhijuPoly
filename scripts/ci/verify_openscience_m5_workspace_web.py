@@ -63,7 +63,7 @@ def wait_file(path, process, timeout):
 
 
 @contextmanager
-def web_stack(phase, args):
+def web_stack(phase, args, combined_gateway=None, *, verify_retries=False):
     info = args.state / "running.json"
     if info.exists():
         raise ValueError("The retained M2 site already has a running stack")
@@ -77,12 +77,15 @@ def web_stack(phase, args):
                 "--registry",
                 str(args.registry_root / phase),
                 "--m5-quota-files",
+                *(["--m3-gateway-image", combined_gateway, "--m3-adapters", "--m4"]
+                  if combined_gateway else []),
+                *(["--verify-retries"] if verify_retries else []),
             ],
             stdout=log,
             stderr=subprocess.STDOUT,
         )
         try:
-            wait_file(info, process, 240)
+            wait_file(info, process, 420 if combined_gateway else 240)
             running = json.loads(info.read_bytes())
             if not running.get("quota_files") or running["registry"] != str(
                 args.registry_root / phase
@@ -90,7 +93,10 @@ def web_stack(phase, args):
                 raise RuntimeError(
                     "Browser stack belongs to another storage configuration"
                 )
-            yield
+            if combined_gateway and (running.get("gateway_image") != combined_gateway
+                                     or not running.get("adapter_images") or running.get("m4") is not True):
+                raise RuntimeError("Browser stack is missing requested gateway, adapters or M4 services")
+            yield running
         finally:
             if process.poll() is None:
                 process.terminate()

@@ -1,6 +1,8 @@
 """Stage the two parked dev-m1 quota images on one bounded, independently measured disk."""
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -13,11 +15,48 @@ from uuid import UUID, uuid4
 import verify_openscience_m5_quota as offline
 from openscience_m5_native_storage import read as read_native
 from openscience_m5_storage_ssh import StorageGuest
+from openscience_per_user_dev import write_atomic
 
 POOL_BYTES = 768 * 1024**2
 POOL_SERIAL = "m5-waterpool"
 DATA_DISKS = (*offline.DATA_DISKS, offline.BACKUP_DISK)
 OPS = offline.ROOT / "ops/openscience-per-user-dev"
+DEDICATED = {"kind": "dedicated"}
+
+
+@contextmanager
+def storage_lock(vm):
+    with (vm / "storage.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def pool_profile(layout):
+    digest = hashlib.sha256(json.dumps(layout, sort_keys=True).encode()).hexdigest()
+    return {"kind": "waterpool", "filesystem_uuid": layout["filesystem_uuid"], "layout_sha256": digest}
+
+
+def registered_pool(vm):
+    profile = json.loads((vm / "vm.json").read_bytes()).get("storage")
+    path = vm / "waterpool"
+    if profile == DEDICATED and not (path.exists() or path.is_symlink()):
+        return None
+    if not isinstance(profile, dict) or profile.get("kind") != "waterpool":
+        raise ValueError("Storage layout is unpinned or migration is incomplete; verify the pool before resuming")
+    if path.is_symlink() or not path.is_dir():
+        raise ValueError("Registered water-pool is missing")
+    layout = verify_layout(vm)
+    if profile != pool_profile(layout):
+        raise ValueError("Registered water-pool differs from its pin")
+    return layout
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_DIRECTORY | os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def ensure_idle(vm, config):
@@ -47,7 +86,10 @@ def ensure_no_holders(config):
 def verify_layout(vm):
     """Validate the parked backing chain before activating its writable COW copies."""
     root = vm / "waterpool"
-    cfg = json.loads((root / "pool.json").read_bytes())
+    manifest = root / "pool.json"
+    if manifest.is_symlink() or not manifest.is_file():
+        raise ValueError("Missing water-pool manifest")
+    cfg = json.loads(manifest.read_bytes())
     if (
         root.is_symlink()
         or root.stat().st_uid != os.getuid()
@@ -87,18 +129,48 @@ def copy_digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def prepare(vm, evidence):
+def prepare(vm, evidence, legacy_pool_uuid=None):
+    with storage_lock(vm):
+        return prepare_locked(vm, evidence, legacy_pool_uuid)
+
+
+def prepare_locked(vm, evidence, legacy_pool_uuid):
     cfg = read_native(vm)
     ensure_idle(vm, cfg)
     out = vm / "waterpool"
-    if out.exists():
-        return verify_layout(vm)
+    machine = json.loads((vm / "vm.json").read_bytes())
+    profile = machine.get("storage")
+    if isinstance(profile, dict) and profile.get("kind") == "waterpool":
+        return registered_pool(vm)
+    if profile != DEDICATED and not (
+        profile is None and legacy_pool_uuid and out.is_dir() and not out.is_symlink()
+    ):
+        raise ValueError("An unpinned retained VM requires its existing pool and independently recorded UUID")
     base = json.loads(evidence.read_bytes())["storage_vm_cold_restart"]
     if (
         base["status"] != "passed"
         or not base["all_four_inventories_and_kernel_quotas_match"]
     ):
         raise ValueError("Verified retained A/B quota images are required")
+
+    def register_pool():
+        layout = verify_layout(vm)
+        if legacy_pool_uuid and layout["filesystem_uuid"] != legacy_pool_uuid:
+            raise ValueError("Existing pool differs from the independently recorded UUID")
+        for role in ("a", "b"):
+            row = cfg["workspaces"]["src-" + role]
+            pin = layout["sources"][role]
+            previous = base["workspaces"]["src-" + role]
+            if (any(pin[k] != row[k] for k in ("uid", "workspace", "filesystem_uuid"))
+                    or pin["inventory"] != previous["inventory"]
+                    or pin["image_sha256"] != copy_digest(vm / ("m5-" + role + ".raw"))):
+                raise ValueError("Pool source differs from the retained workspace evidence")
+        machine["storage"] = pool_profile(layout)
+        write_atomic(vm / "vm.json", json.dumps(machine, sort_keys=True).encode() + b"\n", 0o600)
+        return layout
+
+    if out.exists() or out.is_symlink():
+        return register_pool()
     if shutil.disk_usage(vm).free < 33 * 1024**3:
         raise ValueError(
             "The development host needs room for the test pool in addition to its 32 GiB reserve"
@@ -184,8 +256,13 @@ def prepare(vm, evidence):
             json.dumps(result, indent=2, sort_keys=True) + "\n"
         )
         ensure_idle(vm, cfg)
+        for path in stage.iterdir():
+            with path.open("rb") as stream:
+                os.fsync(stream.fileno())
+        sync_directory(stage)
         stage.rename(out)
-    return verify_layout(vm)
+        sync_directory(vm)
+    return register_pool()
 
 
 def sync_helpers(reader):
@@ -227,6 +304,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("prepare", "install", "sync"))
     parser.add_argument("--vm", type=Path, required=True)
+    parser.add_argument("--legacy-pool-uuid", help="Previously recorded filesystem UUID when adopting a pre-pin pool")
     parser.add_argument(
         "--evidence",
         type=Path,
@@ -237,7 +315,7 @@ if __name__ == "__main__":
     os.umask(0o077)
     vm = args.vm.resolve(strict=True)
     if args.action == "prepare":
-        print(json.dumps(prepare(vm, args.evidence)))
+        print(json.dumps(prepare(vm, args.evidence, args.legacy_pool_uuid)))
     elif args.action == "sync":
         sync_helpers(StorageGuest(vm / "ssh.conf"))
     else:

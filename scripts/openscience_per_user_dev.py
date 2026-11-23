@@ -1,7 +1,7 @@
 """Local supervisor for the pinned per-user OpenScience development environment."""
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import fcntl
 from functools import lru_cache
 import hashlib
@@ -286,7 +286,7 @@ class Registry:
             if any(self.data.get(k) != v for k, v in settings.items()):
                 raise Problem("Development registry already initialized with different settings")
         else:
-            existing = {p.name for p in self.root.iterdir()} - {"supervisor.lock"}
+            existing = {p.name for p in self.root.iterdir()} - {"supervisor.lock", "lifecycle.lock"}
             if existing - FIXTURE_HASHES.keys():
                 raise Problem("A new M1 registry requires a dedicated empty state directory")
             for name, expected in FIXTURE_HASHES.items():
@@ -733,11 +733,20 @@ class Workspace:
         return Path(root)
 
     def m3_overlay(self):
-        quota_files = pilot_module("quota_web_files").mounts(self.registry.root) if self.quota_binding else {}
+        quota_files = (pilot_module("quota_web_files").mounts(self.registry.root, self.registry.data["image"])
+                       if self.quota_binding else {})
         base = self.m3_root()
         if base is None:
             return quota_files, {}
         code = base / "code"
+        # Already running November stacks used an overlay with no image marker.
+        marker = code / "workspace-image"
+        original = "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859"
+        if marker.is_symlink():
+            raise Problem("Unexpected scoped workspace image marker")
+        scoped_image = marker.read_text().strip() if marker.exists() else original
+        if scoped_image != self.registry.data["image"]:
+            raise Problem("Scoped workspace overlay belongs to another image; restart the matching stack")
         backend_overlay = {
             "/m3-code": code,
             "/m3-peer": base / self.row["id"],
@@ -988,6 +997,14 @@ class Workspace:
         except (Problem, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
             return "activity_unknown"
 
+    def retain_for_disk_recovery(self, command):
+        if command == "reap" and self.registry.data.get("format") == 5:
+            try:
+                self.registry.check_disk_admission(start=True)
+            except CapacityRefusal:
+                return True
+        return False
+
     def drain(self, command):
         backend, fixture = self.resource("backend"), self.resource("fixture")
         if backend and backend["state"] not in ("running", "exited", "dead", "created"):
@@ -1005,6 +1022,8 @@ class Workspace:
             return self.ensure()
         if command == "restart":
             self.registry.check_disk_admission(start=True)
+        if self.retain_for_disk_recovery(command):
+            return self.state("disk_recovery")
         self.verify_pair(backend, fixture, require_current=command == "restart")
         reason = self.activity(backend, command == "reap")
         if reason:
@@ -1024,6 +1043,10 @@ class Workspace:
                 self.row["last_activity"] = time.time()
                 self.registry.save()
             else:
+                # Activity inspection can take several seconds. Check again immediately
+                # before removing the read/delete path of an already admitted user.
+                if self.retain_for_disk_recovery(command):
+                    return self.state("disk_recovery")
                 self.remove_pair()
         finally:
             flag.unlink(missing_ok=True)
@@ -1048,7 +1071,7 @@ class Workspace:
 
 
 @contextmanager
-def locked_registry(root, create):
+def locked_registry(root, create, *, operation=None):
     if root.is_symlink():
         raise Problem("Registry must reside in a private directory")
     root = root.resolve()
@@ -1059,9 +1082,18 @@ def locked_registry(root, create):
     info = root.stat()
     if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700 or not root.is_dir():
         raise Problem("Registry must be a directory owned by this user with mode 0700")
-    # Serialize local operator commands and capacity reservations, including a bounded startup or drain.
-    with (root / "supervisor.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    # check-write only reads the atomically published registry and samples the guest
+    # under its monitor lock. It can overlap lifecycle work, but must see a stable
+    # storage policy. Configuration changes and offline backups still take LOCK_EX.
+    lifecycle = operation in {"ensure", "status", "restart", "recycle", "reap", "touch", "begin", "end", "list",
+                              "offline-file"}
+    with ExitStack() as stack:
+        if lifecycle:
+            # Keep mutations, capacity admission and container creation serialized.
+            serial = stack.enter_context((root / "lifecycle.lock").open("a"))
+            fcntl.flock(serial, fcntl.LOCK_EX)
+        lock = stack.enter_context((root / "supervisor.lock").open("a"))
+        fcntl.flock(lock, fcntl.LOCK_SH if lifecycle or operation == "check-write" else fcntl.LOCK_EX)
         yield Registry(root)
 
 
@@ -1106,7 +1138,7 @@ def main():
     os.umask(0o077)
     try:
         local_engine()
-        with locked_registry(args.state_dir, args.command == "init") as registry:
+        with locked_registry(args.state_dir, args.command == "init", operation=args.command) as registry:
             if args.command == "init":
                 output = registry.initialize(args)
             elif args.command == "list":

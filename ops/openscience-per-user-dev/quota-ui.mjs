@@ -30,7 +30,9 @@ export async function installQuotaUi(assets, uiRoot) {
     if(e.path===file&&t()===directory)e.onClose?.();
     }};
   }),`;
-  let source = replaceOnce(original, anchor, addControl + anchor);
+  // M4 patches the same immutable editor chunk to accept private knowledge
+  // documents. Compose its verified result with the quota controls.
+  let source = replaceOnce(assets.get(editor) ?? original, anchor, addControl + anchor);
   const saveError = 'if(!ae.ok)throw new Error(`save failed (${ae.status})`);';
   source = replaceOnce(source, saveError, `if(ae.status===507||ae.status===503){
     const reason=(await ae.clone().json().catch(()=>({}))).error;

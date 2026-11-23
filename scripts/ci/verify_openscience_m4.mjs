@@ -6,7 +6,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { developmentBrowser } from "./openscience_dev_browser.mjs";
+import { developmentBrowser, retainedBindings } from "./openscience_dev_browser.mjs";
 
 const { values } = parseArgs({ options: { state: { type: "string" }, output: { type: "string" } } });
 const state = resolve(values.state);
@@ -16,18 +16,7 @@ assert.equal(stack.m4, true, "Start the dedicated M4 development stack");
 assert.match(stack.model_image, /^sha256:[0-9a-f]{64}$/);
 assert.match(stack.model_manifest_sha256, /^[0-9a-f]{64}$/);
 const registry = JSON.parse(await readFile(resolve(stack.registry, "registry.json"), "utf8"));
-const bindings = Object.fromEntries(
-  ["a", "b"].map((tag) => {
-    const user = "test-user-" + tag;
-    const { id, uid, initialized } = registry.workspaces["dev-m1/" + user];
-    const volume = stack.user_volumes[user];
-    assert.ok(initialized && uid > 0);
-    assert.equal(volume, "nexpoly-m1-" + registry.deployment.slice(0, 12) + "-" + id + "-data");
-    return [user, { workspace_id: id, uid, volume }];
-  }),
-);
-assert.notEqual(bindings["test-user-a"].uid, bindings["test-user-b"].uid);
-assert.notEqual(bindings["test-user-a"].volume, bindings["test-user-b"].volume);
+const bindings = retainedBindings(stack, registry);
 const { browser, device, app, login, logout, workbench } = await developmentBrowser(state, stack);
 const report = {
   environment: "dev-m1",
@@ -96,6 +85,33 @@ async function workspace(user, path, json) {
     json === undefined ? {} : { method: "POST", json },
   );
 }
+
+async function quotaFiles(a, b) {
+  const name = "quota-" + run + ".txt";
+  const path = "/openscience-api/file/content?directory=" + encodeURIComponent(directory);
+  const readPath = path + "&path=" + encodeURIComponent(name);
+  const editor = await request(a, "/assets/session-DxSaVjPe.js");
+  assert.equal(editor.status, 200);
+  assert.ok(editor.value.includes("/assets/m5/quota-file-controls.mjs"));
+  assert.ok(editor.value.includes("仅支持 UTF-8 编码的 .txt 和 .md 文件"));
+  for (const user of [a, b]) {
+    const saved = await request(user, path, {method: "PUT", json: {path: name, content: user.marker}});
+    assert.equal(saved.status, 200);
+  }
+  for (const user of [a, b]) {
+    const read = await request(user, readPath);
+    assert.equal(read.status, 200);
+    assert.equal(read.value.content, user.marker);
+    const removed = await request(user, path, {method: "DELETE", json: {path: name}});
+    assert.equal(removed.status, 200);
+    assert.equal(removed.value.deleted, true);
+    const listing = await request(user, "/openscience-api/file?" + new URLSearchParams({directory, path: ""}));
+    assert.equal(listing.status, 200);
+    assert.ok(!listing.value.some(file => file.name === name));
+  }
+  return {same_name: name, isolated_content: true, independently_deleted: true, combined_editor: true};
+}
+
 async function conversation(user) {
   const response = await workspace(user, "/session", { title: "M4 private notebook " + run });
   assert.equal(response.status, 200);
@@ -432,6 +448,7 @@ try {
     b = await client("b");
   assert.notEqual(a.user_id, b.user_id);
   assert.notEqual(a.session_id, b.session_id);
+  if (stack.quota_files) report.quota_files = await quotaFiles(a, b);
   for (const u of [a, b]) {
     u.conversation = await conversation(u);
     await upload(u);

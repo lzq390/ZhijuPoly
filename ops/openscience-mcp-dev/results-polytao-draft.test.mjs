@@ -276,6 +276,7 @@ test("a lost confirmation reply never retries submission and reload recovers the
     await page.getByRole("button", { name: "确认并生成", exact: true }).click()
     await waitIdle(page)
     assert.equal(await page.getByRole("button", { name: "确认并生成", exact: true }).isDisabled(), true)
+    assert.deepEqual(await page.evaluate(() => window.operations.map(item => item.action)), ["get", "confirm"])
     assert.match(await page.locator(".nexpoly-draft-notice").innerText(), /不会自动重复提交/)
     await page.getByRole("button", { name: "重新载入已保存参数", exact: true }).click()
     await waitIdle(page)

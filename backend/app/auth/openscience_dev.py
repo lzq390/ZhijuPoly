@@ -96,6 +96,9 @@ def checked_origin(name, default):
 def create_app():
     parent = checked_origin("OPENSCIENCE_M2_PARENT_ORIGIN", "https://app.m2.test:18760")
     agent = checked_origin("OPENSCIENCE_M2_AGENT_ORIGIN", "https://agent.m2.test:18761")
+    startup_seconds = int(os.environ.get("OPENSCIENCE_M2_STARTUP_SECONDS", "35"))
+    if not 1 <= startup_seconds <= 605:
+        raise ValueError("Invalid development workspace startup deadline")
     if urlsplit(parent).hostname == urlsplit(agent).hostname:
         raise ValueError("M2 parent and workspace need separate cookie hosts")
     auth = AuthService(
@@ -234,6 +237,7 @@ def create_app():
             "ticket": ticket,
             "handoff_id": str(handoff),
             "expires_in": 60,
+            "startup_timeout_seconds": startup_seconds,
             "exchange_url": agent + "/_nexpoly/auth/exchange",
         }
 

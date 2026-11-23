@@ -51,7 +51,8 @@ export function PrivateAgentFrame({ url, iframeRef, onLoad, onVerified, onUnavai
       setError(message);
       unavailable.current?.();
     };
-    const timeout = window.setTimeout(() => fail("工作区启动超时，请重试。"), 60_000);
+    const timedOut = () => fail("工作区启动超时，请重试。");
+    let timeout = window.setTimeout(timedOut, 60_000);
     function receive(event: MessageEvent) {
       if (!active || !frame.current || event.origin !== origin || event.source !== frame.current.contentWindow) return;
       const data = event.data;
@@ -67,7 +68,11 @@ export function PrivateAgentFrame({ url, iframeRef, onLoad, onVerified, onUnavai
       }
       if (context || !handoff || handoff !== data.handoff_id) return;
       if (data.type === "nexpoly:openscience:error") {
-        fail(data.reason === "workspace_capacity" ? "工作区容量已满，请稍后重试。" : "工作区授权失败，请重试。");
+        if (data.reason === "workspace_capacity") fail("工作区容量已满，请稍后重试。");
+        else if (data.reason === "workspace_timeout") timedOut();
+        else if (data.reason === "workspace_unavailable" || data.reason === "workspace_transport_unavailable")
+          fail("工作区暂时不可用，请稍后重试。");
+        else fail("工作区授权失败，请重试。");
       }
       if (data.type === "nexpoly:openscience:ready" && typeof data.page_context === "string" && data.page_context) {
         context = data.page_context;
@@ -115,6 +120,12 @@ export function PrivateAgentFrame({ url, iframeRef, onLoad, onVerified, onUnavai
       if (!active || !frame.current) return;
       const exchange = new URL("/_nexpoly/auth/exchange", origin);
       if (data.exchange_url !== exchange.href || !data.ticket || !data.handoff_id) throw new Error("工作区来源验证失败。");
+      // Ticket redemption still starts immediately. Only the hidden frame's
+      // wait for an authorized, ready workspace uses the supervisor's budget.
+      if (Number.isInteger(data.startup_timeout_seconds) && data.startup_timeout_seconds > 0 && data.startup_timeout_seconds <= 605) {
+        clearTimeout(timeout);
+        timeout = window.setTimeout(timedOut, (data.startup_timeout_seconds + 10) * 1000);
+      }
       handoff = data.handoff_id;
       const form = document.createElement("form");
       form.method = "POST";
