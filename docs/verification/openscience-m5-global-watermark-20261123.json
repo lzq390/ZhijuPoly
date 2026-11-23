@@ -1,0 +1,1015 @@
+{
+  "environment": "dev-m1",
+  "final_park": {
+    "holders": {
+      "dst-a": [],
+      "dst-b": [],
+      "src-a": [],
+      "src-b": []
+    },
+    "qemu_exited": true,
+    "relay_port_closed": true,
+    "shared_disk_preserved": true,
+    "ssh_port_closed": true,
+    "status": "parked",
+    "verified_utc": "2026-11-23T07:03:21Z"
+  },
+  "final_shared_pool_before_vm_maintenance": {
+    "available_bytes": 589045760,
+    "filesystem_type": "ext4",
+    "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+    "total_bytes": 774307840,
+    "workspaces": {
+      "a": {
+        "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+        "group_gate": "open",
+        "group_hard_inodes": 0,
+        "group_hard_kib": 0,
+        "group_used_bytes": 7192576,
+        "group_used_inodes": 1727,
+        "uid": 58161656,
+        "user_hard_bytes": 2000000000
+      },
+      "b": {
+        "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+        "group_gate": "open",
+        "group_hard_inodes": 0,
+        "group_hard_kib": 0,
+        "group_used_bytes": 5615616,
+        "group_used_inodes": 1353,
+        "uid": 43620582,
+        "user_hard_bytes": 2000000000
+      }
+    }
+  },
+  "independent_operator_release": {
+    "alerts": [
+      {
+        "at": "2026-11-23T06:46:11.067864+00:00",
+        "available_bytes": 83881984,
+        "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:1",
+        "low_bytes": 100663296,
+        "notification": "firing",
+        "previous": "normal",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 1,
+        "state": "low"
+      },
+      {
+        "at": "2026-11-23T06:46:55.762160+00:00",
+        "available_bytes": 569544704,
+        "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:2",
+        "low_bytes": 100663296,
+        "notification": "resolved",
+        "previous": "low",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 2,
+        "state": "normal"
+      }
+    ],
+    "browser": {
+      "browser": "153.0.8010.12",
+      "finished": "2026-11-23T06:47:49.158Z",
+      "phase": "watermark",
+      "stages": {
+        "a_recovered": {
+          "baseline_restored_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+          "read": 200,
+          "same_save_retried": true,
+          "save": 200,
+          "written_sha256": "074a60e1ec110b0258f37b621459589d672944574073dce825e10c445faf25e7"
+        },
+        "b_recovered": {
+          "baseline_restored_sha256": "703ebd319d006315255fb22029f434e34e1bd580ab0ec0a285b2bb9a9fbc5c8a",
+          "cold_start_retried": true,
+          "read": 200,
+          "save": 200,
+          "written_sha256": "ea8c617eec438a1ca5770d914490ab19f3168c1a9d329d74da874ebb605dfbfa"
+        },
+        "low_delete": {
+          "absent": true,
+          "existing_read": 200,
+          "file": "m5-watermark-release.txt",
+          "list_status": 200,
+          "status": 200
+        },
+        "low_start": {
+          "capacity_refusal_visible": true,
+          "real_login": true,
+          "retry_available": true,
+          "user_id": "10000000-0000-4000-8000-000000000002"
+        },
+        "low_write": {
+          "error": "workspace_disk_low_watermark",
+          "file_save": 507,
+          "new_file": {
+            "error": "workspace_disk_low_watermark",
+            "listing": 200,
+            "present": false,
+            "status": 507
+          },
+          "notebook_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+          "read_before_and_after": 200
+        },
+        "test-user-a": {
+          "notebook_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+          "project_conversation_visible": true,
+          "real_login": true,
+          "user_id": "10000000-0000-4000-8000-000000000001"
+        },
+        "test-user-b": {
+          "notebook_sha256": "703ebd319d006315255fb22029f434e34e1bd580ab0ec0a285b2bb9a9fbc5c8a",
+          "project_conversation_visible": true,
+          "real_login": true,
+          "user_id": "10000000-0000-4000-8000-000000000002"
+        }
+      },
+      "started": "2026-11-23T06:45:22.592Z",
+      "status": "passed"
+    },
+    "cold_after_refusal": {
+      "container_id": null,
+      "generation": 28,
+      "gid": 43620582,
+      "state": "recycled",
+      "uid": 43620582,
+      "user_id": "test-user-b",
+      "volume": "nexpoly-m5-b21744274102-src-b",
+      "workspace": "3c137e9c236d4998bed842786c0f4548"
+    },
+    "cold_before": {
+      "container_id": null,
+      "generation": 28,
+      "gid": 43620582,
+      "state": "recycled",
+      "uid": 43620582,
+      "user_id": "test-user-b",
+      "volume": "nexpoly-m5-b21744274102-src-b",
+      "workspace": "3c137e9c236d4998bed842786c0f4548"
+    },
+    "hysteresis": {
+      "available_bytes": 134217728,
+      "configured": true,
+      "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+      "last_transition": {
+        "at": "2026-11-23T06:46:11.067864+00:00",
+        "available_bytes": 83881984,
+        "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:1",
+        "low_bytes": 100663296,
+        "notification": "firing",
+        "previous": "normal",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 1,
+        "state": "low"
+      },
+      "low_bytes": 100663296,
+      "poll_interval_seconds": 2,
+      "reason": null,
+      "recover_bytes": 167772160,
+      "sampled_at": "2026-11-23T06:46:46.415782+00:00",
+      "sequence": 1,
+      "state": "low",
+      "total_bytes": 774307840,
+      "workspaces": {
+        "a": {
+          "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+          "group_gate": "block",
+          "group_hard_inodes": 1,
+          "group_hard_kib": 1,
+          "group_used_bytes": 7196672,
+          "group_used_inodes": 1728,
+          "uid": 58161656,
+          "user_hard_bytes": 2000000000
+        },
+        "b": {
+          "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+          "group_gate": "block",
+          "group_hard_inodes": 1,
+          "group_hard_kib": 1,
+          "group_used_bytes": 5619712,
+          "group_used_inodes": 1354,
+          "uid": 43620582,
+          "user_hard_bytes": 2000000000
+        }
+      },
+      "write_allowed": false
+    },
+    "kernel_blocked": {
+      "a": {
+        "allocate_existing_errno": 122,
+        "create_errno": 122,
+        "existing_fixture_readable": true,
+        "gid": 58161656,
+        "uid": 58161656
+      },
+      "b": {
+        "allocate_existing_errno": 122,
+        "create_errno": 122,
+        "existing_fixture_readable": true,
+        "gid": 43620582,
+        "uid": 43620582
+      }
+    },
+    "kernel_recovered": {
+      "a": {
+        "allocate_existing_errno": 0,
+        "create_errno": 0,
+        "existing_fixture_readable": true,
+        "gid": 58161656,
+        "uid": 58161656
+      },
+      "b": {
+        "allocate_existing_errno": 0,
+        "create_errno": 0,
+        "existing_fixture_readable": true,
+        "gid": 43620582,
+        "uid": 43620582
+      }
+    },
+    "low": {
+      "available_bytes": 83881984,
+      "configured": true,
+      "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+      "last_transition": {
+        "at": "2026-11-23T06:46:11.067864+00:00",
+        "available_bytes": 83881984,
+        "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:1",
+        "low_bytes": 100663296,
+        "notification": "firing",
+        "previous": "normal",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 1,
+        "state": "low"
+      },
+      "low_bytes": 100663296,
+      "poll_interval_seconds": 2,
+      "reason": null,
+      "recover_bytes": 167772160,
+      "sampled_at": "2026-11-23T06:46:11.067864+00:00",
+      "sequence": 1,
+      "state": "low",
+      "total_bytes": 774307840,
+      "workspaces": {
+        "a": {
+          "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+          "group_gate": "block",
+          "group_hard_inodes": 1,
+          "group_hard_kib": 1,
+          "group_used_bytes": 7200768,
+          "group_used_inodes": 1729,
+          "uid": 58161656,
+          "user_hard_bytes": 2000000000
+        },
+        "b": {
+          "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+          "group_gate": "block",
+          "group_hard_inodes": 1,
+          "group_hard_kib": 1,
+          "group_used_bytes": 5619712,
+          "group_used_inodes": 1354,
+          "uid": 43620582,
+          "user_hard_bytes": 2000000000
+        }
+      },
+      "write_allowed": false
+    },
+    "normal": {
+      "available_bytes": 569544704,
+      "configured": true,
+      "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+      "last_transition": {
+        "at": "2026-11-23T06:46:55.762160+00:00",
+        "available_bytes": 569544704,
+        "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:2",
+        "low_bytes": 100663296,
+        "notification": "resolved",
+        "previous": "low",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 2,
+        "state": "normal"
+      },
+      "low_bytes": 100663296,
+      "poll_interval_seconds": 2,
+      "reason": null,
+      "recover_bytes": 167772160,
+      "sampled_at": "2026-11-23T06:46:55.762160+00:00",
+      "sequence": 2,
+      "state": "normal",
+      "total_bytes": 774307840,
+      "workspaces": {
+        "a": {
+          "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+          "group_gate": "open",
+          "group_hard_inodes": 0,
+          "group_hard_kib": 0,
+          "group_used_bytes": 7196672,
+          "group_used_inodes": 1728,
+          "uid": 58161656,
+          "user_hard_bytes": 2000000000
+        },
+        "b": {
+          "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+          "group_gate": "open",
+          "group_hard_inodes": 0,
+          "group_hard_kib": 0,
+          "group_used_bytes": 5619712,
+          "group_used_inodes": 1354,
+          "uid": 43620582,
+          "user_hard_bytes": 2000000000
+        }
+      },
+      "write_allowed": true
+    },
+    "recovered": {
+      "test-user-a": {
+        "container_id": "35c932f097f50a6c1d8e334543e5d91945287f7bfb7dd014dfa813643bb4e2fd",
+        "generation": 29,
+        "gid": 58161656,
+        "state": "running",
+        "uid": 58161656,
+        "user_id": "test-user-a",
+        "volume": "nexpoly-m5-b21744274102-src-a",
+        "workspace": "463fc2f89367468bb7fc6e048d522c9e"
+      },
+      "test-user-b": {
+        "container_id": "d6a3a2ff3166f9d57c2d286a10fe02e4cd2a4af033eb0285fe48a4d9fd0216ad",
+        "generation": 29,
+        "gid": 43620582,
+        "state": "running",
+        "uid": 43620582,
+        "user_id": "test-user-b",
+        "volume": "nexpoly-m5-b21744274102-src-b",
+        "workspace": "3c137e9c236d4998bed842786c0f4548"
+      }
+    },
+    "refused_start": {
+      "error": "workspace_capacity: global_disk (workspace_disk_low_watermark)"
+    },
+    "warm_after_refusal": {
+      "container_id": "35c932f097f50a6c1d8e334543e5d91945287f7bfb7dd014dfa813643bb4e2fd",
+      "generation": 29,
+      "gid": 58161656,
+      "state": "running",
+      "uid": 58161656,
+      "user_id": "test-user-a",
+      "volume": "nexpoly-m5-b21744274102-src-a",
+      "workspace": "463fc2f89367468bb7fc6e048d522c9e"
+    },
+    "warm_before": {
+      "container_id": "35c932f097f50a6c1d8e334543e5d91945287f7bfb7dd014dfa813643bb4e2fd",
+      "generation": 29,
+      "gid": 58161656,
+      "state": "running",
+      "uid": 58161656,
+      "user_id": "test-user-a",
+      "volume": "nexpoly-m5-b21744274102-src-a",
+      "workspace": "463fc2f89367468bb7fc6e048d522c9e"
+    }
+  },
+  "original_before_and_after": {
+    "registry_sha256": "83274cac893edfc08a000af90e1410bb2e4190b4413f5c4a5774d36cc44f4fff",
+    "workspaces": {
+      "test-user-a": {
+        "created_at": "2026-11-19T16:10:25+08:00",
+        "generation": 24,
+        "state": "recycled",
+        "uid": 58161656,
+        "volume": "nexpoly-m1-67e4414ac390-463fc2f89367468bb7fc6e048d522c9e-data",
+        "workspace": "463fc2f89367468bb7fc6e048d522c9e"
+      },
+      "test-user-b": {
+        "created_at": "2026-11-19T16:10:17+08:00",
+        "generation": 24,
+        "state": "recycled",
+        "uid": 43620582,
+        "volume": "nexpoly-m1-67e4414ac390-3c137e9c236d4998bed842786c0f4548-data",
+        "workspace": "3c137e9c236d4998bed842786c0f4548"
+      }
+    }
+  },
+  "project_file_deletion": {
+    "after_user_delete": {
+      "available_bytes": 169869312,
+      "filesystem_type": "ext4",
+      "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+      "total_bytes": 774307840,
+      "workspaces": {
+        "a": {
+          "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+          "group_gate": "open",
+          "group_hard_inodes": 0,
+          "group_hard_kib": 0,
+          "group_used_bytes": 7196672,
+          "group_used_inodes": 1728,
+          "uid": 58161656,
+          "user_hard_bytes": 2000000000
+        },
+        "b": {
+          "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+          "group_gate": "open",
+          "group_hard_inodes": 0,
+          "group_hard_kib": 0,
+          "group_used_bytes": 5619712,
+          "group_used_inodes": 1354,
+          "uid": 43620582,
+          "user_hard_bytes": 2000000000
+        }
+      }
+    },
+    "alerts": [
+      {
+        "at": "2026-11-23T06:54:07.719037+00:00",
+        "available_bytes": 83881984,
+        "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:5",
+        "low_bytes": 100663296,
+        "notification": "firing",
+        "previous": "normal",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 5,
+        "state": "low"
+      },
+      {
+        "at": "2026-11-23T06:55:07.962824+00:00",
+        "available_bytes": 169869312,
+        "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:6",
+        "low_bytes": 100663296,
+        "notification": "resolved",
+        "previous": "low",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 6,
+        "state": "normal"
+      }
+    ],
+    "browser": {
+      "browser": "153.0.8010.12",
+      "finished": "2026-11-23T06:56:07.070Z",
+      "phase": "watermark",
+      "stages": {
+        "a_recovered": {
+          "baseline_restored_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+          "read": 200,
+          "same_save_retried": true,
+          "save": 200,
+          "written_sha256": "074a60e1ec110b0258f37b621459589d672944574073dce825e10c445faf25e7"
+        },
+        "b_recovered": {
+          "baseline_restored_sha256": "703ebd319d006315255fb22029f434e34e1bd580ab0ec0a285b2bb9a9fbc5c8a",
+          "cold_start_retried": true,
+          "read": 200,
+          "save": 200,
+          "written_sha256": "ea8c617eec438a1ca5770d914490ab19f3168c1a9d329d74da874ebb605dfbfa"
+        },
+        "low_delete": {
+          "absent": true,
+          "existing_read": 200,
+          "file": "m5-watermark-release.txt",
+          "list_status": 200,
+          "save_before_delete": 507,
+          "status": 200
+        },
+        "low_start": {
+          "capacity_refusal_visible": true,
+          "real_login": true,
+          "retry_available": true,
+          "user_id": "10000000-0000-4000-8000-000000000002"
+        },
+        "low_write": {
+          "error": "workspace_disk_low_watermark",
+          "file_save": 507,
+          "new_file": {
+            "error": "workspace_disk_low_watermark",
+            "listing": 200,
+            "present": false,
+            "status": 507
+          },
+          "notebook_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+          "read_before_and_after": 200
+        },
+        "test-user-a": {
+          "notebook_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+          "project_conversation_visible": true,
+          "real_login": true,
+          "user_id": "10000000-0000-4000-8000-000000000001"
+        },
+        "test-user-b": {
+          "notebook_sha256": "703ebd319d006315255fb22029f434e34e1bd580ab0ec0a285b2bb9a9fbc5c8a",
+          "project_conversation_visible": true,
+          "real_login": true,
+          "user_id": "10000000-0000-4000-8000-000000000002"
+        }
+      },
+      "started": "2026-11-23T06:53:17.401Z",
+      "status": "passed"
+    },
+    "cold_after_refusal": {
+      "container_id": null,
+      "generation": 29,
+      "gid": 43620582,
+      "state": "recycled",
+      "uid": 43620582,
+      "user_id": "test-user-b",
+      "volume": "nexpoly-m5-b21744274102-src-b",
+      "workspace": "3c137e9c236d4998bed842786c0f4548"
+    },
+    "cold_before": {
+      "container_id": null,
+      "generation": 29,
+      "gid": 43620582,
+      "state": "recycled",
+      "uid": 43620582,
+      "user_id": "test-user-b",
+      "volume": "nexpoly-m5-b21744274102-src-b",
+      "workspace": "3c137e9c236d4998bed842786c0f4548"
+    },
+    "filler_after_delete": {
+      "allocated_bytes": 419164160,
+      "inode": 14,
+      "size_bytes": 419160064
+    },
+    "filler_before_delete": {
+      "allocated_bytes": 419164160,
+      "inode": 14,
+      "size_bytes": 419160064
+    },
+    "fixture_cleanup": {
+      "a": {
+        "removed": true,
+        "uid": 58161656
+      },
+      "b": {
+        "removed": true,
+        "uid": 43620582
+      }
+    },
+    "hysteresis": {
+      "available_bytes": 134217728,
+      "configured": true,
+      "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+      "last_transition": {
+        "at": "2026-11-23T06:54:07.719037+00:00",
+        "available_bytes": 83881984,
+        "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:5",
+        "low_bytes": 100663296,
+        "notification": "firing",
+        "previous": "normal",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 5,
+        "state": "low"
+      },
+      "low_bytes": 100663296,
+      "poll_interval_seconds": 2,
+      "reason": null,
+      "recover_bytes": 167772160,
+      "sampled_at": "2026-11-23T06:54:45.353015+00:00",
+      "sequence": 5,
+      "state": "low",
+      "total_bytes": 774307840,
+      "workspaces": {
+        "a": {
+          "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+          "group_gate": "block",
+          "group_hard_inodes": 1,
+          "group_hard_kib": 1,
+          "group_used_bytes": 10342400,
+          "group_used_inodes": 1729,
+          "uid": 58161656,
+          "user_hard_bytes": 2000000000
+        },
+        "b": {
+          "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+          "group_gate": "block",
+          "group_hard_inodes": 1,
+          "group_hard_kib": 1,
+          "group_used_bytes": 5619712,
+          "group_used_inodes": 1354,
+          "uid": 43620582,
+          "user_hard_bytes": 2000000000
+        }
+      },
+      "write_allowed": false
+    },
+    "kernel_blocked": {
+      "a": {
+        "allocate_existing_errno": 122,
+        "create_errno": 122,
+        "existing_fixture_readable": true,
+        "gid": 58161656,
+        "uid": 58161656
+      },
+      "b": {
+        "allocate_existing_errno": 122,
+        "create_errno": 122,
+        "existing_fixture_readable": true,
+        "gid": 43620582,
+        "uid": 43620582
+      }
+    },
+    "kernel_recovered": {
+      "a": {
+        "allocate_existing_errno": 0,
+        "create_errno": 0,
+        "existing_fixture_readable": true,
+        "gid": 58161656,
+        "uid": 58161656
+      },
+      "b": {
+        "allocate_existing_errno": 0,
+        "create_errno": 0,
+        "existing_fixture_readable": true,
+        "gid": 43620582,
+        "uid": 43620582
+      }
+    },
+    "low": {
+      "available_bytes": 83881984,
+      "configured": true,
+      "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+      "last_transition": {
+        "at": "2026-11-23T06:54:07.719037+00:00",
+        "available_bytes": 83881984,
+        "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:5",
+        "low_bytes": 100663296,
+        "notification": "firing",
+        "previous": "normal",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 5,
+        "state": "low"
+      },
+      "low_bytes": 100663296,
+      "poll_interval_seconds": 2,
+      "reason": null,
+      "recover_bytes": 167772160,
+      "sampled_at": "2026-11-23T06:54:07.719037+00:00",
+      "sequence": 5,
+      "state": "low",
+      "total_bytes": 774307840,
+      "workspaces": {
+        "a": {
+          "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+          "group_gate": "block",
+          "group_hard_inodes": 1,
+          "group_hard_kib": 1,
+          "group_used_bytes": 10342400,
+          "group_used_inodes": 1729,
+          "uid": 58161656,
+          "user_hard_bytes": 2000000000
+        },
+        "b": {
+          "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+          "group_gate": "block",
+          "group_hard_inodes": 1,
+          "group_hard_kib": 1,
+          "group_used_bytes": 5619712,
+          "group_used_inodes": 1354,
+          "uid": 43620582,
+          "user_hard_bytes": 2000000000
+        }
+      },
+      "write_allowed": false
+    },
+    "normal": {
+      "available_bytes": 169869312,
+      "configured": true,
+      "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+      "last_transition": {
+        "at": "2026-11-23T06:55:07.962824+00:00",
+        "available_bytes": 169869312,
+        "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:6",
+        "low_bytes": 100663296,
+        "notification": "resolved",
+        "previous": "low",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 6,
+        "state": "normal"
+      },
+      "low_bytes": 100663296,
+      "poll_interval_seconds": 2,
+      "reason": null,
+      "recover_bytes": 167772160,
+      "sampled_at": "2026-11-23T06:55:07.962824+00:00",
+      "sequence": 6,
+      "state": "normal",
+      "total_bytes": 774307840,
+      "workspaces": {
+        "a": {
+          "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+          "group_gate": "open",
+          "group_hard_inodes": 0,
+          "group_hard_kib": 0,
+          "group_used_bytes": 7196672,
+          "group_used_inodes": 1728,
+          "uid": 58161656,
+          "user_hard_bytes": 2000000000
+        },
+        "b": {
+          "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+          "group_gate": "open",
+          "group_hard_inodes": 0,
+          "group_hard_kib": 0,
+          "group_used_bytes": 5619712,
+          "group_used_inodes": 1354,
+          "uid": 43620582,
+          "user_hard_bytes": 2000000000
+        }
+      },
+      "write_allowed": true
+    },
+    "recovered": {
+      "test-user-a": {
+        "container_id": "f39035ca97d8b4d6c5b79db16aecbf6d3ad8c02d006f316a8a0aca5107b81484",
+        "generation": 30,
+        "gid": 58161656,
+        "state": "running",
+        "uid": 58161656,
+        "user_id": "test-user-a",
+        "volume": "nexpoly-m5-b21744274102-src-a",
+        "workspace": "463fc2f89367468bb7fc6e048d522c9e"
+      },
+      "test-user-b": {
+        "container_id": "50c9213d0f85c73379427e74823a26929e2129c43db90199c19acf66766f66af",
+        "generation": 30,
+        "gid": 43620582,
+        "state": "running",
+        "uid": 43620582,
+        "user_id": "test-user-b",
+        "volume": "nexpoly-m5-b21744274102-src-b",
+        "workspace": "3c137e9c236d4998bed842786c0f4548"
+      }
+    },
+    "refused_start": {
+      "error": "workspace_capacity: global_disk (workspace_disk_low_watermark)"
+    },
+    "seed": {
+      "a": {
+        "release_allocated_bytes": 3145728,
+        "release_bytes": 3145728,
+        "seeded": true,
+        "uid": 58161656
+      },
+      "b": {
+        "seeded": true,
+        "uid": 43620582
+      }
+    },
+    "still_low_before_delete": {
+      "available_bytes": 166723584,
+      "configured": true,
+      "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+      "last_transition": {
+        "at": "2026-11-23T06:54:07.719037+00:00",
+        "available_bytes": 83881984,
+        "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:5",
+        "low_bytes": 100663296,
+        "notification": "firing",
+        "previous": "normal",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 5,
+        "state": "low"
+      },
+      "low_bytes": 100663296,
+      "poll_interval_seconds": 2,
+      "reason": null,
+      "recover_bytes": 167772160,
+      "sampled_at": "2026-11-23T06:54:50.970510+00:00",
+      "sequence": 5,
+      "state": "low",
+      "total_bytes": 774307840,
+      "workspaces": {
+        "a": {
+          "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+          "group_gate": "block",
+          "group_hard_inodes": 1,
+          "group_hard_kib": 1,
+          "group_used_bytes": 10342400,
+          "group_used_inodes": 1729,
+          "uid": 58161656,
+          "user_hard_bytes": 2000000000
+        },
+        "b": {
+          "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+          "group_gate": "block",
+          "group_hard_inodes": 1,
+          "group_hard_kib": 1,
+          "group_used_bytes": 5619712,
+          "group_used_inodes": 1354,
+          "uid": 43620582,
+          "user_hard_bytes": 2000000000
+        }
+      },
+      "write_allowed": false
+    },
+    "warm_after_refusal": {
+      "container_id": "f39035ca97d8b4d6c5b79db16aecbf6d3ad8c02d006f316a8a0aca5107b81484",
+      "generation": 30,
+      "gid": 58161656,
+      "state": "running",
+      "uid": 58161656,
+      "user_id": "test-user-a",
+      "volume": "nexpoly-m5-b21744274102-src-a",
+      "workspace": "463fc2f89367468bb7fc6e048d522c9e"
+    },
+    "warm_before": {
+      "container_id": "f39035ca97d8b4d6c5b79db16aecbf6d3ad8c02d006f316a8a0aca5107b81484",
+      "generation": 30,
+      "gid": 58161656,
+      "state": "running",
+      "uid": 58161656,
+      "user_id": "test-user-a",
+      "volume": "nexpoly-m5-b21744274102-src-a",
+      "workspace": "463fc2f89367468bb7fc6e048d522c9e"
+    }
+  },
+  "regression_tests": {
+    "node_router_and_activity": 8,
+    "python_openscience": 149
+  },
+  "status": "passed",
+  "storage": {
+    "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+    "format": "nexpoly-dev-m1-waterpool-v1",
+    "pool_bytes": 805306368,
+    "sources": {
+      "a": {
+        "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+        "image_sha256": "d2dce03cd2200971ad461729d1ebceae5bdf87df97dc8c74387ab85046418255",
+        "inventory": {
+          "directories": 374,
+          "file_bytes": 545549,
+          "files": 1338,
+          "tree_sha256": "5128a634f6497a7a1b59e2ebb32d25d8b74f6df26040495960837ddbb85fe5b6"
+        },
+        "uid": 58161656,
+        "workspace": "463fc2f89367468bb7fc6e048d522c9e"
+      },
+      "b": {
+        "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+        "image_sha256": "b34014728e2deb8722b017ae15640eaddcce96ef9b8aa57bef6411868d74e8c5",
+        "inventory": {
+          "directories": 301,
+          "file_bytes": 389549,
+          "files": 1037,
+          "tree_sha256": "322b3324207cfc8a0b12410a78a4adaa5d966f17385be1ca1282ff0e6739e242"
+        },
+        "uid": 43620582,
+        "workspace": "3c137e9c236d4998bed842786c0f4548"
+      }
+    }
+  },
+  "storage_restart": {
+    "boot_id_after": "015d56a8-6488-4b40-b930-62b020fa2b5c",
+    "boot_id_before": "b10da877-ae12-4b4c-bd93-39bf45a56af2",
+    "install_retry": {
+      "changed_file_sha256": "85c0989d690ad3e51991968ba5d9db930de2add55bcc72694a03f05a6136492f",
+      "changed_file_uid": 58161656,
+      "existing_edit_preserved": true,
+      "fixture_removed": true,
+      "nfs_restarted": true,
+      "operator_receipt_mode": "0o600",
+      "status": "passed"
+    },
+    "operator_receipts": [
+      {
+        "at": "2026-11-23T06:46:11.067864+00:00",
+        "available_bytes": 83881984,
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:1",
+        "notification": "firing",
+        "reason": null
+      },
+      {
+        "at": "2026-11-23T06:46:55.762160+00:00",
+        "available_bytes": 569544704,
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:2",
+        "notification": "resolved",
+        "reason": null
+      },
+      {
+        "at": "2026-11-23T06:51:42.621811+00:00",
+        "available_bytes": 585887744,
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:3",
+        "notification": "degraded",
+        "reason": "monitor_inactive"
+      },
+      {
+        "at": "2026-11-23T06:51:45.762174+00:00",
+        "available_bytes": 585887744,
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:4",
+        "notification": "resolved",
+        "reason": null
+      },
+      {
+        "at": "2026-11-23T06:54:07.719037+00:00",
+        "available_bytes": 83881984,
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:5",
+        "notification": "firing",
+        "reason": null
+      },
+      {
+        "at": "2026-11-23T06:55:07.962824+00:00",
+        "available_bytes": 169869312,
+        "id": "2b007549-c9a2-4045-85f9-9f8e28c443d8:6",
+        "notification": "resolved",
+        "reason": null
+      }
+    ],
+    "operator_receipts_identical": true,
+    "original_registry_sha256": "83274cac893edfc08a000af90e1410bb2e4190b4413f5c4a5774d36cc44f4fff",
+    "pool_after": {
+      "available_bytes": 589058048,
+      "filesystem_type": "ext4",
+      "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+      "total_bytes": 774307840,
+      "workspaces": {
+        "a": {
+          "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+          "group_gate": "open",
+          "group_hard_inodes": 0,
+          "group_hard_kib": 0,
+          "group_used_bytes": 7192576,
+          "group_used_inodes": 1727,
+          "uid": 58161656,
+          "user_hard_bytes": 2000000000
+        },
+        "b": {
+          "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+          "group_gate": "open",
+          "group_hard_inodes": 0,
+          "group_hard_kib": 0,
+          "group_used_bytes": 5615616,
+          "group_used_inodes": 1353,
+          "uid": 43620582,
+          "user_hard_bytes": 2000000000
+        }
+      }
+    },
+    "retained_raw_images_verified_against_baseline": {
+      "m5-a": {
+        "sha256": "d2dce03cd2200971ad461729d1ebceae5bdf87df97dc8c74387ab85046418255",
+        "size_bytes": 3221225472
+      },
+      "m5-b": {
+        "sha256": "b34014728e2deb8722b017ae15640eaddcce96ef9b8aa57bef6411868d74e8c5",
+        "size_bytes": 3221225472
+      },
+      "m5-backup": {
+        "sha256": "6014640442a913f65006e9cbfbe43aaeabcee06f41e39845298993bebd948f7f",
+        "size_bytes": 268435456
+      },
+      "m5-restore-a": {
+        "sha256": "d0dbe48e97dee470b19ff2197825d273f4d93e83bb16ffabcf46bd9a30f03eb4",
+        "size_bytes": 3221225472
+      },
+      "m5-restore-b": {
+        "sha256": "68c30b602c88b03293eb861b62141cf1cf0ed2539d83e2c169862249ece50806",
+        "size_bytes": 3221225472
+      }
+    },
+    "sequence_after": 6,
+    "sequence_before": 6,
+    "shared_pool_and_workspace_quotas_identical": true,
+    "status": "passed",
+    "workspaces_after": [
+      {
+        "container_id": null,
+        "generation": 30,
+        "state": "recycled",
+        "uid": 58161656,
+        "user_id": "test-user-a",
+        "workspace": "463fc2f89367468bb7fc6e048d522c9e"
+      },
+      {
+        "container_id": null,
+        "generation": 30,
+        "state": "recycled",
+        "uid": 43620582,
+        "user_id": "test-user-b",
+        "workspace": "3c137e9c236d4998bed842786c0f4548"
+      }
+    ]
+  },
+  "thresholds_bytes": {
+    "low": 100663296,
+    "recovery": 167772160
+  }
+}

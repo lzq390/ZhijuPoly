@@ -16,7 +16,7 @@ from openscience_per_user_dev import DEFAULT_READY_SECONDS, Registry
 
 MANAGER = Path(__file__).with_name("openscience_per_user_dev.py")
 WORKSPACE_KEYS = {"operation", "environment", "user_id"}
-OPERATIONS = {"ensure", "status", "stop", "touch", "begin", "end"}
+OPERATIONS = {"ensure", "status", "stop", "touch", "begin", "end", "check-write"}
 MAX_REQUEST = 2048
 
 

@@ -74,7 +74,11 @@ function rpc(socketPath, data) {
       client.end()
       try {
         const r = JSON.parse(result)
-        if (!r.ok) throw new Refusal(503, r.error?.includes("workspace_capacity") ? "workspace_capacity" : "workspace_unavailable")
+        if (!r.ok) {
+          if (data.operation === "check-write" && r.error === "workspace_disk_low_watermark")
+            throw new Refusal(507, "workspace_disk_low_watermark")
+          throw new Refusal(503, r.error?.includes("workspace_capacity") ? "workspace_capacity" : "workspace_unavailable")
+        }
         accept(r.result)
       } catch (e) { reject(e) }
     })
@@ -196,7 +200,7 @@ export async function startRouter(c, loadUi = pinnedUi) {
           const runtime = resolve(dirname(c.supervisor_socket), r.workspace)
           const socket = resolve(runtime, "transport/api")
           if (!(await stat(socket)).isSocket()) throw new Refusal(503,"workspace_transport_unavailable")
-          return {socket, tokenFile:resolve(runtime,"secret/token")}
+          return {socket, tokenFile:resolve(runtime,"secret/token"), quotaVolume:r.storage_backend === "nfs-ext4-user-quota"}
         }).finally(() => startups.delete(owner)))
     }
     return startups.get(owner)
@@ -283,6 +287,10 @@ export async function startRouter(c, loadUi = pinnedUi) {
     const quotaDelete = c.quota_files === true && req.method === "DELETE" && path === "/file/content"
     if (!form && !permissionReply && !quotaDelete && !allows(req.method, path)) throw new Refusal(403, "route_disabled")
     const writing = !["GET","HEAD"].includes(req.method)
+    // Folder validation only lists an existing directory, and abort cancels
+    // in-flight work. Keep deletion available so users can release storage.
+    const needsSpace = writing && req.method !== "DELETE" &&
+      !(req.method === "POST" && (path === "/api/resolve-folder/validate" || /^\/session\/ses_[A-Za-z0-9_-]+\/abort$/.test(path)))
     if (writing && (req.headers.origin !== c.public_origin || req.headers["x-nexpoly-page"] !== page.key))
       throw new Refusal(403, "write_origin_denied")
     const payload = writing ? await body(req, 8 * 1024 * 1024) : null
@@ -304,6 +312,19 @@ export async function startRouter(c, loadUi = pinnedUi) {
         if (!(await stat(page.route.socket)).isSocket()) throw new Refusal(503,"workspace_restarting")
         gate(page)
         controller.signal.throwIfAborted()
+        if (needsSpace && (page.route.quotaVolume || c.quota_files === true)) {
+          try {
+            const permit = await rpc(c.supervisor_socket, {operation:"check-write", environment:c.environment, user_id:page.owner})
+            if (permit?.write_allowed !== true) throw Error("Missing disk admission")
+          } catch (error) {
+            if (error instanceof Refusal && error.status === 507) throw error
+            throw new Refusal(503, "workspace_disk_monitor_unavailable")
+          }
+          // Validation and transport recovery can outlive a page grant.
+          await validate(page)
+          gate(page)
+          controller.signal.throwIfAborted()
+        }
         if (form) Object.assign(headers, await tools.form(page, form, payload, token))
         if (permissionReply) await tools.confirm(page, path, url.search, payload)
         const prompt = toolRequest && /^\/session\/(ses_[a-zA-Z0-9_-]+)\/(?:message|prompt_async)$/.exec(path)

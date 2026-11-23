@@ -219,7 +219,15 @@ def resume(work):
 
 
 def launch(work, port):
+    water = (work / "waterpool").exists()
+    if water:
+        from prepare_openscience_m5_water_pool import verify_layout
+
+        verify_layout(work)
     with socket.socket() as listener:
+        # Match a restarting TCP listener: a completed loopback SSH connection
+        # may still be in TIME_WAIT after the previous QEMU has exited.
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", port))
     # The guest gets a single loopback-only SSH path, no external connectivity, host share or device passthrough.
     argv = [
@@ -252,7 +260,11 @@ def launch(work, port):
         "-nic",
         f"user,model=virtio-net-pci,mac=52:54:00:37:a5:17,restrict=on,hostfwd=tcp:127.0.0.1:{port}-10.0.2.15:22",
         "-drive",
-        "file=system.qcow2,format=qcow2,if=virtio",
+        (
+            "file=waterpool/system.qcow2,format=qcow2,if=virtio"
+            if water
+            else "file=system.qcow2,format=qcow2,if=virtio"
+        ),
         "-drive",
         "file=seed.iso,format=raw,if=virtio,readonly=on",
         "-drive",
@@ -262,10 +274,23 @@ def launch(work, port):
         argv.extend(
             [
                 "-drive",
-                f"if=none,file={serial}.raw,format=raw,id={serial}",
+                (
+                    f"if=none,file=waterpool/{serial}.qcow2,format=qcow2,id={serial}"
+                    if water
+                    else f"if=none,file={serial}.raw,format=raw,id={serial}"
+                ),
                 "-device",
                 f"virtio-blk-pci,drive={serial},serial={serial}",
             ]
+        )
+    if water:
+        argv.extend(
+            (
+                "-drive",
+                "if=none,file=waterpool/pool.raw,format=raw,id=m5-waterpool,discard=unmap",
+                "-device",
+                "virtio-blk-pci,drive=m5-waterpool,serial=m5-waterpool",
+            )
         )
     with (work / "qemu.log").open("ab") as log:
         process = subprocess.Popen(

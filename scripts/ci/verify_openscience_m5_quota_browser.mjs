@@ -1,7 +1,7 @@
 // Actual NexPoly form login, project tree, November editor and kernel quota.
-// The host coordinator fills only A's test clone after both accounts are ready.
+// The host coordinator changes only the isolated quota volume or the global test pool.
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, open, readFile, realpath, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -16,7 +16,7 @@ const state = resolve(option("--state"));
 const phase = option("--phase");
 const stack = JSON.parse(await readFile(resolve(state, "running.json"), "utf8"));
 assert.equal(stack.quota_files, true, "Only a quota-backed clone can run the browser drill");
-assert.ok(["full", "readback"].includes(phase));
+assert.ok(["full", "readback", "watermark"].includes(phase));
 const markers = resolve(option("--markers"));
 const dir = await lstat(markers);
 assert.equal(await realpath(markers), markers, "Marker directory and its parents must be real directories");
@@ -38,7 +38,7 @@ if (phase === "full" && ((await exists(ready)) || (await exists(full)))) throw E
 
 const project = "/openscience/files/projects/same-project";
 const notebook = "notebook.txt";
-const release = "m5-release.txt";
+const release = phase === "watermark" ? "m5-watermark-release.txt" : "m5-release.txt";
 // The dedicated PostgreSQL seed verifies these existing account IDs on each run.
 const owners = {
   "test-user-a": "10000000-0000-4000-8000-000000000001",
@@ -119,12 +119,122 @@ async function save(frame, value) {
   return {status: reply.status(), body: await reply.json()};
 }
 
+async function removeFile(frame, release) {
+  await openProjectFile(frame, release);
+  const button = frame.getByRole("button", {name: "删除文件", exact: true});
+  await button.click();
+  const dialog = frame.getByRole("dialog", {name: "删除文件"});
+  assert.ok((await dialog.innerText()).includes(release));
+  const [deleted] = await Promise.all([
+    operation(frame, "DELETE", release), dialog.getByRole("button", {name: "确认删除"}).click(),
+  ]);
+  assert.equal(deleted.status(), 200);
+  // The editor consumes the authenticated receipt before dismissing its
+  // dialog. Verify the persisted effect from a new, visible file listing.
+  stage("A checks the deletion receipt and refreshed project file list");
+  await dialog.waitFor({state: "detached"});
+  const files = await projectFileList(frame);
+  await refreshProjectFileList(frame, files);
+  await files.getByText(release, {exact: true}).waitFor({state: "detached"});
+  await selectProjectFile(frame, files, notebook);
+  return deleted;
+}
+
+async function verifyWatermark(signIn, openNotebook) {
+  const previous = JSON.parse(await readFile(new URL("../../docs/verification/openscience-m5-workspace-quota-20261123.json", import.meta.url), "utf8"));
+  assert.equal(previous.status, "passed");
+  for (const user of users) assert.equal(sha(updated(user)), previous.browser.web_after_restore.stages[user].notebook_sha256);
+  const readyFlag = "watermark-browser-ready", lowFlag = "watermark-low";
+  const deniedFlag = "watermark-browser-denied", beforeDeleteFlag = "watermark-before-delete";
+  const deletedFlag = "watermark-browser-deleted", recoveredFlag = "watermark-recovered";
+  for (const name of [readyFlag, lowFlag, deniedFlag, beforeDeleteFlag, deletedFlag, recoveredFlag]) {
+    if (await exists(resolve(markers, name))) throw Error("Stale watermark drill markers");
+  }
+  const signal = name => writeFile(resolve(markers, name), name + "\n", {flag:"wx", mode:0o600});
+  async function waitFor(name) {
+    const deadline = Date.now() + 10 * 60 * 1000;
+    while (!(await exists(resolve(markers, name)))) {
+      if (Date.now() >= deadline) throw Error("Timed out waiting for water level");
+      await sleep(300);
+    }
+  }
+
+  const [aUser,bUser] = users;
+  const change = user => updated(user) + "M5 shared disk retry " + user + "\n";
+  const a = await openNotebook(await signIn(aUser), aUser, updated(aUser));
+  await signal(readyFlag);
+  await waitFor(lowFlag);
+  stage("A reads the original notebook and is refused a save at low water");
+  await readVisible(a, updated(aUser));
+  const denied = await save(a, change(aUser));
+  assert.deepEqual(denied, {status:507, body:{error:"workspace_disk_low_watermark"}});
+  await a.getByText("工作区共享磁盘空间不足，暂时无法写入。已有文件仍可读取或删除。").first().waitFor();
+  await readVisible(a, updated(aUser));
+
+  stage("A attempts to create a new file through the authenticated file API");
+  const creation = await a.evaluate(async ({project, name}) => {
+    const params = new URLSearchParams({directory:project});
+    const file = await fetch("/openscience-api/file/content?" + params, {method:"PUT", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({path:name,content:"M5 shared disk test"})});
+    const reason = (await file.json()).error;
+    params.set("path","");
+    const listing = await fetch("/openscience-api/file?" + params);
+    return {status:file.status,error:reason,listing:listing.status,present:(await listing.json()).some(item => item.name === name)};
+  }, {project, name:"m5-watermark-create-" + randomUUID() + ".txt"});
+  assert.deepEqual(creation, {status:507,error:"workspace_disk_low_watermark",listing:200,present:false});
+  report.stages.low_write = {file_save:denied.status,error:denied.body.error,read_before_and_after:200,
+    notebook_sha256:sha(updated(aUser)),new_file:creation};
+
+  const bPage = await signIn(bUser);
+  stage("B's cold workspace launch is refused at low water");
+  const alert = bPage.getByRole("alert").filter({hasText:"工作区容量已满，请稍后重试。"});
+  await alert.waitFor({timeout:90000});
+  const retry = alert.getByRole("button",{name:"重试",exact:true});
+  await retry.waitFor();
+  report.stages.low_start = {real_login:true,user_id:owners[bUser],capacity_refusal_visible:true,retry_available:true};
+
+  await signal(deniedFlag);
+  await waitFor(beforeDeleteFlag);
+  activePage = a.page();
+  stage("A retries the same write below the recovery threshold before deleting anything");
+  const stillLow = await save(a, change(aUser));
+  assert.deepEqual(stillLow, {status:507, body:{error:"workspace_disk_low_watermark"}});
+  await readVisible(a, updated(aUser));
+  stage("A deletes the release file and refreshes the project listing while writes are refused");
+  const deleted = await removeFile(a, release);
+  await readVisible(a, updated(aUser));
+  report.stages.low_delete = {file:release,save_before_delete:stillLow.status,status:deleted.status(),list_status:200,absent:true,existing_read:200};
+  await signal(deletedFlag);
+  await waitFor(recoveredFlag);
+
+  async function verifyAndRestore(frame, user) {
+    stage("Save and read at recovered water level for " + user);
+    const value = change(user);
+    const written = await save(frame, value);
+    assert.equal(written.status, 200);
+    try {
+      assert.equal(written.body.content, value);
+      await readVisible(frame,value);
+    } finally {
+      const restored = await save(frame, updated(user));
+      assert.equal(restored.status, 200);
+      await readVisible(frame,updated(user));
+    }
+    return {save:written.status,read:200,written_sha256:sha(value),baseline_restored_sha256:sha(updated(user))};
+  }
+  report.stages.a_recovered = {same_save_retried:true,...await verifyAndRestore(a, aUser)};
+  stage("B retries the cold workspace launch from the same logged-in page after recovery");
+  activePage = bPage;
+  await retry.click();
+  const b = await openNotebook(bPage, bUser, updated(bUser));
+  report.stages.b_recovered = {cold_start_retried:true,...await verifyAndRestore(b, bUser)};
+}
+
 try {
   const driver = await developmentBrowser(state, stack);
   browser = driver.browser;
   report.browser = browser.version();
-  const people = [];
-  for (const user of users) {
+  async function signIn(user) {
     stage("Web login for " + user);
     const p = await driver.app(await driver.device());
     activePage = p;
@@ -155,6 +265,10 @@ try {
     const {user_id} = await driver.login(p, user);
     signOut.push(() => driver.logout(p, user));
     assert.equal(user_id, owners[user], "Authenticated account differs from its retained dev-m1 identity");
+    return p;
+  }
+  async function openNotebook(p, user, expected) {
+    activePage = p;
     stage("Authenticated workspace for " + user);
     const f = await driver.workbench(p);
     const sidebar = p.locator(".np-sidebar-desktop");
@@ -177,11 +291,19 @@ try {
     await f.getByText("M1 synthetic " + user + " project prompt", {exact: true}).first().waitFor({timeout: 150000});
     stage("Project opened, read notebook for " + user);
     await openProjectFile(f, notebook);
-    const expected = phase === "full" ? original(user) : updated(user);
     await readVisible(f, expected);
     stage("Notebook verified for " + user);
-    people.push({f});
-    report.stages[user] = {real_login: true, user_id, project_conversation_visible: true, notebook_sha256: sha(expected)};
+    report.stages[user] = {real_login: true, user_id: owners[user], project_conversation_visible: true, notebook_sha256: sha(expected)};
+    return f;
+  }
+  const people = [];
+  if (phase === "watermark") {
+    await verifyWatermark(signIn, openNotebook);
+  } else {
+    for (const user of users) {
+      const page = await signIn(user);
+      people.push({f: await openNotebook(page, user, phase === "full" ? original(user) : updated(user))});
+    }
   }
   if (phase === "full") {
     const [{f: a}, {f: b}] = people;
@@ -216,23 +338,7 @@ try {
     report.stages.b_while_a_full = {save_status: 200, notebook_sha256: sha(updated(users[1])), a_still_full_status: 507};
 
     stage("A reclaims space and retries the save");
-    await openProjectFile(a, release);
-    const button = a.getByRole("button", {name: "删除文件", exact: true});
-    await button.click();
-    const dialog = a.getByRole("dialog", {name: "删除文件"});
-    assert.ok((await dialog.innerText()).includes(release));
-    const [deleted] = await Promise.all([
-      operation(a, "DELETE", release), dialog.getByRole("button", {name: "确认删除"}).click(),
-    ]);
-    assert.equal(deleted.status(), 200);
-    // The editor consumes the authenticated receipt before dismissing its
-    // dialog. Verify the persisted effect from a new, visible file listing.
-    stage("A checks the deletion receipt and refreshed project file list");
-    await dialog.waitFor({state: "detached"});
-    const files = await projectFileList(a);
-    await refreshProjectFileList(a, files);
-    await files.getByText(release, {exact: true}).waitFor({state: "detached"});
-    await selectProjectFile(a, files, notebook);
+    const deleted = await removeFile(a, release);
     stage("A retries the same save after deleting the release file");
     const retried = await save(a, updated(users[0]));
     assert.equal(retried.status, 200);

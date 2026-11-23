@@ -307,7 +307,7 @@ class Registry:
         return validated_capacity(self.data.get("capacity", DEFAULT_CAPACITY))
 
     def readiness_seconds(self):
-        if self.data and self.data.get("format") in (2, 3, 4):
+        if self.data and self.data.get("format") in (2, 3, 4, 5):
             return validated_readiness(self.data.get("readiness_seconds", DEFAULT_READY_SECONDS))
         return DEFAULT_READY_SECONDS
 
@@ -321,21 +321,21 @@ class Registry:
         return {"deployment": self.data["deployment"], "capacity": limits}
 
     def check_format(self, *, allow_unclaimed=False):
-        if not self.data or self.data.get("format") not in (1, 2, 3, 4):
+        if not self.data or self.data.get("format") not in (1, 2, 3, 4, 5):
             raise Problem("Initialize an M1 development registry first")
         # Older supervisors must refuse quota registries. A missing pin must never select the Docker backend.
-        if self.data["format"] in (2, 3, 4):
+        if self.data["format"] in (2, 3, 4, 5):
             expected = {"dev-m1/" + user for user in PILOT_USERS}
             pins = self.data.get("quota_storage")
             if not isinstance(pins, dict) or set(pins) != expected or set(self.data["workspaces"]) != expected:
                 raise Problem("Quota registry identity bindings are incomplete")
             nfs = self.data.get("nfs_endpoints")
-            if self.data["format"] in (3, 4):
+            if self.data["format"] in (3, 4, 5):
                 if not isinstance(nfs, dict) or set(nfs) != expected or not all(nfs.values()):
                     raise Problem("NFS quota registry endpoint pins are incomplete")
                 if self.data["format"] == 3 and not allow_unclaimed:
                     raise Problem("Legacy NFS registry requires exclusive registration; repeat register-quota-nfs while quiescent")
-                if self.data["format"] == 4:
+                if self.data["format"] in (4, 5):
                     module = pilot_module("quota_nfs")
                     phase = nfs["dev-m1/test-user-a"]["slot"][:3]
                     uuids = [pins["dev-m1/test-user-" + r]["filesystem_uuid"] for r in "ab"]
@@ -345,6 +345,83 @@ class Registry:
                 raise Problem("Unexpected NFS endpoints in a local ext4 registry")
         elif "quota_storage" in self.data:
             raise Problem("Unexpected quota storage in a format-1 registry")
+
+        if self.data["format"] == 5:
+            self.validate_watermark(self.data.get("disk_watermark"))
+        elif "disk_watermark" in self.data:
+            raise Problem("A disk watermark requires a guarded registry")
+
+    def validate_watermark(self, policy):
+        if (not isinstance(policy, dict) or set(policy) != {"filesystem_uuid", "low_bytes", "recover_bytes"}
+                or self.data.get("native_claim", {}).get("phase") != "src"
+                or not isinstance(policy["filesystem_uuid"], str) or str(UUID(policy["filesystem_uuid"])) != policy["filesystem_uuid"]
+                or type(policy["low_bytes"]) is not int or type(policy["recover_bytes"]) is not int
+                or not 0 < policy["low_bytes"] < policy["recover_bytes"]):
+            raise Problem("Invalid global disk watermark policy")
+
+    def pool_command(self, action, policy):
+        nfs = pilot_module("quota_nfs")
+        endpoint = self.data["nfs_endpoints"]["dev-m1/test-user-a"]
+        claim = self.data["native_claim"]
+        raw = nfs.guest_client(endpoint).run(
+            "python3", "-IB", "/opt/nexpoly/ops/openscience-per-user-dev/water_monitor.py", action,
+            claim["deployment"], claim["registry_sha256"], policy["filesystem_uuid"],
+            policy["low_bytes"], policy["recover_bytes"], capture_output=True,
+            timeout=120 if action == "configure" else 25,
+        ).stdout
+        row = json.loads(raw)
+        if not isinstance(row, dict) or row.get("filesystem_uuid") != policy["filesystem_uuid"]:
+            raise Problem("Unexpected global disk measurement")
+        if action not in ("preflight", "alerts") and (
+            row.get("configured") is not True or row.get("low_bytes") != policy["low_bytes"]
+            or row.get("recover_bytes") != policy["recover_bytes"]
+            or row.get("state") not in ("normal", "low", "unavailable")
+            or row.get("write_allowed") is not (row["state"] == "normal")
+        ):
+            raise Problem("Invalid global disk guard observation")
+        return row
+
+    def configure_watermark(self, fs_uuid, low_mib, recover_mib):
+        self.check_format()
+        if self.data["format"] not in (4, 5):
+            raise Problem("Only the claimed native development quota volumes support the shared pool")
+        policy = dict(filesystem_uuid=fs_uuid, low_bytes=low_mib * 1024**2, recover_bytes=recover_mib * 1024**2)
+        self.validate_watermark(policy)
+        if self.data.get("disk_watermark", policy) != policy:
+            raise Problem("A different global disk policy is already configured")
+        if self.data["format"] != 5:
+            if self.resident_ids() or any(docker("ps", "-aq", "--filter", "volume=" + v["volume"])
+                                          for v in self.data["nfs_endpoints"].values()):
+                raise Problem("Recycle and detach both workspaces before first registering the shared pool")
+            self.pool_command("preflight", policy)
+            # Pin the required guard before enabling the guest. A failed setup is
+            # closed to admissions and can only be retried with the same policy.
+            self.data.update(format=5, disk_watermark=policy)
+            self.save()
+        return self.pool_command("configure", policy)
+
+    def disk_watermark(self, action="sample"):
+        self.check_format()
+        policy = self.data.get("disk_watermark")
+        if policy is None:
+            return {"configured": False, "write_allowed": True}
+        try:
+            return self.pool_command(action, policy)
+        except (OSError, ValueError, TypeError, KeyError, Problem, subprocess.SubprocessError) as error:
+            raise Problem("workspace_disk_monitor_unavailable") from error
+
+    def check_disk_admission(self, *, start=False):
+        if start and self.data.get("format") != 5 and "disk_watermark" not in self.data:
+            return
+        try:
+            sample = self.disk_watermark()
+            if not sample["write_allowed"]:
+                raise Problem("workspace_disk_low_watermark" if sample["state"] == "low" else "workspace_disk_monitor_unavailable")
+            return sample
+        except Problem as error:
+            if start:
+                raise CapacityRefusal("global_disk", str(error)) from error
+            raise
 
     def bindings(self):
         self.check_format()
@@ -392,7 +469,7 @@ class Registry:
                 self.data["nfs_endpoints"] = endpoints
         if first or self.readiness_seconds() != seconds or (claim and self.data.get("native_claim") != claim):
             if nfs:
-                self.data.update(format=4, native_claim=claim)
+                self.data.update(format=5 if "disk_watermark" in self.data else 4, native_claim=claim)
             self.data["readiness_seconds"] = seconds
             self.save()
         return {"deployment": self.data["deployment"], "storage_backend": NFS_BACKEND if nfs else QUOTA_BACKEND, "volumes": observed,
@@ -467,6 +544,7 @@ class Registry:
             raise CapacityRefusal("volume_free", f"available_mib={available}, required_mib={required}")
 
     def admit(self, workspace):
+        self.check_disk_admission(start=True)
         try:
             limits = self.capacity()
             candidate = workspace.row["id"]
@@ -499,7 +577,7 @@ class Workspace:
                     or not row["initialized"]):
                 raise Problem("Registered quota storage and workspace identity differ")
             self.volume = "ext4:" + b["filesystem_uuid"]
-            if registry.data["format"] in (3, 4):
+            if registry.data["format"] in (3, 4, 5):
                 self.nfs = registry.data["nfs_endpoints"][env + "/" + user]
                 self.volume = self.nfs["volume"]
         self.backend, self.fixture = self.base + "-backend", self.base + "-fixture"
@@ -925,6 +1003,8 @@ class Workspace:
             return self.state("activity_unknown")
         if fixture["state"] != "running" and command == "restart":
             return self.ensure()
+        if command == "restart":
+            self.registry.check_disk_admission(start=True)
         self.verify_pair(backend, fixture, require_current=command == "restart")
         reason = self.activity(backend, command == "reap")
         if reason:
@@ -1007,8 +1087,16 @@ def main():
     nfs.add_argument("--phase", required=True, choices=("src", "dst"))
     nfs.add_argument("--bindings", type=Path, required=True)
     nfs.add_argument("--readiness-seconds", type=int)
+    water = commands.add_parser("set-disk-watermark", help="Register the shared ext4 pool and enable its storage monitor")
+    water.add_argument("--filesystem-uuid", required=True)
+    water.add_argument("--low-mib", required=True, type=int)
+    water.add_argument("--recover-mib", required=True, type=int)
+    status = commands.add_parser("disk-watermark", help="Measure the pool or read persisted operator evidence")
+    source = status.add_mutually_exclusive_group()
+    source.add_argument("--observed", action="store_true", help="Read the last observation without taking a new sample")
+    source.add_argument("--alerts", action="store_true", help="Read the delivered transition notifications")
     commands.add_parser("list", help="List known development workspace bindings and their actual process state")
-    for operation in ("ensure", "status", "restart", "recycle", "reap", "touch", "begin", "end"):
+    for operation in ("ensure", "status", "restart", "recycle", "reap", "touch", "begin", "end", "check-write"):
         sub = commands.add_parser(operation)
         sub.add_argument("--environment", required=True)
         sub.add_argument("--user-id", required=True)
@@ -1030,6 +1118,11 @@ def main():
             elif args.command == "register-quota-nfs":
                 output = registry.register_quota_storage(json.loads(args.bindings.read_bytes()), args.readiness_seconds,
                                                         manifest=args.manifest, phase=args.phase)
+            elif args.command == "set-disk-watermark":
+                output = registry.configure_watermark(args.filesystem_uuid, args.low_mib, args.recover_mib)
+            elif args.command == "disk-watermark":
+                action = "observed" if args.observed else "alerts" if args.alerts else "sample"
+                output = registry.disk_watermark(action)
             elif args.command == "set-capacity":
                 output = registry.set_capacity(args.workspace_memory_mib, args.host_memory_floor_mib,
                                                args.volume_free_floor_mib)
@@ -1037,6 +1130,9 @@ def main():
                 project = registry.workspace(args.environment, args.user_id, create=args.command == "ensure")
                 if args.command == "ensure":
                     output = project.ensure()
+                elif args.command == "check-write":
+                    result = registry.check_disk_admission()
+                    output = {"write_allowed": result["write_allowed"], "configured": result["configured"]}
                 elif args.command == "status":
                     output = project.state()
                 elif args.command in ("reap", "recycle", "restart"):

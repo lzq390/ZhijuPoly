@@ -47,6 +47,8 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
   t.after(() => stop(authority))
   const owners = new Map(), disconnected = new Set()
   let capacityRefusal
+  let diskAdmission, nativeOwner, forwardedCount = 0
+  const checkedOwners = []
   let repairs = 0, writes = 0, fileDeletes = 0
   let forwarded
   for (const [idx,owner] of ["test-user-a","test-user-b"].entries()) {
@@ -55,6 +57,7 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
     await mkdir(join(directory,"secret"))
     await writeFile(join(directory,"secret/token"),String(idx+1).repeat(64))
     const backend = await listen(http.createServer((req,res) => {
+      forwardedCount++
       assert.equal(req.headers.authorization, "Bearer " + String(idx+1).repeat(64))
       assert.equal(req.headers.cookie, undefined)
       assert.equal(req.headers["x-nexpoly-page"], undefined)
@@ -75,13 +78,20 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
   }
   const supervisor = await listen(net.createServer(socket => socket.once("data", raw => {
     const r = JSON.parse(raw)
+    if (r.operation === "check-write") {
+      checkedOwners.push(r.user_id)
+      assert.deepEqual(Object.keys(r).sort(), ["environment","operation","user_id"])
+      socket.end(JSON.stringify(diskAdmission)+"\n")
+      return
+    }
     assert.equal(r.operation, "ensure")
     if (r.user_id === "test-user-b" && capacityRefusal) {
       socket.end(JSON.stringify({ok:false,error:"workspace_capacity: " + capacityRefusal})+"\n")
       return
     }
     if (disconnected.delete(r.user_id)) repairs++
-    socket.end(JSON.stringify({ok:true,result:{...r,workspace:owners.get(r.user_id),state:"running"}})+"\n")
+    socket.end(JSON.stringify({ok:true,result:{...r,workspace:owners.get(r.user_id),state:"running",
+      storage_backend:r.user_id === nativeOwner ? "nfs-ext4-user-quota" : undefined}})+"\n")
   })),supervisorSocket)
   t.after(() => stop(supervisor))
   const reserve = await listen(net.createServer(),0,"127.0.0.1")
@@ -148,6 +158,51 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
     assert.equal(accepted.status, 200)
     assert.deepEqual(await accepted.json(), {owner:"test-user-b"})
     assert.equal(fileDeletes, 1)
+
+    await t.test("shared disk admission covers growing routes, preserves reads and deletion, and fails closed", async () => {
+      async function request(method, path) {
+        return fetch(quotaOrigin+"/openscience-api"+path, {method,headers:{...headers,"Content-Type":"application/json"},
+          body:method === "GET" ? undefined : "{}"})
+      }
+      diskAdmission = {ok:false,error:"workspace_disk_low_watermark"}
+      const before = forwardedCount
+      for (const [method, path] of [
+        ["PUT","/file/content"], ["POST","/api/resolve-folder/create"], ["POST","/session"],
+        ["PATCH","/session/ses_test"], ["POST","/session/ses_test/message"], ["POST","/session/ses_test/prompt_async"],
+      ]) {
+        const blocked = await request(method,path)
+        assert.equal(blocked.status,507)
+        assert.equal((await blocked.json()).error,"workspace_disk_low_watermark")
+      }
+      assert.equal(forwardedCount,before)
+      assert.deepEqual(checkedOwners,Array(6).fill("test-user-b"))
+      assert.equal((await request("GET","/file/content")).status,200)
+      assert.equal((await request("DELETE","/file/content")).status,200)
+      assert.equal(checkedOwners.length,6)
+      const after = forwardedCount
+      for (const bad of [{ok:false,error:"workspace_disk_monitor_unavailable"}, {ok:true,result:{}}, {ok:true,result:{write_allowed:false}}]) {
+        diskAdmission = bad
+        const unavailable = await request("PUT","/file/content")
+        assert.equal(unavailable.status,503)
+        assert.equal((await unavailable.json()).error,"workspace_disk_monitor_unavailable")
+      }
+      assert.equal(forwardedCount,after)
+      diskAdmission = {ok:true,result:{write_allowed:true}}
+      assert.equal((await request("PUT","/file/content")).status,200)
+      assert.equal(forwardedCount,after+1)
+
+      // Disabling the editor's optional file controls cannot disable the
+      // storage policy on a volume identified by the actual workspace route.
+      nativeOwner = "test-user-a"
+      const scoped = await exchange("plain-ui-quota-login",nativeOwner,"browser_plain_ui_quota",18)
+      diskAdmission = {ok:false,error:"workspace_disk_low_watermark"}
+      const hiddenControls = await fetch(base+route, {method:"PUT",body:"{}",
+        headers:{Origin:base,Cookie:scoped.cookie,"X-Nexpoly-Page":scoped.page}})
+      assert.equal(hiddenControls.status,507)
+      assert.equal(checkedOwners.at(-1),nativeOwner)
+      assert.equal(forwardedCount,after+1)
+      nativeOwner = undefined
+    })
   })
   for (capacityRefusal of ["instance_count", "workspace_memory", "host_memory", "volume_free", "probe_unavailable"]) {
     const denied = await exchange("login-B-pending","test-user-b","browser_capacity_test",11)
