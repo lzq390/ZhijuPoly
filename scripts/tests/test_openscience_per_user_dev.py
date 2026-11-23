@@ -5,10 +5,12 @@ import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import TestCase, main
-from unittest.mock import patch
+from unittest.mock import Mock, mock_open, patch
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import openscience_per_user_dev as m1
+import openscience_per_user_service as service
 
 
 class ManagerTest(TestCase):
@@ -206,6 +208,223 @@ class ManagerTest(TestCase):
             self.assertEqual(self.a.ensure()["state"], "running")
             self.assertEqual(self.a.state()["state"], "running")
             admit.assert_not_called()
+
+
+class QuotaManagerTest(TestCase):
+    def setUp(self):
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        self.registry = m1.Registry(root)
+        self.registry.data = {"format": 1, "image": "image-a", "template_version": m1.VERSION,
+                              "deployment": "deployment-test", "workspaces": {}, "max_active": 2,
+                              "idle_seconds": 1800}
+        self.bindings = []
+        for index, suffix in enumerate("ab"):
+            mount = root / suffix
+            (mount / "workspace").mkdir(parents=True)
+            self.bindings.append({"mount": str(mount), "filesystem_uuid": str(uuid4()),
+                                  "environment": "dev-m1", "user_id": "test-user-" + suffix,
+                                  "workspace": suffix * 32, "uid": 220000 + index, "generation": 12})
+        self.web = Mock()
+
+    def register(self):
+        with patch.object(m1, "inspect_quota_volume", return_value={}), patch.object(m1, "pilot_module", return_value=self.web):
+            self.registry.register_quota_storage(self.bindings)
+        return self.registry.workspace("dev-m1", "test-user-a")
+
+    def test_registration_is_atomic_and_cannot_convert_an_existing_registry(self):
+        with patch.object(m1, "inspect_quota_volume", side_effect=[{}, m1.Problem("wrong B quota")]), \
+                self.assertRaisesRegex(m1.Problem, "wrong B"):
+            self.registry.register_quota_storage(self.bindings)
+        self.assertFalse(self.registry.file.exists())
+        self.assertEqual(self.registry.data["workspaces"], {})
+        self.registry.workspace("dev-m1", "test-user-a", create=True)
+        with patch.object(m1, "inspect_quota_volume") as probe, self.assertRaisesRegex(m1.Problem, "fresh"):
+            self.registry.register_quota_storage(self.bindings)
+        probe.assert_not_called()
+
+    def test_reopen_reuses_advance_and_rejects_missing_or_unregistered_quota_identity(self):
+        a = self.register()
+        a.row["generation"] += 1
+        self.registry.save()
+        self.register()  # Replaying the operator input keeps the live generation.
+        fresh = m1.Registry(self.registry.root)
+        self.assertEqual(fresh.data["format"], 2)
+        a = fresh.workspace("dev-m1", "test-user-a")
+        self.assertEqual((a.row["generation"], a.uid, a.row["id"]), (13, "220000", "a" * 32))
+        self.assertEqual(a.volume, "ext4:" + self.bindings[0]["filesystem_uuid"])
+        self.assertEqual(a.data_mount(m1.MOUNT),
+                         f"type=bind,src={self.bindings[0]['mount']}/workspace,dst=/openscience,bind-propagation=rprivate")
+        with self.assertRaises(m1.Problem):
+            fresh.workspace("dev-m1", "other", create=True)
+        fresh.data["quota_storage"].pop("dev-m1/test-user-a")
+        with self.assertRaisesRegex(m1.Problem, "identity"):
+            fresh.workspace("dev-m1", "test-user-a", create=True)
+        del fresh.data["quota_storage"]
+        with self.assertRaisesRegex(m1.Problem, "identity"):
+            fresh.workspace("dev-m1", "test-user-a", create=True)
+
+    def test_register_rejects_duplicate_owner_device_or_directory_alias(self):
+        a, b = self.bindings
+        for key in ("user_id", "workspace", "uid", "filesystem_uuid", "mount"):
+            with self.subTest(key=key), self.assertRaisesRegex(m1.Problem, "distinct"):
+                self.registry.register_quota_storage([a, {**b, key: a[key]}])
+        alias = Path(a["mount"]).with_name("alias")
+        alias.symlink_to(a["mount"])
+        with self.assertRaisesRegex(m1.Problem, "canonical"):
+            self.registry.register_quota_storage([{**a, "mount": str(alias)}, b])
+        self.assertFalse(self.registry.file.exists())
+
+    def test_wrong_uuid_uid_or_unenforced_hard_limit_cannot_reach_payload(self):
+        binding = self.bindings[0]
+        quota = Mock(PILOT_HARD_BYTES=2000000000)
+        observed = {"filesystem_uuid": binding["filesystem_uuid"], "uid": binding["uid"], "hard_bytes": 2000000000,
+                    "accounting": True, "enforced": True}
+        for key, bad in [("filesystem_uuid", str(uuid4())), ("uid", 220001), ("hard_bytes", 0),
+                         ("accounting", False), ("enforced", False)]:
+            quota.read.return_value = {**observed, key: bad}
+            with self.subTest(key=key), patch.object(m1, "pilot_module", return_value=quota), \
+                    self.assertRaisesRegex(m1.Problem, "hard quota differs"):
+                m1.inspect_quota_volume(binding)
+        quota.check_source_mount.assert_not_called()
+        quota.read.return_value = observed
+        with patch.object(m1, "pilot_module", return_value=quota), self.assertRaisesRegex(m1.Problem, "directory differs"):
+            m1.inspect_quota_volume(binding)
+
+    def test_full_quota_uses_shared_admission_space_and_missing_quota_never_creates_storage(self):
+        a = self.register()
+        full = {"used_bytes": 2000000000, "hard_bytes": 2000000000}
+        with patch.object(m1, "inspect_quota_volume", return_value=full), patch.object(m1, "docker", return_value="5000") as docker:
+            self.assertEqual(a.volume_free_mib(), 5000)
+            self.assertIn("type=volume,dst=/data,volume-nocopy,readonly", docker.call_args.args)
+        with patch.object(m1, "inspect_quota_volume", side_effect=m1.Problem("missing quota mount")), \
+                patch.object(m1, "docker") as docker, self.assertRaisesRegex(m1.Problem, "missing quota mount"):
+            a.prepare_volume()
+        docker.assert_not_called()
+        with patch.object(a, "resource", return_value=None), patch.object(m1, "inspect_quota_volume", return_value=full):
+            status = a.state()
+            self.assertEqual((status["quota"], status["storage_backend"], status["state"]),
+                             (full, m1.QUOTA_BACKEND, "recycled"))
+
+    def test_live_directory_inode_must_match_the_attested_mount_even_if_source_path_is_same(self):
+        a = self.register()
+        with patch.object(Path, "samefile", return_value=False) as same, self.assertRaisesRegex(m1.Problem, "Resident"):
+            a.verify_live_quota_mount({"state": "running", "pid": 1234})
+        same.assert_called_once_with(Path(self.bindings[0]["mount"]) / "workspace")
+
+    def test_configured_quota_readiness_is_persistent_bounded_and_replay_safe(self):
+        a = self.register()
+        with patch.object(m1, "inspect_quota_volume", return_value={}), patch.object(m1, "pilot_module", return_value=self.web):
+            self.registry.register_quota_storage(self.bindings, 150)
+            for invalid in (29, 181, True, "150"):
+                with self.subTest(invalid=invalid), self.assertRaisesRegex(m1.Problem, "30 and 180"):
+                    self.registry.register_quota_storage(self.bindings, invalid)
+            self.registry.register_quota_storage(self.bindings)
+        fresh = m1.Registry(self.registry.root)
+        self.assertEqual(fresh.readiness_seconds(), 150)
+        with patch.object(m1, "docker") as docker:
+            a.ready({"id": "fixture"}, {"id": "backend"})
+            self.assertEqual((docker.call_args.args[-1], docker.call_args.kwargs["timeout"]), ("150", 165))
+        with patch.object(service.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="{}")) as run:
+            service.manager(fresh.root, "ensure")
+            self.assertEqual(run.call_args.kwargs["timeout"], 270)
+            service.manager(fresh.root, "status")
+            self.assertEqual(run.call_args.kwargs["timeout"], 150)
+        with TemporaryDirectory() as directory:
+            normal = m1.Registry(Path(directory))
+            normal.data = {"format": 1, "deployment": "old", "workspaces": {}}
+            normal_ws = normal.workspace("dev-legacy", "member", create=True)
+            with patch.object(m1, "docker") as docker:
+                normal_ws.ready({"id": "fixture"}, {"id": "backend"})
+                self.assertEqual((docker.call_args.args[-1], docker.call_args.kwargs["timeout"]), ("30", 35))
+
+    def test_failed_probe_records_allowlisted_diagnostics_before_backend_removal(self):
+        a = self.register()
+        error = m1.Problem("Docker exec failed: workspace readiness timed out: /global/health URLError")
+        state = json.dumps({"Status": "exited", "OOMKilled": False, "ExitCode": 132, "Error": "private log data"})
+        logs = SimpleNamespace(stdout=b"private document", stderr=b"Illegal instruction; private token")
+        with patch.object(m1, "docker", side_effect=(error, state)), patch.object(m1.subprocess, "run", return_value=logs), \
+                self.assertRaisesRegex(m1.Problem, "Illegal instruction") as caught:
+            a.ready({"id": "fixture"}, {"id": "backend"})
+        self.assertNotIn("private", str(caught.exception))
+        note = m1.Registry(self.registry.root).workspace("dev-m1", "test-user-a").row["last_readiness_failure"]
+        self.assertEqual((note["exit_code"], note["oom_killed"], note["backend_log_signals"]), (132, False, ["Illegal instruction"]))
+        self.assertEqual((note["probe_path"], note["probe_result"]), ("/global/health", "URLError"))
+
+    def test_only_quota_backend_overrides_healthcheck_and_uses_bounded_stderr_instead_of_file_logger(self):
+        quota = self.register()
+        self.registry.data["readiness_seconds"] = 150
+        with TemporaryDirectory() as directory:
+            registry = m1.Registry(Path(directory))
+            registry.data = {"format": 1, "deployment": "legacy", "workspaces": {}, "template_version": m1.VERSION,
+                             "image": "local-image"}
+            ordinary = registry.workspace("dev-legacy", "member", create=True)
+            for ws in (ordinary, quota):
+                with self.subTest(user=ws.user), patch.object(ws, "m3_overlay", return_value=({}, {})), \
+                        patch.object(m1, "docker", return_value="container-id") as docker:
+                    ws.create_pair()
+                    fixture, backend = (call.args for call in docker.call_args_list)
+                    self.assertNotIn("--health-cmd", fixture)
+                    self.assertNotIn("--print-logs", fixture)
+                    if ws is ordinary:
+                        self.assertNotIn("--health-cmd", backend)
+                        self.assertNotIn("--print-logs", backend)
+                        self.assertNotIn("--log-level", backend)
+                    else:
+                        cli = backend[backend.index("/app/backend/cli/src/index.ts") + 1:]
+                        self.assertEqual(cli[:4], ("--print-logs", "--log-level", "ERROR", "serve"))
+                        self.assertIn("max-size=2m", backend)
+                        self.assertIn("max-file=1", backend)
+                        command = backend[backend.index("--health-cmd") + 1]
+                        self.assertIn("exec python3 -ISB", command)
+                        self.assertIn(m1.TOKEN_DIR + "/token", command)
+                        self.assertNotIn((ws.secret_dir / "token").read_text().strip(), repr(backend))
+                        self.assertTrue(command.endswith(" >/dev/null 2>&1"))
+                        for flag, value in [("--health-interval", "30s"), ("--health-timeout", "10s"),
+                                            ("--health-start-period", "150s"), ("--health-retries", "3")]:
+                            self.assertEqual(backend[backend.index(flag) + 1], value)
+
+    def test_container_health_reads_the_current_token_and_requires_a_healthy_authenticated_response(self):
+        for token, status, payload, expected in [("first", 200, b'{"healthy":true}', 0),
+                                                  ("rotated", 200, b'{"healthy":false}', 1),
+                                                  ("revoked", 401, b'', 1)]:
+            with self.subTest(status=status, token=token), patch("builtins.open", mock_open(read_data=token + "\n")) as reader, \
+                    patch("http.client.HTTPConnection") as client, self.assertRaises(SystemExit) as result:
+                reply = client.return_value.getresponse.return_value
+                reply.status = status
+                reply.read.return_value = payload
+                exec(m1.QUOTA_HEALTH, {})
+            self.assertEqual(result.exception.code, expected)
+            reader.assert_called_once_with("/run/nexpoly-m1/token", encoding="ascii")
+            client.assert_called_once_with("127.0.0.1", 4096, timeout=5)
+            client.return_value.request.assert_called_once_with("GET", "/global/health", headers={"Authorization": "Bearer " + token})
+
+    def test_reuse_checks_pinned_runtime_logging_and_health_options_but_old_pairs_can_be_recycled(self):
+        a = self.register()
+        backend = {"id": "b", "state": "exited"}
+        fixture = {"id": "f", "state": "exited"}
+        def mount(target, path, rw=False):
+            return {"Type": "bind", "Source": str(path), "Destination": target, "RW": rw, "Propagation": "rprivate"}
+        bm = [mount(m1.MOUNT, Path(a.quota_binding["mount"]) / "workspace", True), mount(m1.TOKEN_DIR, a.secret_dir),
+              mount(m1.CONTROL, a.control), mount("/m1-config.json", a.registry.root / "config.json")]
+        fm = [mount(m1.TOKEN_DIR, a.secret_dir), mount("/fixture.py", a.registry.root / "fixture.py")]
+        config = {"cmd": a.backend_command(), "env": ["HOME=/openscience/home"], "health": {"Test": ["CMD-SHELL", m1.QUOTA_HEALTH_CMD]}}
+        def inspected(*args):
+            fmt, cid = args[-2:]
+            if cid == "f":
+                return "\n".join((json.dumps(fm), "none", "65534:65534", "{}"))
+            data = [json.dumps(bm), "container:f", a.identity, "{}"]
+            if ".Config.Env" in fmt:
+                data += [json.dumps(config[k]) for k in ("cmd", "env", "health")]
+            return "\n".join(data)
+        with patch.object(a, "m3_overlay", return_value=({}, {})), patch.object(m1, "docker", side_effect=inspected):
+            a.verify_pair(backend, fixture)
+            for key, stale in [("cmd", ["bun", "serve"]), ("env", ["BUN_JSC_custom=1"]), ("health", None)]:
+                with self.subTest(key=key, stale=stale), patch.dict(config, {key: stale}):
+                    with self.assertRaisesRegex(m1.Problem, "recycle"):
+                        a.verify_pair(backend, fixture)
+                    a.verify_pair(backend, fixture, require_current=False)
 
 
 if __name__ == "__main__":

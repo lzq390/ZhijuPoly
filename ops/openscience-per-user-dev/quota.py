@@ -74,6 +74,20 @@ def _unescape_mount(field):
     return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), field)
 
 
+def check_source_mount(source, mount):
+    if (
+        source.is_symlink()
+        or not source.is_dir()
+        or source.stat().st_dev != mount.stat().st_dev
+    ):
+        raise ValueError("Expected a workspace directory on the source quota volume")
+    workspace = source.resolve()
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        path = _unescape_mount(line.split()[4])
+        if Path(path).is_relative_to(workspace):
+            raise ValueError("Unexpected nested mount inside the workspace")
+
+
 def _filesystem(mount, owner, role=None):
     root = Path(mount).resolve(strict=True)
     if root == Path("/") or not root.is_dir():

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
 import { once } from "node:events"
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import http from "node:http"
 import net from "node:net"
 import os from "node:os"
 import { join } from "node:path"
+import { pathToFileURL } from "node:url"
 import test from "node:test"
 import { startRouter } from "./m2-router.mjs"
 
@@ -46,7 +47,7 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
   t.after(() => stop(authority))
   const owners = new Map(), disconnected = new Set()
   let capacityRefusal
-  let repairs = 0, writes = 0
+  let repairs = 0, writes = 0, fileDeletes = 0
   let forwarded
   for (const [idx,owner] of ["test-user-a","test-user-b"].entries()) {
     const workspace = String(idx+1).repeat(32), directory = join(root,workspace)
@@ -58,6 +59,7 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
       assert.equal(req.headers.cookie, undefined)
       assert.equal(req.headers["x-nexpoly-page"], undefined)
       if (req.method === "POST") writes++
+      if (req.method === "DELETE" && req.url === "/file/content") fileDeletes++
       if (disconnected.has(owner)) { req.socket.destroy(); return }
       forwarded = req.url
       if (req.url === "/global/event") {
@@ -85,16 +87,18 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
   const reserve = await listen(net.createServer(),0,"127.0.0.1")
   const port = reserve.address().port, base = "http://127.0.0.1:"+port
   await stop(reserve)
-  const router = await startRouter({environment:"dev-m1",listen_port:port,public_origin:base,parent_origins:[parent],
+  const config = {environment:"dev-m1",listen_port:port,public_origin:base,parent_origins:[parent],
     authority_url:"http://127.0.0.1:"+authority.address().port, service_token_file:join(root,"service-token"),
-    supervisor_socket:supervisorSocket,ui_root:root}, async () => ({boot:"",index:"",patchedApp:""}))
+    supervisor_socket:supervisorSocket,ui_root:root}
+  const testUi = async () => ({boot:"",index:"",patchedApp:""})
+  const router = await startRouter(config, testUi)
   t.after(() => stop(router))
-  async function exchange(login,owner,profile,issued,loginIssued = issued,window = 30) {
+  async function exchange(login,owner,profile,issued,loginIssued = issued,window = 30,origin = base) {
     const ticket = "one_time_ticket_"+Math.random().toString().slice(2)
     const data = {user_id:"user-"+owner,workspace_user_id:owner,session_id:login,environment:"dev-m1",agent_session:ticket,
       handoff_id:"handoff_"+ticket,issued_at:issued,login_issued_at:loginIssued,window}
     tickets.set(ticket,data);logins.set(ticket,data)
-    const response = await fetch(base+"/_nexpoly/auth/exchange",{method:"POST",headers:{Origin:parent},
+    const response = await fetch(origin+"/_nexpoly/auth/exchange",{method:"POST",headers:{Origin:parent},
       body:new URLSearchParams({ticket,handoff_id:data.handoff_id,browser_id:profile})})
     const html = await response.text()
     return {html,page:html.match(/"page_context":"([A-Za-z0-9_-]+)"/)?.[1],cookie:response.headers.get("set-cookie")?.split(";")[0],data}
@@ -105,6 +109,46 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
     return fetch(base+path,{headers:{Cookie:session.cookie,"X-Nexpoly-Page":session.page,...custom}})
   }
   assert.ok(a.page && a2.page)
+  await t.test("file removal requires the quota profile, matching page cookie and write origin", async t => {
+    const route = "/openscience-api/file/content"
+    const remove = (origin, headers, query = "") => fetch(origin+route+query, {
+      method:"DELETE", headers:{"Content-Type":"application/json", ...headers},
+      body:JSON.stringify({path:"notebook.txt"}),
+    })
+    const plain = await remove(base, {Origin:base, Cookie:a.cookie, "X-Nexpoly-Page":a.page})
+    assert.equal(plain.status, 403)
+    assert.equal((await plain.json()).error, "route_disabled")
+
+    // This test exercises the HTTP boundary with the unchanged router module.
+    // Replace only the proprietary editor-asset installer in its temporary
+    // fixture. The real November editor is exercised by the M5 browser drill.
+    for (const name of ["m2-router.mjs", "m2-ui.mjs"])
+      await copyFile(new URL(name, import.meta.url), join(root,name))
+    await writeFile(join(root,"quota-ui.mjs"), "export function installQuotaUi() {}")
+    const {startRouter: startQuotaRouter} = await import(pathToFileURL(join(root,"m2-router.mjs")))
+    const reserved = await listen(net.createServer(),0,"127.0.0.1")
+    const quotaPort = reserved.address().port, quotaOrigin = "http://127.0.0.1:"+quotaPort
+    await stop(reserved)
+    const quotaRouter = await startQuotaRouter({...config, quota_files:true, listen_port:quotaPort, public_origin:quotaOrigin}, testUi)
+    t.after(() => stop(quotaRouter))
+    const grant = await exchange("quota-login","test-user-b","browser_quota_test",15,15,30,quotaOrigin)
+    const other = await exchange("other-quota-login","test-user-a","browser_quota_other",16,16,30,quotaOrigin)
+    assert.ok(grant.page && grant.cookie && other.page && other.cookie)
+    const headers = {Origin:quotaOrigin, Cookie:grant.cookie, "X-Nexpoly-Page":grant.page}
+    assert.equal((await remove(quotaOrigin, {Origin:quotaOrigin, "X-Nexpoly-Page":grant.page})).status, 401)
+    assert.equal((await remove(quotaOrigin, {...headers, Cookie:other.cookie})).status, 401)
+    const wrongOrigin = await remove(quotaOrigin, {...headers, Origin:parent})
+    assert.equal(wrongOrigin.status, 403)
+    assert.equal((await wrongOrigin.json()).error, "write_origin_denied")
+    const onlyQuery = await remove(quotaOrigin, {Origin:quotaOrigin, Cookie:grant.cookie}, "?np_page="+grant.page)
+    assert.equal(onlyQuery.status, 403)
+    assert.equal((await onlyQuery.json()).error, "write_origin_denied")
+    assert.equal(fileDeletes, 0)
+    const accepted = await remove(quotaOrigin, headers)
+    assert.equal(accepted.status, 200)
+    assert.deepEqual(await accepted.json(), {owner:"test-user-b"})
+    assert.equal(fileDeletes, 1)
+  })
   for (capacityRefusal of ["instance_count", "workspace_memory", "host_memory", "volume_free", "probe_unavailable"]) {
     const denied = await exchange("login-B-pending","test-user-b","browser_capacity_test",11)
     assert.match(denied.html,/"reason":"workspace_capacity"/)

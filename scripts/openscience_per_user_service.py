@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import threading
+from openscience_per_user_dev import DEFAULT_READY_SECONDS, Registry
 
 
 MANAGER = Path(__file__).with_name("openscience_per_user_dev.py")
@@ -20,9 +21,14 @@ MAX_REQUEST = 2048
 
 
 def manager(root, *args):
+    timeout = 150
+    if args[0] == "ensure":
+        # Leave the same budget for admission, Docker creation and checked teardown as a normal
+        # start, in addition to the guest's explicitly configured readiness allowance.
+        timeout += Registry(root).readiness_seconds() - DEFAULT_READY_SECONDS
     result = subprocess.run(
         [sys.executable, str(MANAGER), "--state-dir", str(root), *args],
-        capture_output=True, text=True, timeout=150,
+        capture_output=True, text=True, timeout=timeout,
     )
     if result.returncode:
         try:

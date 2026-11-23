@@ -7,7 +7,6 @@ from importlib import import_module
 import json
 import os
 from pathlib import Path
-import re
 import stat
 import sys
 import tarfile
@@ -70,18 +69,7 @@ def inventory(root, binding):
     }
 
 
-def check_source_mount(source, mount):
-    if (
-        source.is_symlink()
-        or not source.is_dir()
-        or source.stat().st_dev != mount.stat().st_dev
-    ):
-        raise ValueError("Expected a workspace directory on the source quota volume")
-    workspace = source.resolve()
-    for line in Path("/proc/self/mountinfo").read_text().splitlines():
-        path = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), line.split()[4])
-        if Path(path).is_relative_to(workspace):
-            raise ValueError("Unexpected nested mount inside the workspace")
+check_source_mount = quota.check_source_mount
 
 
 def backup(mount, binding, bundle_dir):

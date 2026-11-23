@@ -245,7 +245,28 @@ def start_adapters(stack, state, transport, api_socket, cred, deploy, verify):
     return endpoints, evidence
 
 
+def require_quota_workspaces(rows):
+    if len(rows) != 2 or {(r.get("environment"), r.get("user_id")) for r in rows} != {
+        ("dev-m1", "test-user-a"), ("dev-m1", "test-user-b")
+    }:
+        raise RuntimeError("Expected exactly the two retained dev-m1 quota workspaces")
+    for row in rows:
+        # list/status reads the owner, actual filesystem and enforced kernel
+        # policy. A requested tier or an unverified Docker volume label cannot
+        # enable mutation controls on a standard development workspace.
+        policy = row.get("quota")
+        if (row.get("storage_backend") != "nfs-ext4-user-quota" or not isinstance(policy, dict)
+                or type(row.get("uid")) is not int or policy.get("uid") != row["uid"]
+                or policy.get("accounting") is not True or policy.get("enforced") is not True
+                or policy.get("hard_bytes") != 2_000_000_000):
+            raise RuntimeError("Both quota workspaces need a verified owner and enforced 2,000,000,000-byte limit")
+
+
 def run_stack(args, stack):
+    if args.m5_quota_files:
+        if args.m3_gateway_image or args.m3_adapters or args.m4 or args.verify:
+            raise ValueError("Quota file mode requires M2 and the dedicated M5 browser verifier")
+        args.registry = args.registry.resolve()
     local_engine()
     if args.m3_adapters and not args.m3_gateway_image:
         raise ValueError("--m3-adapters requires the reviewed --m3-gateway-image")
@@ -434,6 +455,8 @@ def run_stack(args, stack):
     ]
 
     m3_api, manager_env, tool_config = [], dict(os.environ), {}
+    if args.m5_quota_files:
+        manager_env.pop("OPENSCIENCE_M3_OVERLAY", None)
     retry_evidence = None
     gateway = None
     if args.m3_gateway_image:
@@ -714,6 +737,8 @@ def run_stack(args, stack):
     before = json.loads(run(sys.executable, str(MANAGER), "--state-dir", str(args.registry), "list"))[
         "workspaces"
     ]
+    if args.m5_quota_files:
+        require_quota_workspaces(before)
     retained = {
         b["user_id"]: b
         for b in before
@@ -780,6 +805,8 @@ def run_stack(args, stack):
         "tls_key_file": str(key),
         "tls_cert_file": str(cert),
     }
+    if args.m5_quota_files:
+        config["quota_files"] = True
     if args.m4:
         config["m4"] = m4_config
     if args.m3_gateway_image:
@@ -869,6 +896,8 @@ http {{
         "agent": AGENT,
         "user_volumes": {k: v["volume"] for k, v in retained.items()},
     }
+    if args.m5_quota_files:
+        ready["quota_files"] = True
     if args.m3_gateway_image:
         ready.update(gateway=gateway, gateway_image=args.m3_gateway_image)
         if args.m3_adapters:
@@ -934,6 +963,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", type=Path, default=DEFAULT / "nexpoly-openscience-m2-dev")
     parser.add_argument("--registry", type=Path, default=REGISTRY)
+    parser.add_argument("--m5-quota-files", action="store_true",
+                        help="Use local M2 with the retained accounts on a verified NFS/ext4 quota registry")
     parser.add_argument(
         "--verify", type=Path, help="Run browser acceptance and write a new JSON report, then stop."
     )

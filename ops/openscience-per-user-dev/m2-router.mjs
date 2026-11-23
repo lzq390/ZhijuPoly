@@ -124,6 +124,10 @@ export async function startRouter(c, loadUi = pinnedUi) {
   const {boot, index:baseIndex, patchedApp} = await loadUi(uiRoot, parents)
   const developmentAssets = new Map()
   let index = baseIndex
+  if (c.quota_files === true) {
+    const {installQuotaUi} = await import("./quota-ui.mjs")
+    await installQuotaUi(developmentAssets, uiRoot)
+  }
   if (c.m3?.adapters) {
     for (const file of ["results-controller.mjs","results-view.mjs","results-view.css"]) {
       developmentAssets.set("/assets/m3/"+file, await readFile(resolve(HERE,"../openscience-mcp-dev",file)))
@@ -276,7 +280,8 @@ export async function startRouter(c, loadUi = pinnedUi) {
     const toolRequest = tools && req.method === "POST"
     const permissionReply = toolRequest && /^\/permission\/per_[a-zA-Z0-9_-]+\/reply$/.test(path)
     const form = toolRequest && formAdapter?.(path)
-    if (!form && !permissionReply && !allows(req.method, path)) throw new Refusal(403, "route_disabled")
+    const quotaDelete = c.quota_files === true && req.method === "DELETE" && path === "/file/content"
+    if (!form && !permissionReply && !quotaDelete && !allows(req.method, path)) throw new Refusal(403, "route_disabled")
     const writing = !["GET","HEAD"].includes(req.method)
     if (writing && (req.headers.origin !== c.public_origin || req.headers["x-nexpoly-page"] !== page.key))
       throw new Refusal(403, "write_origin_denied")

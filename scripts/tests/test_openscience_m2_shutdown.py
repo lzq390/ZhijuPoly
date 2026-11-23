@@ -55,5 +55,33 @@ class WorkspaceShutdownTest(TestCase):
                 self.assertFalse(stack.attachment_matches(row, None))
 
 
+class QuotaFilesTest(TestCase):
+    def bindings(self):
+        return [
+            {"environment": "dev-m1", "user_id": "test-user-" + who, "uid": uid,
+             "storage_backend": "nfs-ext4-user-quota",
+             "quota": {"uid": uid, "accounting": True, "enforced": True, "hard_bytes": 2_000_000_000}}
+            for who, uid in (("a", 101), ("b", 102))
+        ]
+
+    def test_native_router_requires_both_owners_and_enforced_decimal_limit(self):
+        stack.require_quota_workspaces(self.bindings())
+        for group, field, value in (
+            ("binding", "environment", "other"),
+            ("binding", "user_id", "test-user-a"),
+            ("binding", "storage_backend", "ext4-user-quota"),
+            ("quota", "uid", 101),
+            ("quota", "enforced", False),
+            ("quota", "accounting", False),
+            ("quota", "hard_bytes", 2 * 1024 ** 3),
+        ):
+            with self.subTest(field=field, value=value), self.assertRaises(RuntimeError):
+                rows = self.bindings()
+                (rows[1] if group == "binding" else rows[1]["quota"])[field] = value
+                stack.require_quota_workspaces(rows)
+        with self.assertRaises(RuntimeError):
+            stack.require_quota_workspaces(self.bindings()[:1])
+
+
 if __name__ == "__main__":
     main()

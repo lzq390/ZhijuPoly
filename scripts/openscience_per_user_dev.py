@@ -3,19 +3,22 @@
 import argparse
 from contextlib import contextmanager
 import fcntl
+from functools import lru_cache
 import hashlib
+from importlib.util import module_from_spec, spec_from_file_location
 import json
 import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 
 BASE = "sha256:a828b3723cdf0ebe067339b88bad1ef9384ad596f50f1d448b7dfa45f28ec853"
@@ -35,6 +38,10 @@ BACKEND_MEMORY_MIB = 2048
 FIXTURE_MEMORY_MIB = 96
 PAIR_MEMORY_MIB = BACKEND_MEMORY_MIB + FIXTURE_MEMORY_MIB
 VOLUME_RESERVE_MIB = 2048
+QUOTA_BACKEND = "ext4-user-quota"
+NFS_BACKEND = "nfs-ext4-user-quota"
+PILOT_USERS = {"test-user-a", "test-user-b"}
+DEFAULT_READY_SECONDS = 30
 DEFAULT_CAPACITY = {"workspace_memory_mib": 2 * PAIR_MEMORY_MIB, "host_memory_floor_mib": 16384,
                     "volume_free_floor_mib": 32768}
 RUNTIME = ["--pull=never", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
@@ -89,11 +96,22 @@ import os
 fs = os.statvfs('/data')
 print(fs.f_bavail * fs.f_frsize // (1024 * 1024))
 """
+QUOTA_HEALTH = """
+import http.client, json, sys
+with open("/run/nexpoly-m1/token", encoding="ascii") as source:
+    token = source.read(128).strip()
+conn = http.client.HTTPConnection("127.0.0.1", 4096, timeout=5)
+conn.request("GET", "/global/health", headers={"Authorization": "Bearer " + token})
+reply = conn.getresponse()
+sys.exit(0 if reply.status == 200 and json.loads(reply.read(4096)).get("healthy") is True else 1)
+"""
+QUOTA_HEALTH_CMD = "exec python3 -ISB -c " + shlex.quote(QUOTA_HEALTH) + " >/dev/null 2>&1"
 READY = """
-import json, time, urllib.request
+import json, sys, time, urllib.error, urllib.request
 from pathlib import Path
 token = Path('/run/nexpoly-m1/token').read_text().strip()
-deadline = time.monotonic() + 30
+deadline = time.monotonic() + int(sys.argv[1])
+last = 'no response'
 while time.monotonic() < deadline:
     try:
         for path,key in [('/global/health', 'healthy'), ('/project/current','id')]:
@@ -102,10 +120,11 @@ while time.monotonic() < deadline:
                 if not json.load(response).get(key):
                     raise ValueError('not ready')
         break
-    except (ValueError, OSError):
+    except (ValueError, OSError) as error:
+        last = path + ' ' + ('HTTP ' + str(error.code) if isinstance(error, urllib.error.HTTPError) else type(error).__name__)
         time.sleep(0.15)
 else:
-    raise SystemExit('workspace readiness timed out')
+    raise SystemExit('workspace readiness timed out: ' + last)
 """
 
 
@@ -116,6 +135,70 @@ class Problem(RuntimeError):
 class CapacityRefusal(Problem):
     def __init__(self, reason, detail):
         super().__init__(f"workspace_capacity: {reason} ({detail})")
+
+
+@lru_cache(maxsize=3)
+def pilot_module(name):
+    # The offline guest may stage modules beside the supervisor instead of the repository layout.
+    here = Path(__file__).resolve()
+    path = here.parents[1] / "ops/openscience-per-user-dev" / (name + ".py")
+    if not path.is_file():
+        path = here.with_name(name + ".py")
+    spec = spec_from_file_location(name, path)
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def new_row(workspace, uid, generation=0):
+    return {"id": workspace, "uid": uid, "generation": generation, "initialized": False,
+            "last_activity": 0, "leases": [], "failed_starts": 0, "retry_after": 0}
+
+
+def validated_readiness(seconds):
+    if type(seconds) is not int or not DEFAULT_READY_SECONDS <= seconds <= 180:
+        raise Problem("Quota readiness timeout must be between 30 and 180 seconds")
+    return seconds
+
+
+def validate_quota_binding(binding, *, local=True):
+    keys = {"mount", "filesystem_uuid", "user_id", "environment", "workspace", "uid", "generation"}
+    if (not isinstance(binding, dict) or set(binding) != keys or binding["environment"] != "dev-m1"
+            or not isinstance(binding["user_id"], str) or binding["user_id"] not in PILOT_USERS
+            or not isinstance(binding["workspace"], str)
+            or not re.fullmatch("[0-9a-f]{32}", binding["workspace"]) or type(binding["uid"]) is not int
+            or not 210000 <= binding["uid"] < 100210000 or type(binding["generation"]) is not int
+            or binding["generation"] < 0):
+        raise Problem("Expected a retained dev-m1 pilot binding and generation")
+    mount, fs_uuid = binding["mount"], binding["filesystem_uuid"]
+    if (not isinstance(mount, str) or not re.fullmatch(r"/[\w./-]+", mount, re.ASCII)
+            or os.path.normpath(mount) != mount or (local and str(Path(mount).resolve(strict=True)) != mount)
+            or not isinstance(fs_uuid, str)
+            or str(UUID(fs_uuid)) != fs_uuid):
+        raise Problem("Expected a canonical mount path and filesystem UUID")
+
+
+def inspect_quota_volume(binding):
+    validate_quota_binding(binding)
+    mount = Path(binding["mount"])
+    payload = mount / "workspace"
+    quota = pilot_module("quota")
+    observed = quota.read(mount, binding)
+    if (observed["filesystem_uuid"] != binding["filesystem_uuid"] or observed["uid"] != binding["uid"]
+            or observed["hard_bytes"] != quota.PILOT_HARD_BYTES or not observed["accounting"] or not observed["enforced"]):
+        raise Problem("Mounted filesystem UUID, UID or effective hard quota differs from the pilot binding")
+    quota.check_source_mount(payload, mount)
+    info = payload.stat()
+    if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (binding["uid"], binding["uid"], 0o700):
+        raise Problem("Quota workspace directory differs from the registered UID or private mode")
+    fd = os.open(payload / ".m1-owner", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as marker:
+        meta = os.fstat(fd)
+        if (not stat.S_ISREG(meta.st_mode) or meta.st_dev != info.st_dev or meta.st_nlink != 1
+                or (meta.st_uid, meta.st_gid, stat.S_IMODE(meta.st_mode)) != (0, 0, 0o444)
+                or marker.read(33) != binding["workspace"].encode("ascii")):
+            raise Problem("Quota workspace identity marker differs from the registered owner")
+    return observed
 
 
 def host_available_mib():
@@ -199,6 +282,7 @@ class Registry:
         settings = dict(image=args.image, template_version=VERSION, max_active=args.max_active,
                         idle_seconds=args.idle_seconds)
         if self.data:
+            self.check_format()
             if any(self.data.get(k) != v for k, v in settings.items()):
                 raise Problem("Development registry already initialized with different settings")
         else:
@@ -222,6 +306,11 @@ class Registry:
         # Format-1 registries predate admission budgets. Apply the same defaults on first use.
         return validated_capacity(self.data.get("capacity", DEFAULT_CAPACITY))
 
+    def readiness_seconds(self):
+        if self.data and self.data.get("format") in (2, 3, 4):
+            return validated_readiness(self.data.get("readiness_seconds", DEFAULT_READY_SECONDS))
+        return DEFAULT_READY_SECONDS
+
     def set_capacity(self, workspace_memory_mib, host_memory_floor_mib, volume_free_floor_mib):
         self.bindings()
         limits = validated_capacity(dict(workspace_memory_mib=workspace_memory_mib,
@@ -231,9 +320,34 @@ class Registry:
         self.save()
         return {"deployment": self.data["deployment"], "capacity": limits}
 
-    def bindings(self):
-        if not self.data or self.data.get("format") != 1:
+    def check_format(self, *, allow_unclaimed=False):
+        if not self.data or self.data.get("format") not in (1, 2, 3, 4):
             raise Problem("Initialize an M1 development registry first")
+        # Older supervisors must refuse quota registries. A missing pin must never select the Docker backend.
+        if self.data["format"] in (2, 3, 4):
+            expected = {"dev-m1/" + user for user in PILOT_USERS}
+            pins = self.data.get("quota_storage")
+            if not isinstance(pins, dict) or set(pins) != expected or set(self.data["workspaces"]) != expected:
+                raise Problem("Quota registry identity bindings are incomplete")
+            nfs = self.data.get("nfs_endpoints")
+            if self.data["format"] in (3, 4):
+                if not isinstance(nfs, dict) or set(nfs) != expected or not all(nfs.values()):
+                    raise Problem("NFS quota registry endpoint pins are incomplete")
+                if self.data["format"] == 3 and not allow_unclaimed:
+                    raise Problem("Legacy NFS registry requires exclusive registration; repeat register-quota-nfs while quiescent")
+                if self.data["format"] == 4:
+                    module = pilot_module("quota_nfs")
+                    phase = nfs["dev-m1/test-user-a"]["slot"][:3]
+                    uuids = [pins["dev-m1/test-user-" + r]["filesystem_uuid"] for r in "ab"]
+                    if self.data.get("native_claim") != module.claim_record(phase, *module.ownership(self), *uuids):
+                        raise Problem("NFS owner claim differs from this registry or its location")
+            elif nfs is not None:
+                raise Problem("Unexpected NFS endpoints in a local ext4 registry")
+        elif "quota_storage" in self.data:
+            raise Problem("Unexpected quota storage in a format-1 registry")
+
+    def bindings(self):
+        self.check_format()
         return [self.workspace(*key.split("/", 1)) for key in self.data["workspaces"]]
 
     def set_image(self, image):
@@ -243,13 +357,49 @@ class Registry:
             selector = "label=" + PREFIX + "deployment=" + self.data["deployment"]
             if docker("ps", "-aq", "--filter", selector):
                 raise Problem("template_in_use: recycle the registered backend and fixture containers first")
+            if "quota_storage" in self.data:
+                pilot_module("quota_web_files").prepare(self.root, image)
             self.data["image"] = image
             self.save()
         return {"deployment": self.data["deployment"], "image": image, "template_version": VERSION}
 
+    def register_quota_storage(self, bindings, readiness_seconds=None, *, manifest=None, phase=None):
+        if self.data and self.data.get("format") == 3 and manifest is not None:
+            self.check_format(allow_unclaimed=True)
+        else:
+            self.bindings()
+        seconds = self.readiness_seconds() if readiness_seconds is None else validated_readiness(readiness_seconds)
+        if not isinstance(bindings, list) or len(bindings) != 2:
+            raise Problem("Both retained dev-m1 quota bindings are required")
+        for binding in bindings:
+            validate_quota_binding(binding, local=manifest is None)
+        if any(len({b[key] for b in bindings}) != 2 for key in ("uid", "user_id", "workspace", "mount", "filesystem_uuid")):
+            raise Problem("Quota pilot requires two distinct users, UIDs, workspaces, mounts and filesystem UUIDs")
+        pins = {b["environment"] + "/" + b["user_id"]: b for b in bindings}
+        nfs = pilot_module("quota_nfs") if manifest is not None else None
+        endpoints = nfs.endpoints(manifest, phase, bindings) if nfs else None
+        if self.data["workspaces"] and (self.data.get("quota_storage") != pins or self.data.get("nfs_endpoints") != endpoints):
+            raise Problem("Register quota storage on a fresh development registry")
+        observed = {key: nfs.attest(endpoints[key], b, docker) if nfs else inspect_quota_volume(b) for key, b in pins.items()}
+        claim = nfs.claim_pair(self, endpoints, pins, docker) if nfs else None
+        pilot_module("quota_web_files").prepare(self.root, self.data["image"])
+        first = "quota_storage" not in self.data
+        if first:
+            rows = {key: {**new_row(b["workspace"], b["uid"], b["generation"]), "initialized": True}
+                    for key, b in pins.items()}
+            self.data.update(format=4 if nfs else 2, quota_storage=pins, workspaces=rows)
+            if nfs:
+                self.data["nfs_endpoints"] = endpoints
+        if first or self.readiness_seconds() != seconds or (claim and self.data.get("native_claim") != claim):
+            if nfs:
+                self.data.update(format=4, native_claim=claim)
+            self.data["readiness_seconds"] = seconds
+            self.save()
+        return {"deployment": self.data["deployment"], "storage_backend": NFS_BACKEND if nfs else QUOTA_BACKEND, "volumes": observed,
+                "readiness_seconds": seconds, **({"native_claim": claim} if nfs else {})}
+
     def workspace(self, env, user, create=False):
-        if self.data is None or self.data.get("format") != 1:
-            raise Problem("Initialize an M1 development registry first")
+        self.check_format()
         if not re.fullmatch(r"dev-[a-z0-9][a-z0-9-]{0,39}", env):
             raise Problem("Only explicitly named dev-* environments are supported")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}", user):
@@ -257,14 +407,13 @@ class Registry:
         key = env + "/" + user
         rows = self.data["workspaces"]
         if key not in rows:
-            if not create:
+            if not create or "quota_storage" in self.data:
                 raise Problem("Workspace has no registered binding")
             used = {row["uid"] for row in rows.values()}
             uid = 210000 + secrets.randbelow(100000000)
             while uid in used:
                 uid = 210000 + secrets.randbelow(100000000)
-            rows[key] = {"id": uuid4().hex, "uid": uid, "generation": 0, "initialized": False,
-                         "last_activity": 0, "leases": [], "failed_starts": 0, "retry_after": 0}
+            rows[key] = new_row(uuid4().hex, uid)
             self.save()
         return Workspace(self, env, user, rows[key])
 
@@ -341,6 +490,18 @@ class Workspace:
         self.deployment = registry.data["deployment"]
         self.base = f"nexpoly-m1-{self.deployment[:12]}-{row['id']}"
         self.volume = self.base + "-data"
+        self.quota_binding = None
+        self.nfs = None
+        if "quota_storage" in registry.data:
+            self.quota_binding = registry.data["quota_storage"].get(env + "/" + user)
+            b = self.quota_binding
+            if (not b or (b["environment"], b["user_id"], b["workspace"], b["uid"]) != (env, user, row["id"], row["uid"])
+                    or not row["initialized"]):
+                raise Problem("Registered quota storage and workspace identity differ")
+            self.volume = "ext4:" + b["filesystem_uuid"]
+            if registry.data["format"] in (3, 4):
+                self.nfs = registry.data["nfs_endpoints"][env + "/" + user]
+                self.volume = self.nfs["volume"]
         self.backend, self.fixture = self.base + "-backend", self.base + "-fixture"
         self.uid = str(row["uid"])
         self.identity = self.uid + ":" + self.uid
@@ -359,9 +520,14 @@ class Workspace:
 
     def resource(self, role):
         volume = role == "volume"
+        if volume and self.quota_binding:
+            self.quota_status()
+            return self.volume
         kind = "volume" if volume else "container"
         name = {"volume": self.volume, "backend": self.backend, "fixture": self.fixture}[role]
         fmt = "{{json .Labels}}" if volume else '{{json .Config.Labels}}\n{{.Id}}\n{{.State.Status}}\n{{.Image}}'
+        if role == "backend" and self.quota_binding:
+            fmt += "\n{{.State.Pid}}"
         result = docker(kind, "inspect", "--format", fmt, name, missing=True)
         if result is None:
             return None
@@ -377,7 +543,10 @@ class Workspace:
         wanted = self.registry.data["image"] if role == "backend" else PYTHON
         if fields[3] != wanted:
             raise Problem("Unexpected workspace software image")
-        return {"id": fields[1], "state": fields[2]}
+        result = {"id": fields[1], "state": fields[2]}
+        if role == "backend" and self.quota_binding and result["state"] == "running":
+            result["pid"] = int(fields[4])
+        return result
 
     @property
     def secret_dir(self):
@@ -391,10 +560,34 @@ class Workspace:
     def bind(path, destination):
         return f"type=bind,src={path},dst={destination},readonly"
 
+    def data_mount(self, destination):
+        if self.quota_binding and not self.nfs:
+            return f"type=bind,src={self.quota_binding['mount']}/workspace,dst={destination},bind-propagation=rprivate"
+        return f"type=volume,src={self.volume},dst={destination},volume-nocopy"
+
+    def quota_status(self):
+        if self.nfs:
+            nfs = pilot_module("quota_nfs")
+            return nfs.attest(self.nfs, self.quota_binding, docker, owner=self.registry.data["native_claim"])
+        return inspect_quota_volume(self.quota_binding)
+
+    def verify_live_quota_mount(self, backend):
+        # Docker inspect retains the old source string even if a filesystem was replaced at that path.
+        if backend and backend["state"] == "running":
+            if self.nfs:
+                nfs = pilot_module("quota_nfs")
+                docker("exec", backend["id"], "python3", "-ISB", "-c", nfs.CLIENT_CHECK,
+                       *nfs.client_args(self.nfs, self.quota_binding, MOUNT))
+                return
+            live = Path("/proc") / str(backend["pid"]) / "root" / MOUNT.lstrip("/")
+            if not live.samefile(Path(self.quota_binding["mount"]) / "workspace"):
+                raise Problem("Resident workspace is attached to a different filesystem or payload directory")
+
     def helper(self, script, *args, initialize=False, anonymous=False):
         flags = ["--cap-add=CHOWN", "--cap-add=FOWNER", "--cap-add=DAC_OVERRIDE"] if initialize else ["--user", self.identity]
-        source = "" if anonymous else f"src={self.volume},"
-        mount = f"type=volume,{source}dst=/data,volume-nocopy"
+        if self.quota_binding and initialize:
+            raise Problem("A registered quota workspace must already be initialized")
+        mount = "type=volume,dst=/data,volume-nocopy" if anonymous else self.data_mount("/data")
         if not initialize:
             mount += ",readonly"
         return docker("run", "--rm", *RUNTIME, *self.label_flags("volume-check"), "--network", "none",
@@ -407,7 +600,9 @@ class Workspace:
         exists = self.resource("volume")
         if not exists and self.row["initialized"]:
             raise Problem("Persistent volume is missing; restore the registered volume before starting")
-        value = self.helper(VOLUME_FREE_MIB, anonymous=not exists)
+        # Dedicated ext4 filesystems already reserve private storage. Apply the deployment-wide
+        # disk floor to the shared Docker driver, even when this user's quota is saturated.
+        value = self.helper(VOLUME_FREE_MIB, anonymous=bool(self.quota_binding) or not exists)
         if not value.isascii() or not value.isdecimal():
             raise ValueError("Docker local volume probe returned invalid available MiB")
         return int(value)
@@ -419,6 +614,12 @@ class Workspace:
                 raise Problem("Stored synthetic model template differs from its registered version")
 
     def prepare_volume(self):
+        if self.quota_binding:
+            self.quota_status()
+            if self.nfs:
+                nfs = pilot_module("quota_nfs")
+                self.helper(nfs.CLIENT_CHECK, *nfs.client_args(self.nfs, self.quota_binding, "/data"))
+            return
         if not self.resource("volume"):
             if self.row["initialized"]:
                 raise Problem("Persistent volume is missing; restore the registered volume before starting")
@@ -454,9 +655,10 @@ class Workspace:
         return Path(root)
 
     def m3_overlay(self):
+        quota_files = pilot_module("quota_web_files").mounts(self.registry.root) if self.quota_binding else {}
         base = self.m3_root()
         if base is None:
-            return {}, {}
+            return quota_files, {}
         code = base / "code"
         backend_overlay = {
             "/m3-code": code,
@@ -470,6 +672,9 @@ class Workspace:
         bridge = code / "capability-form-bridge.mjs"
         if bridge.exists():
             backend_overlay["/app/backend/cli/src/server/capability-form-bridge.mjs"] = bridge
+        if backend_overlay.keys() & quota_files.keys():
+            raise Problem("The development overlays claim the same backend mount")
+        backend_overlay.update(quota_files)
         return backend_overlay, {"/m3-model.py": code / "model.py"}
 
     def retire_generation(self):
@@ -482,6 +687,13 @@ class Workspace:
         write_atomic(self.secret_dir / "token", token, 0o444)
         if root := self.m3_root():
             write_atomic(root / "generations" / self.user, hashlib.sha256(token).hexdigest().encode("ascii"), 0o444)
+
+    def backend_command(self):
+        # File logging can spin on EDQUOT. Keep operational errors in Docker's bounded logs.
+        log_flags = ["--print-logs", "--log-level", "ERROR"] if self.quota_binding else []
+        return ["bun", "--conditions=browser", "/app/backend/cli/src/index.ts", *log_flags,
+                "serve", "--hostname", "127.0.0.1", "--port", "4096", "--project-root",
+                "/openscience/files/projects", "--general-workspace", "/openscience/files/general"]
 
     def create_pair(self):
         self.runtime.mkdir(mode=0o700, exist_ok=True)
@@ -511,24 +723,36 @@ class Workspace:
                             f"type=bind,src={transport},dst=/m2-transport", *mount_flags(fixture_overlay), PYTHON,
                             "python", "-B", "/m3-model.py" if fixture_overlay else "/m2-loopback.py")
         settings = dict(ENV)
-        if backend_overlay:
+        if fixture_overlay:
             settings["OPENSCIENCE_CONFIG"] = "/m3-code/config.json"
         env = [arg for key, value in settings.items() for arg in ("--env", key + "=" + value)]
+        health = []
+        if self.quota_binding:
+            # Docker records healthcheck argv and output. Only the probe process reads the rotating secret.
+            health = ["--health-cmd", QUOTA_HEALTH_CMD,
+                      "--health-interval", "30s", "--health-timeout", "10s", "--health-retries", "3",
+                      "--health-start-period", f"{self.registry.readiness_seconds()}s"]
         return docker("run", "-d", *RUNTIME, *self.label_flags("backend"), "--name", self.backend, "--network",
-                      "container:" + fixture_id, "--user", self.identity, "--memory", f"{BACKEND_MEMORY_MIB}m",
+                      "container:" + fixture_id, "--user", self.identity, *health, "--memory", f"{BACKEND_MEMORY_MIB}m",
                       "--memory-swap", f"{BACKEND_MEMORY_MIB}m",
                       "--cpus", "1", "--pids-limit", "256", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m,mode=1777",
-                      "--mount", f"type=volume,src={self.volume},dst={MOUNT},volume-nocopy",
+                      "--mount", self.data_mount(MOUNT),
                       "--mount", secret, "--mount", self.bind(self.control, CONTROL),
                       "--mount", self.bind(self.registry.root / "config.json", "/m1-config.json"), *mount_flags(backend_overlay), *env,
-                      self.registry.data["image"], "bun", "--conditions=browser", "/app/backend/cli/src/index.ts",
-                      "serve", "--hostname", "127.0.0.1", "--port", "4096", "--project-root",
-                      "/openscience/files/projects", "--general-workspace", "/openscience/files/general")
+                      self.registry.data["image"], *self.backend_command())
 
-    def verify_pair(self, backend, fixture):
+    def verify_pair(self, backend, fixture, *, require_current=True):
         def info(container):
             fmt = "{{json .Mounts}}\n{{.HostConfig.NetworkMode}}\n{{.Config.User}}\n{{json .HostConfig.PortBindings}}"
-            mounts, network, user, ports = docker("container", "inspect", "--format", fmt, container["id"]).splitlines()
+            verify_runtime = self.quota_binding and container is backend and require_current
+            if verify_runtime:
+                fmt += "\n{{json .Config.Cmd}}\n{{json .Config.Env}}\n{{json .Config.Healthcheck}}"
+            mounts, network, user, ports, *extra = docker("container", "inspect", "--format", fmt, container["id"]).splitlines()
+            if verify_runtime:
+                cmd, env, health = map(json.loads, extra)
+                if (cmd != self.backend_command() or any(item.startswith("BUN_JSC_") for item in env) or not health
+                        or health.get("Test") != ["CMD-SHELL", QUOTA_HEALTH_CMD]):
+                    raise Problem("Quota backend runtime settings changed; recycle this workspace and ensure it again")
             return {m["Destination"]: m for m in json.loads(mounts)}, network, user, json.loads(ports)
         mounts, net, user, ports = info(backend)
         fm, fnet, fuser, fports = info(fixture)
@@ -539,9 +763,17 @@ class Workspace:
         fixture_template = {TOKEN_DIR, "/fixture.py", "/m2-loopback.py", "/m2-transport", *fixture_overlay}
         if (set(mounts) != {MOUNT, TOKEN_DIR, CONTROL, "/m1-config.json", *backend_overlay}
                 or set(fm) not in ({TOKEN_DIR, "/fixture.py"}, fixture_template)
-                or mounts[MOUNT].get("Type") != "volume" or mounts[MOUNT].get("Name") != self.volume
                 or not mounts[MOUNT]["RW"]):
             raise Problem("Workspace private mounts differ from the M1 template")
+        data = mounts[MOUNT]
+        if self.quota_binding and not self.nfs:
+            source = Path(self.quota_binding["mount"]) / "workspace"
+            if (data.get("Type"), data.get("Source"), data.get("Propagation")) != ("bind", str(source), "rprivate"):
+                raise Problem("Backend data mount differs from the registered ext4 volume")
+        elif data.get("Type") != "volume" or data.get("Name") != self.volume:
+            raise Problem("Workspace data volume differs from the M1 template")
+        if self.quota_binding:
+            self.verify_live_quota_mount(backend)
         bindings = [(mounts[TOKEN_DIR], self.secret_dir), (mounts[CONTROL], self.control),
                     (mounts["/m1-config.json"], self.registry.root / "config.json"),
                     (fm[TOKEN_DIR], self.secret_dir), (fm["/fixture.py"], self.registry.root / "fixture.py")]
@@ -555,8 +787,37 @@ class Workspace:
         if any(m["Type"] != "bind" or m["RW"] or m["Source"] != str(path) for m, path in bindings):
             raise Problem("Unexpected private template or secret binding")
 
-    def ready(self, fixture):
-        docker("exec", fixture["id"], "python", "-Bc", READY, timeout=35)
+    def ready(self, fixture, backend):
+        seconds = self.registry.readiness_seconds()
+        try:
+            docker("exec", fixture["id"], "python", "-Bc", READY, str(seconds),
+                   timeout=seconds + (15 if self.quota_binding else 5))
+        except (Problem, subprocess.TimeoutExpired) as error:
+            if not self.quota_binding:
+                raise
+            # Report only Docker's typed state and recognized error categories. Raw OpenScience
+            # logs can contain prompts, filenames and credentials.
+            details = {"generation": self.row["generation"], "readiness_seconds": seconds}
+            probe = re.search(r"workspace readiness timed out: (/(?:global/health|project/current)) "
+                              r"(HTTP [0-9]{3}|URLError|TimeoutError|ValueError|JSONDecodeError)\b", str(error))
+            if probe:
+                details.update(probe_path=probe[1], probe_result=probe[2])
+            elif isinstance(error, subprocess.TimeoutExpired):
+                details["probe_result"] = "docker_exec_timeout"
+            try:
+                state = json.loads(docker("container", "inspect", "--format", "{{json .State}}", backend["id"], timeout=10))
+                if state["Status"] in ("running", "exited", "dead", "created", "paused", "restarting"):
+                    details["backend_state"] = state["Status"]
+                details.update(exit_code=int(state["ExitCode"]), oom_killed=bool(state["OOMKilled"]))
+                logs = subprocess.run(["docker", "logs", "--tail", "30", backend["id"]], capture_output=True, timeout=10)
+                signals = (b"SIGILL", b"Illegal instruction", b"SIGSEGV", b"SyntaxError", b"Cannot find module",
+                           b"EROFS", b"EACCES", b"EDQUOT", b"ENOSPC", b"ENOENT", b"out of memory")
+                details["backend_log_signals"] = [s.decode() for s in signals if s in logs.stdout or s in logs.stderr]
+            except (Problem, OSError, ValueError, KeyError, subprocess.SubprocessError):
+                details["diagnostics_incomplete"] = True
+            self.row["last_readiness_failure"] = details
+            self.registry.save()
+            raise Problem("Workspace readiness failed: " + json.dumps(details, sort_keys=True)) from error
 
     def state(self, reason=None):
         backend = self.resource("backend")
@@ -564,6 +825,9 @@ class Workspace:
                       uid=self.row["uid"], gid=self.row["uid"], volume=self.volume, container=self.backend,
                       fixture=self.fixture, generation=self.row["generation"], template_version=VERSION,
                       state=backend["state"] if backend else "recycled", container_id=backend["id"] if backend else None)
+        if self.quota_binding:
+            result.update(storage_backend=NFS_BACKEND if self.nfs else QUOTA_BACKEND, quota=self.quota_status())
+            self.verify_live_quota_mount(backend)
         if reason:
             result["reason"] = reason
         return result
@@ -587,7 +851,7 @@ class Workspace:
             if not self.resource("volume") or not self.row["initialized"]:
                 raise Problem("Active workspace storage is inconsistent with its registry")
             (self.control / "draining").unlink(missing_ok=True)
-            self.ready(fixture)
+            self.ready(fixture, backend)
             return self.state()
         if self.row["retry_after"] > time.time():
             raise Problem("Workspace start backoff is active; retry shortly")
@@ -598,7 +862,7 @@ class Workspace:
         if backend and backend["state"] == "running":
             if not fixture or fixture["state"] not in ("dead", "exited"):
                 raise Problem("Workspace network companion state is unknown; retain the active backend")
-            self.verify_pair(backend, fixture)
+            self.verify_pair(backend, fixture, require_current=False)
             result = self.drain("recycle")
             if result["state"] != "recycled":
                 raise Problem("Workspace companion recovery deferred: " + result.get("reason", "activity_unknown"))
@@ -614,7 +878,7 @@ class Workspace:
             self.create_pair()
             backend, fixture = self.resource("backend"), self.resource("fixture")
             self.verify_pair(backend, fixture)
-            self.ready(fixture)
+            self.ready(fixture, backend)
         except Exception:
             self.remove_pair()
             self.row["failed_starts"] += 1
@@ -652,6 +916,8 @@ class Workspace:
             return self.state("activity_unknown")
         if not backend or backend["state"] != "running":
             if command == "restart":
+                if self.quota_binding:
+                    self.quota_status()
                 return self.ensure()
             self.remove_pair()
             return self.state()
@@ -659,7 +925,7 @@ class Workspace:
             return self.state("activity_unknown")
         if fixture["state"] != "running" and command == "restart":
             return self.ensure()
-        self.verify_pair(backend, fixture)
+        self.verify_pair(backend, fixture, require_current=command == "restart")
         reason = self.activity(backend, command == "reap")
         if reason:
             return self.state(reason)
@@ -674,7 +940,7 @@ class Workspace:
                 docker("stop", "--time", "10", backend["id"])
                 self.rotate_credential()
                 docker("start", backend["id"])
-                self.ready(fixture)
+                self.ready(fixture, backend)
                 self.row["last_activity"] = time.time()
                 self.registry.save()
             else:
@@ -733,6 +999,14 @@ def main():
     capacity.add_argument("--workspace-memory-mib", required=True, type=int)
     capacity.add_argument("--host-memory-floor-mib", required=True, type=int)
     capacity.add_argument("--volume-free-floor-mib", required=True, type=int)
+    quota = commands.add_parser("register-quota-storage", help="Attach both restored dev-m1 ext4 workspaces to a fresh registry")
+    quota.add_argument("--bindings", type=Path, required=True)
+    quota.add_argument("--readiness-seconds", type=int, help="Quota workspace startup probe deadline (30–180 seconds)")
+    nfs = commands.add_parser("register-quota-nfs", help="Attach both preprovisioned NFS quota clone volumes to a fresh registry")
+    nfs.add_argument("--manifest", type=Path, required=True)
+    nfs.add_argument("--phase", required=True, choices=("src", "dst"))
+    nfs.add_argument("--bindings", type=Path, required=True)
+    nfs.add_argument("--readiness-seconds", type=int)
     commands.add_parser("list", help="List known development workspace bindings and their actual process state")
     for operation in ("ensure", "status", "restart", "recycle", "reap", "touch", "begin", "end"):
         sub = commands.add_parser(operation)
@@ -751,6 +1025,11 @@ def main():
                 output = {"workspaces": [binding.state() for binding in registry.bindings()]}
             elif args.command == "set-image":
                 output = registry.set_image(args.image)
+            elif args.command == "register-quota-storage":
+                output = registry.register_quota_storage(json.loads(args.bindings.read_bytes()), args.readiness_seconds)
+            elif args.command == "register-quota-nfs":
+                output = registry.register_quota_storage(json.loads(args.bindings.read_bytes()), args.readiness_seconds,
+                                                        manifest=args.manifest, phase=args.phase)
             elif args.command == "set-capacity":
                 output = registry.set_capacity(args.workspace_memory_mib, args.host_memory_floor_mib,
                                                args.volume_free_floor_mib)
