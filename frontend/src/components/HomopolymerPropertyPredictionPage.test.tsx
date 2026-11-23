@@ -223,6 +223,8 @@ describe("HomopolymerPropertyPredictionPage", () => {
     run();
 
     expect(await screen.findByText("prediction service is disabled")).toBeTruthy();
+    // Untranslated service messages come with a plain explanation and a next step.
+    expect(screen.getByText(/预测服务没有返回结果/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByText("123")).toBeTruthy();
     expect(mocks.predictSmiles).toHaveBeenCalledTimes(2);
@@ -414,6 +416,19 @@ describe("HomopolymerPropertyPredictionPage", () => {
     } finally {
       installSession(GUEST_SESSION);
     }
+  });
+
+  it("键盘可跳过画板工具，工具栏焦点顺序与显示顺序一致", () => {
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
+    expect(screen.getByLabelText("导入结构图片").getAttribute("tabindex")).toBe("-1");
+    const toolbar = screen.getByRole("banner", { name: "结构工作台工具栏" });
+    expect(within(toolbar).getAllByRole("button").at(-1)?.textContent).toContain("清空画布");
+
+    const skip = screen.getByRole("navigation", { name: "跳过画板工具" });
+    fireEvent.click(within(skip).getByRole("link", { name: "跳到 SMILES 输入" }));
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "SMILES 输入，自动同步到画板" }));
+    fireEvent.click(within(skip).getByRole("link", { name: "跳到预测设置" }));
+    expect(panel().contains(document.activeElement)).toBe(true);
   });
 
   it("AI 助手在辅助栏打开，与使用说明共用一个辅助栏", () => {

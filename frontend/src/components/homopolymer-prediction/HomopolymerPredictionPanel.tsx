@@ -378,6 +378,7 @@ export function HomopolymerPredictionPanel({
 }: HomopolymerPredictionPanelProps) {
   const selectionId = useId();
   const resultsTitleId = useId();
+  const [resultsScrolled, setResultsScrolled] = useState(false);
   const selected = new Set(selectedProperties);
   const summary = selectionSummary(selectedProperties);
 
@@ -398,8 +399,8 @@ export function HomopolymerPredictionPanel({
   const tableProperties = latestRun?.properties ?? PREDICTABLE_PROPERTIES.filter((property) => selected.has(property));
 
   return (
-    <aside className="np-hp-panel" aria-label="性质预测">
-      <form ref={formRef} className="np-hp-task" noValidate onSubmit={onSubmit}>
+    <aside className={`np-hp-panel${resultsScrolled ? " is-results-scrolled" : ""}`} aria-label="性质预测">
+      <form ref={formRef} id="np-hp-task" className="np-hp-task" noValidate onSubmit={onSubmit}>
         <section className="np-hp-selection" aria-labelledby={`${selectionId}-label`}>
           <h2 id={`${selectionId}-label`} className="np-hp-label">预测内容</h2>
           <div className="np-hp-selection__summary">
@@ -494,7 +495,12 @@ export function HomopolymerPredictionPanel({
         </div>
       </form>
 
-      <section className="np-hp-results" aria-labelledby={resultsTitleId} aria-busy={loading}>
+      <section
+        className="np-hp-results"
+        aria-labelledby={resultsTitleId}
+        aria-busy={loading}
+        onScroll={(event) => setResultsScrolled(event.currentTarget.scrollTop > 2)}
+      >
         <header className="np-hp-results__header">
           <h2 id={resultsTitleId}>
             预测结果
@@ -520,7 +526,14 @@ export function HomopolymerPredictionPanel({
             <TriangleAlert aria-hidden="true" />
             <div>
               <strong>性质预测失败</strong>
-              <p>{error}</p>
+              {/[\u4e00-\u9fff]/.test(error) ? (
+                <p>{error}</p>
+              ) : (
+                <>
+                  <p>预测服务没有返回结果。可以稍后重试；如果刚修改过结构，先确认 SMILES 有效。</p>
+                  <p className="np-hp-alert__detail">服务信息：<code>{error}</code></p>
+                </>
+              )}
             </div>
             <button type="button" className="np-hp-button" onClick={onRetry}>重试</button>
           </div>

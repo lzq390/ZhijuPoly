@@ -49,6 +49,8 @@ type StructureCanvasSurfaceProps = {
   emptyState?: (load: (smiles: string) => void) => ReactNode;
   /** Optional row under the SMILES field, inside the same surface. */
   footer?: ReactNode;
+  /** Render 清空画布 after the other tools, so focus order matches a layout that shows it last. */
+  clearLast?: boolean;
 };
 
 /**
@@ -136,7 +138,8 @@ export function StructureCanvasSurface({
   onToggle3D,
   onSmilesDraftChange,
   emptyState,
-  footer
+  footer,
+  clearLast = false
 }: StructureCanvasSurfaceProps) {
   const mutate = (action: () => void | Promise<unknown>, writesEditor = true) =>
     runCanvasMutation(structure, canvas, action, writesEditor);
@@ -151,6 +154,18 @@ export function StructureCanvasSurface({
         : canvas.feedback
   );
 
+  const clearTool = (
+    <ToolButton
+      label="清空画布"
+      tool="clear"
+      busy={canvas.isClearing}
+      icon={<Eraser aria-hidden="true" />}
+      disabled={operationBusy || !canvas.isEditorReady}
+      danger
+      onClick={() => void mutate(onClear)}
+    />
+  );
+
   return (
     <section className="np-sw-surface" aria-label="结构编辑工作区">
       <input
@@ -159,6 +174,8 @@ export function StructureCanvasSurface({
         type="file"
         accept="image/*"
         aria-label="导入结构图片"
+        // Opened by the 导入图片 button; as a Tab stop it would hold invisible focus.
+        tabIndex={-1}
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
           if (file && requestServiceAccess()) void mutate(() => onImportFile(file));
@@ -184,15 +201,7 @@ export function StructureCanvasSurface({
             disabled={operationBusy}
             onClick={() => { if (requestServiceAccess()) canvas.fileInputRef.current?.click(); }}
           />
-          <ToolButton
-            label="清空画布"
-            tool="clear"
-            busy={canvas.isClearing}
-            icon={<Eraser aria-hidden="true" />}
-            disabled={operationBusy || !canvas.isEditorReady}
-            danger
-            onClick={() => void mutate(onClear)}
-          />
+          {clearLast ? null : clearTool}
           <ToolButton
             label="生成SMILES"
             tool="sync"
@@ -212,6 +221,7 @@ export function StructureCanvasSurface({
             onClick={() => { if (requestServiceAccess()) void onToggle3D(); }}
           />
           <CanvasLibraryActions workspace={structure.workspace} canvas={canvas} disabled={operationBusy} />
+          {clearLast ? clearTool : null}
           {utilityActions.length ? <span className="np-sw-toolbar-separator" aria-hidden="true" /> : null}
           {utilityActions.map((action) => (
             <ToolButton

@@ -361,3 +361,10 @@
     margin: 0 2px;
   }
 }
+
+/* Touch screens: icon-only header tools keep a 44px target. */
+@media (max-width: 899px) and (pointer: coarse) {
+  .np-module-tools {
+    --np-tools-h: 44px;
+  }
+}

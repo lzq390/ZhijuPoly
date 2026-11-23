@@ -6,7 +6,8 @@
 .np-structure-workbench.np-homopolymer-prediction {
   --np-hp-ink: #13203a;
   --np-hp-ink2: #3a4760;
-  --np-hp-muted: #6b7689;
+  /* ≥ 4.9:1 on every surface this page uses, hover tint included. */
+  --np-hp-muted: #5f6b80;
   --np-hp-line: #e4e8ef;
   --np-hp-line2: #d2d9e3;
   --np-hp-tick: #c3ccd8;
@@ -150,9 +151,8 @@
   color: var(--np-hp-blue);
 }
 
-/* Clearing is destructive: keep it last and neutral until hovered. */
+/* Clearing is destructive: rendered last (clearLast, so focus order matches) and neutral until hovered. */
 .np-structure-workbench.np-homopolymer-prediction .np-sw-tool[data-workbench-tool="clear"] {
-  order: 10;
   color: var(--np-hp-ink2);
 }
 
@@ -189,6 +189,45 @@
 .np-structure-workbench.np-homopolymer-prediction .np-sw-canvas-stage::before,
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles::before {
   content: none;
+}
+
+/* Skip links: hidden until focused, then a small pill over the top of the structure zone. */
+.np-homopolymer-prediction .np-hp-skip {
+  position: absolute;
+  z-index: 50;
+  top: 8px;
+  left: 12px;
+  display: flex;
+  gap: 6px;
+}
+
+.np-homopolymer-prediction .np-hp-skip a {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.np-homopolymer-prediction .np-hp-skip a:focus-visible {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: 6px 12px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--np-hp-ink);
+  box-shadow: 0 8px 20px -8px rgba(19, 32, 58, 0.5);
+  font-size: var(--np-hp-fs-sm);
+  font-weight: 500;
+  clip: auto;
+  outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
+  outline-offset: 2px;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-hp-structure {
+  position: relative;
 }
 
 /* Drawing paper: a faint dot grid under Ketcher's transparent canvas. */
@@ -906,8 +945,18 @@
 }
 
 .np-homopolymer-prediction .np-hp-task {
+  position: relative;
+  z-index: 1;
   flex: 0 0 auto;
   padding: var(--np-hp-pad) var(--np-hp-pad) 0;
+  background: #fff;
+  transition: box-shadow 140ms ease;
+}
+
+/* Once the results scroll, the fixed controls get an edge so rows don't slide under the button. */
+.np-homopolymer-prediction .np-hp-panel.is-results-scrolled > .np-hp-task {
+  padding-bottom: 14px;
+  box-shadow: 0 1px 0 var(--np-hp-line), 0 8px 14px -12px rgba(19, 32, 58, 0.22);
 }
 
 /* Section titles carry the hierarchy; no small labels above them. */
@@ -1392,6 +1441,15 @@
   overflow-wrap: anywhere;
 }
 
+.np-homopolymer-prediction .np-hp-alert__detail {
+  opacity: 0.85;
+}
+
+.np-homopolymer-prediction .np-hp-alert__detail code {
+  font-family: var(--font-mono);
+  font-size: var(--np-hp-fs-xs);
+}
+
 .np-homopolymer-prediction .np-hp-notice {
   margin: 2px 0 8px;
   padding: 8px 10px;
@@ -1831,6 +1889,37 @@
 .np-homopolymer-prediction .np-hp-relay:focus-visible {
   outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
   outline-offset: 2px;
+}
+
+/* Touch screens: every control on this page gets a 44px target; text links grow their hit area
+   with padding and an equal negative margin so the layout does not move. */
+@media (pointer: coarse) {
+  .np-homopolymer-prediction :is(.np-hp-chip, .np-hp-button, .np-hp-relay, .np-hp-facts__help, .np-hp-fact > button) {
+    min-height: 44px;
+  }
+
+  .np-homopolymer-prediction .np-hp-compare select {
+    height: 44px;
+  }
+
+  .np-homopolymer-prediction .np-hp-link {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    margin: -10px -10px;
+    padding: 0 10px;
+  }
+
+  .np-homopolymer-prediction .np-hp-runs button {
+    min-height: 48px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > button {
+    width: 44px;
+    height: 44px;
+    top: 2px;
+    right: 6px;
+  }
 }
 
 /* ---------- tiers ---------- */
@@ -2474,5 +2563,18 @@
   .np-homopolymer-prediction .np-hp-assistant__input textarea {
     min-height: 84px;
     padding-right: 64px;
+  }
+}
+
+/* Touch screens, after the phone tiers so these sizes win: 44px structure tools, a taller run button. */
+@media (pointer: coarse) {
+  .np-structure-workbench.np-homopolymer-prediction {
+    --np-hp-btn: 46px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-tool,
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-tool:not(.np-sw-tool--icon) {
+    min-width: 44px;
+    min-height: 44px;
   }
 }

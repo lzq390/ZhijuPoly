@@ -10,7 +10,8 @@ import {
   useImperativeHandle,
   useRef,
   useState,
-  type FormEvent
+  type FormEvent,
+  type MouseEvent
 } from "react";
 import { PREDICTABLE_PROPERTIES } from "../constants/predictableProperties";
 import { usePredict } from "../hooks/usePredict";
@@ -205,6 +206,11 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
     setDockOpen(true);
   }
 
+  function skipTo(event: MouseEvent<HTMLAnchorElement>, selector: string) {
+    event.preventDefault();
+    rootRef.current?.querySelector<HTMLElement>(selector)?.focus();
+  }
+
   function openStructureFactsHelp(trigger: HTMLElement | null) {
     dockTriggerRef.current = trigger;
     setDockTab("help");
@@ -264,6 +270,11 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
         <div className="np-module-frame np-hp-frame">
           <div className="np-hp-workbench np-module-frame__main">
             <main className="np-sw-workspace np-hp-structure">
+              {/* Ketcher's toolbars hold ~45 Tab stops; keyboard users can jump past them. */}
+              <nav className="np-hp-skip" aria-label="跳过画板工具">
+                <a href="#np-sw-smiles-label" onClick={(event) => skipTo(event, ".np-sw-smiles textarea")}>跳到 SMILES 输入</a>
+                <a href="#np-hp-task" onClick={(event) => skipTo(event, ".np-hp-task button, .np-hp-task input")}>跳到预测设置</a>
+              </nav>
               <StructureCanvasSurface
                 structure={structure}
                 canvas={canvas}
@@ -271,6 +282,7 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
                 operationBusy={operationBusy}
                 editorTitle="均聚物性质预测结构编辑器"
                 commandbarLabel="结构"
+                clearLast
                 onLoadExample={() => canvas.loadStructure(HOMOPOLYMER_EXAMPLE_SMILES)}
                 onImportFile={(file) => canvas.importImageFile(file)}
                 onClear={() => canvas.clearCanvas()}
