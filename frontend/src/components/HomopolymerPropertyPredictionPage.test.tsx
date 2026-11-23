@@ -4,6 +4,7 @@ import { StructureWorkspace } from "../structure/workspace";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GUEST_SESSION, installSession } from "../auth/session";
 import { PREDICTABLE_PROPERTIES } from "../constants/predictableProperties";
 import type { StructureWorkspaceContext } from "../types";
 import {
@@ -27,7 +28,8 @@ const mocks = vi.hoisted(() => ({
   cancelSmilesDraftSync: vi.fn(),
   adoptCanvasSmiles: vi.fn(),
   handleEditorLoad: vi.fn(),
-  predictSmiles: vi.fn()
+  predictSmiles: vi.fn(),
+  fetchStructureDescriptors: vi.fn()
 }));
 
 vi.mock("../hooks/useTgStructureCanvas", () => ({
@@ -67,7 +69,11 @@ vi.mock("../hooks/useTgStructureCanvas", () => ({
 }));
 
 vi.mock("../services/api", () => ({
-  predictSmiles: mocks.predictSmiles
+  predictSmiles: mocks.predictSmiles,
+  fetchStructureDescriptors: mocks.fetchStructureDescriptors,
+  ApiRequestError: class ApiRequestError extends Error {
+    constructor(readonly status: number, message: string) { super(message); }
+  }
 }));
 
 vi.mock("./StructurePreview3D", () => ({
@@ -366,6 +372,37 @@ describe("HomopolymerPropertyPredictionPage", () => {
     fireEvent.keyDown(tab, { key: "Escape" });
     expect(screen.queryByRole("tabpanel", { name: "使用说明" })).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("画板下方显示结构信息，说明入口打开使用说明里的对应段落", async () => {
+    installSession({
+      authenticated: true,
+      user: { id: "member", username: "member", must_change_password: false },
+      session_id: "session-member",
+      csrf_token: "fixture",
+      capabilities: {},
+      account_type: "member"
+    });
+    mocks.fetchStructureDescriptors.mockResolvedValue({
+      canonical_smiles: "*CC*", formula: "C2H4", molecular_weight: 28.054, heavy_atom_count: 2,
+      attachment_point_count: 2, ring_count: 0, aromatic_ring_count: 0, rotatable_bond_count: 1,
+      hbond_donor_count: 0, hbond_acceptor_count: 0, heteroatom_count: 0, tpsa: 0, fraction_csp3: 1
+    });
+    try {
+      render(<HomopolymerPropertyPredictionPage structure={makeStructure("*CC* |$star_e;;;star_e$|")} />);
+      expect(await screen.findByRole("button", { name: "分子量 28.1 g/mol" })).toBeTruthy();
+      const facts = screen.getByRole("region", { name: "结构信息" });
+      expect(within(facts).getByRole("button", { name: "连接点 2" })).toBeTruthy();
+      expect(mocks.fetchStructureDescriptors).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(within(facts).getByRole("button", { name: "结构信息说明" }));
+      const help = screen.getByRole("tabpanel", { name: "使用说明" });
+      const section = within(help).getByRole("heading", { name: "结构信息" }).closest("section")!;
+      expect(section.textContent).toContain("不是模型预测值");
+      expect(section.textContent).toContain("可旋转键");
+    } finally {
+      installSession(GUEST_SESSION);
+    }
   });
 
   it("AI 助手在辅助栏打开，与使用说明共用一个辅助栏", () => {

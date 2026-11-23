@@ -31,6 +31,8 @@ import {
   HomopolymerPredictionAssistant,
   type PredictionAssistantMessage
 } from "./homopolymer-prediction/HomopolymerPredictionAssistant";
+import { StructureFactsStrip } from "./homopolymer-prediction/StructureFactsStrip";
+import { useStructureDescriptors } from "./homopolymer-prediction/useStructureDescriptors";
 import { ModuleDock } from "./module-frame/ModuleDock";
 import { ModuleTools } from "./module-frame/ModuleTools";
 
@@ -40,6 +42,7 @@ type HomopolymerPropertyPredictionPageProps = {
 };
 
 const HOMOPOLYMER_EXAMPLE_SMILES = "*CC*";
+const STRUCTURE_FACTS_HELP_ID = "np-hp-help-structure-facts";
 const RUN_HISTORY_LIMIT = 10;
 
 function sameProperties(left: readonly PredictableProperty[], right: readonly PredictableProperty[]) {
@@ -66,6 +69,7 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
   const [dockTab, setDockTab] = useState<"assistant" | "help">("assistant");
   const [assistantMessages, setAssistantMessages] = useState<PredictionAssistantMessage[]>([]);
   const [assistantAttachContext, setAssistantAttachContext] = useState(false);
+  const [helpTarget, setHelpTarget] = useState<string | null>(null);
   const assistantMessageIdRef = useRef(0);
   const dockTriggerRef = useRef<HTMLElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -104,6 +108,18 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
   useEffect(() => {
     if (structure.smiles.trim()) setStructureMissing(false);
   }, [structure.smiles]);
+
+  // Facts follow the committed structure; a SMILES draft that failed to parse already explains itself.
+  const descriptorState = useStructureDescriptors(canvas.smilesDraftState === "error" ? "" : structure.smiles);
+
+  useEffect(() => {
+    if (!helpTarget || !dockOpen || dockTab !== "help") return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(helpTarget)?.scrollIntoView({ block: "start" });
+      setHelpTarget(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [helpTarget, dockOpen, dockTab]);
 
   async function toggle3D() {
     const activating = !canvas.isFlipped;
@@ -189,6 +205,13 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
     setDockOpen(true);
   }
 
+  function openStructureFactsHelp(trigger: HTMLElement | null) {
+    dockTriggerRef.current = trigger;
+    setDockTab("help");
+    setDockOpen(true);
+    setHelpTarget(STRUCTURE_FACTS_HELP_ID);
+  }
+
   // Interface preview: the question stays on the page and gets a fixed, explicit reply.
   function sendAssistantMessage(text: string) {
     const attached = assistantAttachContext && assistantContext.structure
@@ -253,6 +276,14 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
                 onClear={() => canvas.clearCanvas()}
                 onSync={() => canvas.syncSmilesFromCanvas()}
                 onToggle3D={toggle3D}
+                footer={
+                  <StructureFactsStrip
+                    state={descriptorState}
+                    onOpenHelp={() => openStructureFactsHelp(
+                      document.activeElement instanceof HTMLElement ? document.activeElement : null
+                    )}
+                  />
+                }
                 emptyState={(load) => (
                   <div className="np-hp-start">
                     <strong>在这里画出重复单元</strong>
@@ -318,7 +349,7 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
                   />
                 )
               },
-              { id: "help", label: "使用说明", content: <HomopolymerPredictionHelp /> }
+              { id: "help", label: "使用说明", content: <HomopolymerPredictionHelp structureFactsId={STRUCTURE_FACTS_HELP_ID} /> }
             ]}
             activeTab={dockTab}
             onTabChange={(tab) => setDockTab(tab === "help" ? "help" : "assistant")}

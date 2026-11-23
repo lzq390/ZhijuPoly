@@ -63,7 +63,7 @@ describe("counted submission identity",()=>{
   it.each(["property","similarity"])("counts the normalized %s query branch",async mode=>{
     mock.mockImplementation(async()=>json({ok:true}));await send(JSON.stringify({smiles:"C",match_mode:mode}),"/query/smiles");expect(key(0)).toMatch(/^usage-/);
   });
-  it.each(["/reverse-design/tg","/reverse-design/tg/jobs","/structure/2d","/structure/standardize-smiles","/conditional-generation/polytao/descriptors","/knowledge/search","/md-demo/run","/md-demo/atom-distance","/monomer-polymerization/batch/imports","/monomer-polymerization/batch/imports/fixture/preview","/database-browser/smiles-lookup","/database-browser/property-filter/search"])("keeps rate-only %s usable without admission storage or a feature probe",async path=>{
+  it.each(["/reverse-design/tg","/reverse-design/tg/jobs","/structure/2d","/structure/standardize-smiles","/structure/descriptors","/conditional-generation/polytao/descriptors","/knowledge/search","/md-demo/run","/md-demo/atom-distance","/monomer-polymerization/batch/imports","/monomer-polymerization/batch/imports/fixture/preview","/database-browser/smiles-lookup","/database-browser/property-filter/search"])("keeps rate-only %s usable without admission storage or a feature probe",async path=>{
     identity("rate-only");vi.spyOn(Storage.prototype,"setItem").mockImplementation(()=>{throw new Error("storage unavailable");});
     mock.mockImplementation(async()=>json({ok:true}));await send('{}',path);expect(mock).toHaveBeenCalledOnce();expect(key(0)).toBeNull();
   });

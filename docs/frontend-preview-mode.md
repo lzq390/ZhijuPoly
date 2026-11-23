@@ -22,6 +22,7 @@ npm run dev:mock
 | 登录状态 | 固定为已登录的“前端预览”用户 |
 | 结构标准化 | 原样返回输入的 SMILES |
 | 性质预测 `/predict` | 按 SMILES 文本特征生成的确定性数值，不是模型结果 |
+| 结构信息 `/structure/descriptors` | 不用 RDKit 的近似计算：常见重复单元的分子式、分子量、原子数与 RDKit 一致，芳香环、可旋转键、TPSA 按简化规则估算 |
 | Tg 逆向设计任务 | 约 2.4 秒后完成；候选来自 `frontend/scripts/fixtures/dev-mock-reverse-design.json`（12 条，相似度相对内置示例结构，Tg 为虚构） |
 | Tg AI 助手 | 规则回复；勾选“附带当前页面”后可提出设置 Tg、相似度阈值并搜索的操作 |
 | 三维构象、图片识别及其他接口 | 返回 503 和中文说明 |
@@ -31,5 +32,6 @@ npm run dev:mock
 ## 实现
 
 - `frontend/build/development-mock-api.ts`：只在 `vite serve --mode mock` 时加载，不进入构建产物或 `vite preview`。
-- `frontend/build/development-mock-api.test.ts`：模拟逻辑的单元测试。
+- `frontend/build/development-mock-descriptors.ts`：预览模式的结构信息近似计算。
+- `frontend/build/development-mock-api.test.ts`、`development-mock-descriptors.test.ts`：模拟逻辑的单元测试，后者与后端 RDKit 结果对照。
 - 正常开发仍使用 `npm run dev`，通过 `DEV_PROXY_TARGET`（默认 `http://localhost:8000`）连接真实后端。

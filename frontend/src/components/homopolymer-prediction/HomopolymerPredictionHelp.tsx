@@ -1,12 +1,26 @@
 import { PREDICT_PROPERTY_CATALOG, PREDICT_PROPERTY_GROUPS } from "../../constants/predictableProperties";
+import { STRUCTURE_FACTS } from "./structureFacts";
 
 /** Concise in-page help shown in the module dock. */
-export function HomopolymerPredictionHelp() {
+export function HomopolymerPredictionHelp({ structureFactsId }: { structureFactsId?: string }) {
   return (
     <div className="np-hp-help">
       <section>
         <h3>输入结构</h3>
         <p>可以画结构、在下方粘贴 SMILES、导入结构图片，或从“我的结构”载入。普通 SMILES 和带 <code>*</code> 连接点的重复单元都可以预测，重复单元建议用两个 <code>*</code> 标出连接点。</p>
+      </section>
+      <section id={structureFactsId} className="np-hp-help__facts">
+        <h3>结构信息</h3>
+        <p>画板下方的一行数值由 RDKit 根据当前结构直接计算，用来检查结构、帮助解读结果，不是模型预测值。连接点 <code>*</code> 不计入原子数和分子式。</p>
+        <dl>
+          {STRUCTURE_FACTS.map((fact) => (
+            <div key={fact.key}>
+              <dt>{fact.label}{fact.unit ? <span>（{fact.unit}）</span> : null}</dt>
+              <dd>{fact.explanation}</dd>
+            </div>
+          ))}
+        </dl>
+        <p>这些只是常见趋势，同一结构的实际性能还取决于聚合度、结晶度、加工条件等。</p>
       </section>
       <section>
         <h3>预测内容</h3>

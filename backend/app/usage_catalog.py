@@ -39,7 +39,8 @@ ROUTES = (
     *_entries("query", "sync", "POST", ("/api/v1/query/smiles",)),
     *_entries("query", "sync", "GET", ("/api/v1/polymer/{polymer_id}",)),
     *_entries("structure", "sync", "POST", (
-        "/api/v1/structure/3d", "/api/v1/structure/2d", "/api/v1/structure/standardize-smiles")),
+        "/api/v1/structure/3d", "/api/v1/structure/2d", "/api/v1/structure/standardize-smiles",
+        "/api/v1/structure/descriptors")),
     *_entries("ocsr", "sync", "POST", ("/api/v1/structure/recognize-image",)),
     *_entries("retrosynthesis", "sync", "POST", ("/api/v1/monomer-retrosynthesis",)),
     *_entries("retrosynthesis", "native", "POST", ("/api/v1/monomer-retrosynthesis/jobs",)),

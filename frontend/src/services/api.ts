@@ -84,6 +84,7 @@ import type {
   SmilesStandardizeRequest,
   SmilesStandardizeResponse,
   Structure2DResponse,
+  StructureDescriptorResponse,
   StructureImageRecognitionResponse,
   SmilesQueryRequest,
   SmilesQueryResponse,
@@ -762,6 +763,10 @@ export function fetchStructure3D(
 
 export function fetchStructure2D(smiles: string, signal?: AbortSignal): Promise<Structure2DResponse> {
   return postJSON("/structure/2d", { smiles }, signal);
+}
+
+export function fetchStructureDescriptors(smiles: string, signal?: AbortSignal): Promise<StructureDescriptorResponse> {
+  return postJSON("/structure/descriptors", { smiles }, signal);
 }
 
 export function standardizeSmiles(

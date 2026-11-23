@@ -948,6 +948,23 @@ export type Structure2DResponse = {
   structure_svg: string;
 };
 
+/** RDKit descriptors of a drawn structure; `*` connection points are counted separately. */
+export type StructureDescriptorResponse = {
+  canonical_smiles: string;
+  formula: string;
+  molecular_weight: number;
+  heavy_atom_count: number;
+  attachment_point_count: number;
+  ring_count: number;
+  aromatic_ring_count: number;
+  rotatable_bond_count: number;
+  hbond_donor_count: number;
+  hbond_acceptor_count: number;
+  heteroatom_count: number;
+  tpsa: number;
+  fraction_csp3: number;
+};
+
 export type SmilesStandardizeResponse = {
   input_smiles: string;
   standardized_smiles: string;

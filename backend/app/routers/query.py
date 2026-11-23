@@ -17,6 +17,8 @@ from app.models import (
     Structure2DResponse,
     Structure3DRequest,
     Structure3DResponse,
+    StructureDescriptorRequest,
+    StructureDescriptorResponse,
     StructureImageRecognitionResponse,
 )
 from app.postgres_database import PostgresUnavailableError
@@ -35,6 +37,7 @@ from app.services.structure_similarity_index import (
 )
 from app.services.structure_2d import generate_2d_svg
 from app.services.structure_3d import Structure3DTimeoutError, generate_3d_molblock
+from app.services.structure_descriptors import calculate_structure_descriptors
 from app.usage_context import mark_current_usage_outcome
 from app.utils.exceptions import (
     InvalidImageError,
@@ -211,6 +214,15 @@ async def generate_structure_2d(request_body: Structure2DRequest) -> Structure2D
     if structure_svg is None:
         raise HTTPException(status_code=422, detail=f"invalid smiles: {request_body.smiles}")
     return Structure2DResponse(structure_svg=structure_svg)
+
+
+@router.post("/structure/descriptors", response_model=StructureDescriptorResponse)
+async def calculate_structure_descriptor_values(request_body: StructureDescriptorRequest) -> StructureDescriptorResponse:
+    try:
+        descriptors = await run_in_threadpool(calculate_structure_descriptors, request_body.smiles)
+    except InvalidSmilesError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return StructureDescriptorResponse(**descriptors.as_dict())
 
 
 @router.post("/structure/standardize-smiles", response_model=SmilesStandardizeResponse)

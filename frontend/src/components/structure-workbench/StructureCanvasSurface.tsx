@@ -47,6 +47,8 @@ type StructureCanvasSurfaceProps = {
   onSmilesDraftChange?: (value: string) => void;
   /** Optional guidance over an empty 2D canvas; `load` writes a structure through the normal mutation path. */
   emptyState?: (load: (smiles: string) => void) => ReactNode;
+  /** Optional row under the SMILES field, inside the same surface. */
+  footer?: ReactNode;
 };
 
 /**
@@ -133,7 +135,8 @@ export function StructureCanvasSurface({
   onSync,
   onToggle3D,
   onSmilesDraftChange,
-  emptyState
+  emptyState,
+  footer
 }: StructureCanvasSurfaceProps) {
   const mutate = (action: () => void | Promise<unknown>, writesEditor = true) =>
     runCanvasMutation(structure, canvas, action, writesEditor);
@@ -297,6 +300,7 @@ export function StructureCanvasSurface({
           </p>
         ) : null}
       </footer>
+      {footer}
     </section>
   );
 }

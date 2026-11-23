@@ -1984,6 +1984,19 @@
     },
     {
       "method": "POST",
+      "path": "/api/v1/structure/descriptors",
+      "feature": "F01",
+      "resource": "request-result",
+      "permission": "member",
+      "frontend": "/homopolymer-property-prediction",
+      "cases": [
+        "F01",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/api/v1/structure/recognize-image",
       "feature": "F01",
       "resource": "request-result",

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Plugin } from "vite";
+import { approximateDescriptors } from "./development-mock-descriptors.ts";
 
 /**
  * Frontend preview mode (`npm run dev:mock`): the dev server answers `/api/v1/*` itself so the
@@ -9,8 +10,9 @@ import type { Plugin } from "vite";
  * nothing here reaches built or preview assets.
  *
  * Every value is a stand-in: predictions are derived from SMILES text, Tg candidates come from a
- * fixed fixture (similarities to the built-in Tg demo structure), and the Tg assistant replies by
- * rule. Endpoints not listed answer 503 with a readable reason.
+ * fixed fixture (similarities to the built-in Tg demo structure), the Tg assistant replies by
+ * rule, and structure descriptors are approximated without RDKit. Endpoints not listed answer
+ * 503 with a readable reason.
  */
 
 type Json = Record<string, unknown>;
@@ -247,6 +249,13 @@ export function developmentMockApi(): Plugin {
             const smiles = String(body.smiles ?? "");
             if (!smiles.trim()) return sendJson(response, { detail: "SMILES 不能为空。" }, 422);
             return sendJson(response, { input_smiles: smiles, standardized_smiles: smiles, changed: false, query_time_ms: 1 });
+          }
+          if (path === "/structure/descriptors") {
+            try {
+              return sendJson(response, approximateDescriptors(String(body.smiles ?? "")));
+            } catch {
+              return sendJson(response, { detail: `invalid smiles: ${String(body.smiles ?? "")}` }, 422);
+            }
           }
           if (path === "/structure/3d") return unavailable(response, "前端预览模式不生成三维构象。");
           if (path === "/structure/recognize-image") return unavailable(response, "前端预览模式不识别图片中的结构。");

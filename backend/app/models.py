@@ -151,6 +151,32 @@ class Structure3DResponse(BaseModel):
     format: Literal["mol"]
 
 
+class StructureDescriptorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    smiles: str = Field(min_length=1)
+
+
+class StructureDescriptorResponse(BaseModel):
+    """RDKit descriptors of the drawn structure; ``*`` connection points are counted separately."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    canonical_smiles: str
+    formula: str
+    molecular_weight: float = Field(ge=0.0)
+    heavy_atom_count: int = Field(ge=0)
+    attachment_point_count: int = Field(ge=0)
+    ring_count: int = Field(ge=0)
+    aromatic_ring_count: int = Field(ge=0)
+    rotatable_bond_count: int = Field(ge=0)
+    hbond_donor_count: int = Field(ge=0)
+    hbond_acceptor_count: int = Field(ge=0)
+    heteroatom_count: int = Field(ge=0)
+    tpsa: float = Field(ge=0.0)
+    fraction_csp3: float = Field(ge=0.0, le=1.0)
+
+
 class SmilesStandardizeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
