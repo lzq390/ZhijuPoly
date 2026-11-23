@@ -368,6 +368,19 @@ describe("HomopolymerPropertyPredictionPage", () => {
     expect(screen.getByText(/第 1 次运行/)).toBeTruthy();
   });
 
+  it("最多保留 10 次运行，第 N 次运行按本次会话的实际次数编号", async () => {
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
+    for (let index = 1; index <= 11; index += 1) {
+      mocks.predictSmiles.mockResolvedValueOnce({ predictions: { "Glass transition temperature": index }, query_time_ms: 1 });
+      run();
+      await waitFor(() => expect(within(resultsTable()).getByText(String(index))).toBeTruthy());
+    }
+    expect(screen.getByText("第 11 次运行")).toBeTruthy();
+    const runs = screen.getByRole("heading", { name: "本次会话的运行" }).closest("section")!;
+    expect(within(runs).getAllByRole("button")).toHaveLength(10);
+    expect(within(screen.getByRole("combobox")).getAllByRole("option")).toHaveLength(10);
+  });
+
   it("使用说明在辅助栏打开，Escape 关闭并把焦点还给入口", async () => {
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
     const trigger = screen.getByRole("button", { name: "使用说明" });

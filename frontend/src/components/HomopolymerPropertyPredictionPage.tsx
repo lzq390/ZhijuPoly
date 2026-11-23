@@ -170,7 +170,8 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
   }
 
   const viewedRun = (viewedRunId === null ? null : runs.find((run) => run.id === viewedRunId)) ?? runs.at(-1) ?? null;
-  const runNumber = viewedRun ? runs.indexOf(viewedRun) + 1 : 0;
+  // Run ids count every run of the session, so the label stays right after older runs drop off the list.
+  const runNumber = viewedRun ? viewedRun.id : 0;
   const comparisonOptions = runs.filter((run) => run !== viewedRun).reverse();
   const comparison =
     comparisonChoice === "latest"
