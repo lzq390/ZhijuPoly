@@ -9,6 +9,7 @@ import { developmentEntryPreload } from "./build/development-entry-preload.ts";
 import { ketcherRuntimePlugin } from "./build/ketcher-runtime-plugin.ts";
 import { developmentMcpProxy } from "./build/development-mcp-proxy.ts";
 import { developmentMonitoringProxy } from "./build/development-monitoring-proxy.ts";
+import { developmentMockApi } from "./build/development-mock-api.ts";
 
 export default defineConfig(({ mode, command, isPreview }) => {
   const env = loadEnv(mode, process.cwd(), "DEV_PROXY_");
@@ -45,8 +46,11 @@ export default defineConfig(({ mode, command, isPreview }) => {
     )
     : undefined;
 
+  // `npm run dev:mock`: the dev server answers /api/v1 itself for frontend-only preview.
+  const mockApi = command === "serve" && !isPreview && mode === "mock" ? developmentMockApi() : undefined;
+
   return mergeConfig(ketcherCompatibility(), {
-    plugins: [mcpProxy, react(), ketcherRuntimePlugin(editor.engine), editor.metadata, developmentCompression(), developmentEntryPreload(editor.engine), retryableImports()],
+    plugins: [mockApi, mcpProxy, react(), ketcherRuntimePlugin(editor.engine), editor.metadata, developmentCompression(), developmentEntryPreload(editor.engine), retryableImports()],
     resolve: { alias: {
       "@structure-editor-engine": editor.implementation,
       "@structure-editor-preload": editor.preload

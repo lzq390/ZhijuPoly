@@ -280,20 +280,7 @@
     font-size: 17px;
   }
 
-  .np-module-dock[hidden] {
-  display: none;
-}
-
-/* Bare docks and fill tabs host content that brings its own scrolling. */
-.np-module-dock > .np-module-dock__body.is-fill,
-.np-module-dock.is-bare > .np-module-dock__body {
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  overflow: hidden;
-}
-
-.np-module-dock__header {
+  .np-module-dock__header {
     padding: 16px 14px 14px 24px;
   }
 
