@@ -1,4 +1,4 @@
-"""Local M1 development supervisor. Its only upstream is a per-workspace synthetic model."""
+"""Local supervisor for the pinned per-user OpenScience development environment."""
 
 import argparse
 from contextlib import contextmanager
@@ -31,6 +31,12 @@ M2_TRANSPORT_HASH = "2ee753da4cf136e41732a1a37f4df6d6d6e9b171942f8dd6b9e034854dc
 MOUNT = "/openscience"
 TOKEN_DIR = "/run/nexpoly-m1"
 CONTROL = "/run/nexpoly-m1-control"
+BACKEND_MEMORY_MIB = 2048
+FIXTURE_MEMORY_MIB = 96
+PAIR_MEMORY_MIB = BACKEND_MEMORY_MIB + FIXTURE_MEMORY_MIB
+VOLUME_RESERVE_MIB = 2048
+DEFAULT_CAPACITY = {"workspace_memory_mib": 2 * PAIR_MEMORY_MIB, "host_memory_floor_mib": 16384,
+                    "volume_free_floor_mib": 32768}
 RUNTIME = ["--pull=never", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
            "--log-opt", "max-size=2m", "--log-opt", "max-file=1"]
 ENV = {"HOME": "/openscience/home", "XDG_CONFIG_HOME": "/openscience/config", "XDG_STATE_HOME": "/openscience/state",
@@ -78,6 +84,11 @@ with os.fdopen(fd) as marker:
     if not stat.S_ISREG(os.fstat(marker.fileno()).st_mode) or marker.read(128) != sys.argv[1]:
         sys.exit(3)
 """
+VOLUME_FREE_MIB = """
+import os
+fs = os.statvfs('/data')
+print(fs.f_bavail * fs.f_frsize // (1024 * 1024))
+"""
 READY = """
 import json, time, urllib.request
 from pathlib import Path
@@ -100,6 +111,26 @@ else:
 
 class Problem(RuntimeError):
     pass
+
+
+class CapacityRefusal(Problem):
+    def __init__(self, reason, detail):
+        super().__init__(f"workspace_capacity: {reason} ({detail})")
+
+
+def host_available_mib():
+    meminfo = Path("/proc/meminfo").read_text()
+    match = re.search(r"^MemAvailable:\s*(\d+) kB$", meminfo, re.MULTILINE)
+    if not match:
+        raise ValueError("MemAvailable is missing from /proc/meminfo")
+    return int(match[1]) // 1024
+
+
+def validated_capacity(limits):
+    if (not isinstance(limits, dict) or limits.keys() != DEFAULT_CAPACITY.keys()
+            or any(type(value) is not int or value <= 0 for value in limits.values())):
+        raise Problem("Each of the three capacity settings must be a positive integer in MiB")
+    return limits
 
 
 def docker(*arguments, timeout=45, missing=False):
@@ -182,9 +213,23 @@ class Registry:
                 if hashlib.sha256(data).hexdigest() != expected:
                     raise Problem("Unexpected synthetic model template input")
                 write_atomic(self.root / name, data, 0o444)
-            self.data = {**settings, "format": 1, "deployment": uuid4().hex, "workspaces": {}}
+            self.data = {**settings, "format": 1, "deployment": uuid4().hex, "workspaces": {},
+                         "capacity": DEFAULT_CAPACITY.copy()}
             self.save()
-        return {k: v for k, v in self.data.items() if k != "workspaces"}
+        return {**{k: v for k, v in self.data.items() if k != "workspaces"}, "capacity": self.capacity()}
+
+    def capacity(self):
+        # Format-1 registries predate admission budgets. Apply the same defaults on first use.
+        return validated_capacity(self.data.get("capacity", DEFAULT_CAPACITY))
+
+    def set_capacity(self, workspace_memory_mib, host_memory_floor_mib, volume_free_floor_mib):
+        self.bindings()
+        limits = validated_capacity(dict(workspace_memory_mib=workspace_memory_mib,
+                                         host_memory_floor_mib=host_memory_floor_mib,
+                                         volume_free_floor_mib=volume_free_floor_mib))
+        self.data["capacity"] = limits
+        self.save()
+        return {"deployment": self.data["deployment"], "capacity": limits}
 
     def bindings(self):
         if not self.data or self.data.get("format") != 1:
@@ -223,25 +268,71 @@ class Registry:
             self.save()
         return Workspace(self, env, user, rows[key])
 
-    def admit(self, workspace):
-        label = PREFIX + "deployment=" + self.data["deployment"]
-        def residents():
-            return set(docker("ps", "-a", "--filter", "label=" + label, "--filter", "label=" + PREFIX + "resident=yes",
-                              "--format", '{{.Label "org.nexpoly.m1.workspace"}}').splitlines())
+    def resident_ids(self):
+        # Include stopped, paused and partial pairs, including residents missing from the registry.
+        output = docker("ps", "-a", "--filter", "label=" + PREFIX + "deployment=" + self.data["deployment"],
+                        "--format", '{{.Label "org.nexpoly.m1.role"}}|{{.Label "org.nexpoly.m1.workspace"}}')
+        residents = set()
+        seen_roles = set()
+        for line in output.splitlines():
+            role, workspace = line.split("|")
+            if role == "volume-check":  # Nonresident --rm helper, capped at 96 MiB.
+                continue
+            if (role not in {"backend", "fixture"} or not re.fullmatch(r"[0-9a-f]{32}", workspace)
+                    or (workspace, role) in seen_roles):
+                raise ValueError("Ambiguous resident Docker container ownership")
+            seen_roles.add((workspace, role))
+            residents.add(workspace)
+        return residents
 
-        active = residents()
-        if workspace.row["id"] in active or len(active) < self.data["max_active"]:
-            return
-        # A killed supervisor may leave only its network companion or a terminated backend.
-        # Reconcile only registered, stopped workspaces; keep unknown/paused or live processes reserved.
+    def reconcile_residents(self, residents, candidate):
+        stopped = {"exited", "dead", "created"}
+        changed = False
         for binding in self.bindings():
-            if binding.row["id"] not in active:
+            if binding.row["id"] == candidate or binding.row["id"] not in residents:
                 continue
             backend = binding.resource("backend")
-            if not backend or backend["state"] in ("exited", "dead", "created"):
+            if backend and backend["state"] not in stopped:
+                continue
+            fixture = binding.resource("fixture")
+            if (backend or fixture) and (not fixture or fixture["state"] in stopped | {"running"}):
                 binding.remove_pair()
-        if len(residents()) >= self.data["max_active"]:
-            raise Problem("workspace_capacity: all M1 development reservations are in use")
+                changed = True
+        return self.resident_ids() if changed else residents
+
+    def check_capacity(self, workspace, count, limits):
+        if count > self.data["max_active"]:
+            raise CapacityRefusal("instance_count", f"required={count}, limit={self.data['max_active']}")
+        committed = count * PAIR_MEMORY_MIB
+        budget = limits["workspace_memory_mib"]
+        if committed > budget:
+            raise CapacityRefusal("workspace_memory", f"required_mib={committed}, limit_mib={budget}")
+        # Charge full limits, even for mostly idle workspaces that could still grow to their caps.
+        available = host_available_mib()
+        required = limits["host_memory_floor_mib"] + committed
+        if available < required:
+            raise CapacityRefusal("host_memory", f"available_mib={available}, required_mib={required}")
+        available = workspace.volume_free_mib()
+        required = limits["volume_free_floor_mib"] + count * VOLUME_RESERVE_MIB
+        if available < required:
+            raise CapacityRefusal("volume_free", f"available_mib={available}, required_mib={required}")
+
+    def admit(self, workspace):
+        try:
+            limits = self.capacity()
+            candidate = workspace.row["id"]
+            residents = self.resident_ids()
+            try:
+                self.check_capacity(workspace, len(residents | {candidate}), limits)
+            except CapacityRefusal:
+                remaining = self.reconcile_residents(residents, candidate)
+                if remaining == residents:
+                    raise
+                self.check_capacity(workspace, len(remaining | {candidate}), limits)
+        except CapacityRefusal:
+            raise
+        except (Problem, OSError, ValueError, subprocess.SubprocessError) as error:
+            raise CapacityRefusal("probe_unavailable", str(error)) from error
 
 
 class Workspace:
@@ -300,14 +391,26 @@ class Workspace:
     def bind(path, destination):
         return f"type=bind,src={path},dst={destination},readonly"
 
-    def helper(self, script, *args, initialize=False):
+    def helper(self, script, *args, initialize=False, anonymous=False):
         flags = ["--cap-add=CHOWN", "--cap-add=FOWNER", "--cap-add=DAC_OVERRIDE"] if initialize else ["--user", self.identity]
-        mount = f"type=volume,src={self.volume},dst=/data,volume-nocopy"
+        source = "" if anonymous else f"src={self.volume},"
+        mount = f"type=volume,{source}dst=/data,volume-nocopy"
         if not initialize:
             mount += ",readonly"
         return docker("run", "--rm", *RUNTIME, *self.label_flags("volume-check"), "--network", "none",
                       "--memory", "96m", "--cpus", "0.5", "--pids-limit", "32", *flags,
                       "--mount", mount, PYTHON, "python", "-Bc", script, *args)
+
+    def volume_free_mib(self):
+        # Probe the actual named volume when present. For first admission sample an anonymous
+        # volume on the same local driver before allocating the user's persistent volume.
+        exists = self.resource("volume")
+        if not exists and self.row["initialized"]:
+            raise Problem("Persistent volume is missing; restore the registered volume before starting")
+        value = self.helper(VOLUME_FREE_MIB, anonymous=not exists)
+        if not value.isascii() or not value.isdecimal():
+            raise ValueError("Docker local volume probe returned invalid available MiB")
+        return int(value)
 
     def verify_template_files(self):
         for filename, expected in FIXTURE_HASHES.items():
@@ -400,7 +503,8 @@ class Workspace:
             return flags
 
         fixture_id = docker("run", "-d", *RUNTIME, *self.label_flags("fixture"), "--name", self.fixture,
-                            "--network", "none", "--user", "65534:65534", "--memory", "96m", "--memory-swap", "96m",
+                            "--network", "none", "--user", "65534:65534", "--memory", f"{FIXTURE_MEMORY_MIB}m",
+                            "--memory-swap", f"{FIXTURE_MEMORY_MIB}m",
                             "--cpus", "0.5", "--pids-limit", "32", "--mount", secret, "--mount",
                             self.bind(self.registry.root / "fixture.py", "/fixture.py"), "--mount",
                             self.bind(self.transport_program(), "/m2-loopback.py"), "--mount",
@@ -411,7 +515,8 @@ class Workspace:
             settings["OPENSCIENCE_CONFIG"] = "/m3-code/config.json"
         env = [arg for key, value in settings.items() for arg in ("--env", key + "=" + value)]
         return docker("run", "-d", *RUNTIME, *self.label_flags("backend"), "--name", self.backend, "--network",
-                      "container:" + fixture_id, "--user", self.identity, "--memory", "2g", "--memory-swap", "2g",
+                      "container:" + fixture_id, "--user", self.identity, "--memory", f"{BACKEND_MEMORY_MIB}m",
+                      "--memory-swap", f"{BACKEND_MEMORY_MIB}m",
                       "--cpus", "1", "--pids-limit", "256", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m,mode=1777",
                       "--mount", f"type=volume,src={self.volume},dst={MOUNT},volume-nocopy",
                       "--mount", secret, "--mount", self.bind(self.control, CONTROL),
@@ -486,6 +591,9 @@ class Workspace:
             return self.state()
         if self.row["retry_after"] > time.time():
             raise Problem("Workspace start backoff is active; retry shortly")
+        stable = {"running", "exited", "dead", "created"}
+        if any(item and item["state"] not in stable for item in (backend, fixture)):
+            raise Problem("Workspace process state is unknown; retain its reservation")
         self.registry.admit(self)
         if backend and backend["state"] == "running":
             if not fixture or fixture["state"] not in ("dead", "exited"):
@@ -621,6 +729,10 @@ def main():
     init.add_argument("--idle-seconds", type=int, default=1800)
     upgrade = commands.add_parser("set-image", help="Change the pinned development image after recycling every instance")
     upgrade.add_argument("--image", required=True)
+    capacity = commands.add_parser("set-capacity", help="Configure admission budgets for this development registry")
+    capacity.add_argument("--workspace-memory-mib", required=True, type=int)
+    capacity.add_argument("--host-memory-floor-mib", required=True, type=int)
+    capacity.add_argument("--volume-free-floor-mib", required=True, type=int)
     commands.add_parser("list", help="List known development workspace bindings and their actual process state")
     for operation in ("ensure", "status", "restart", "recycle", "reap", "touch", "begin", "end"):
         sub = commands.add_parser(operation)
@@ -639,6 +751,9 @@ def main():
                 output = {"workspaces": [binding.state() for binding in registry.bindings()]}
             elif args.command == "set-image":
                 output = registry.set_image(args.image)
+            elif args.command == "set-capacity":
+                output = registry.set_capacity(args.workspace_memory_mib, args.host_memory_floor_mib,
+                                               args.volume_free_floor_mib)
             else:
                 project = registry.workspace(args.environment, args.user_id, create=args.command == "ensure")
                 if args.command == "ensure":

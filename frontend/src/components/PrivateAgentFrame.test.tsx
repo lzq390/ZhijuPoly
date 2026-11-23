@@ -48,6 +48,19 @@ it("drops a ticket response arriving after the signed-in frame unmounts", async 
   expect(submit).not.toHaveBeenCalled();
 });
 
+it("shows a retryable capacity refusal before opening a workspace", async () => {
+  issue.mockResolvedValue(ticket());
+  const submitted = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+  render(<PrivateAgentFrame url={origin} />);
+  const frame = screen.getByTitle("智聚万物智能体工作台") as HTMLIFrameElement;
+  await waitFor(() => expect(submitted).toHaveBeenCalledOnce());
+  fireEvent(window, new MessageEvent("message", { origin, source: frame.contentWindow,
+    data: { type: "nexpoly:openscience:error", handoff_id: "current", reason: "workspace_capacity" } }));
+  expect(screen.getByText("工作区容量已满，请稍后重试。")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "重试" })).toBeTruthy();
+  expect(screen.queryByTitle("智聚万物智能体工作台")).toBeNull();
+});
+
 it("preserves a cached tab and releases its own page on unload once", async () => {
   issue.mockResolvedValue(ticket());
   const submitted = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});

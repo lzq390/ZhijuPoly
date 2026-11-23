@@ -45,6 +45,7 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
   }),0,"127.0.0.1")
   t.after(() => stop(authority))
   const owners = new Map(), disconnected = new Set()
+  let capacityRefusal
   let repairs = 0, writes = 0
   let forwarded
   for (const [idx,owner] of ["test-user-a","test-user-b"].entries()) {
@@ -73,6 +74,10 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
   const supervisor = await listen(net.createServer(socket => socket.once("data", raw => {
     const r = JSON.parse(raw)
     assert.equal(r.operation, "ensure")
+    if (r.user_id === "test-user-b" && capacityRefusal) {
+      socket.end(JSON.stringify({ok:false,error:"workspace_capacity: " + capacityRefusal})+"\n")
+      return
+    }
     if (disconnected.delete(r.user_id)) repairs++
     socket.end(JSON.stringify({ok:true,result:{...r,workspace:owners.get(r.user_id),state:"running"}})+"\n")
   })),supervisorSocket)
@@ -100,6 +105,14 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
     return fetch(base+path,{headers:{Cookie:session.cookie,"X-Nexpoly-Page":session.page,...custom}})
   }
   assert.ok(a.page && a2.page)
+  for (capacityRefusal of ["instance_count", "workspace_memory", "host_memory", "volume_free", "probe_unavailable"]) {
+    const denied = await exchange("login-B-pending","test-user-b","browser_capacity_test",11)
+    assert.match(denied.html,/"reason":"workspace_capacity"/)
+    assert.equal(denied.page,undefined)
+    assert.equal(denied.cookie,undefined)
+    assert.deepEqual(await (await read(a,"/openscience-api/session")).json(),{owner:"test-user-a"})
+  }
+  capacityRefusal = undefined
   const sibling = await exchange("login-A1","test-user-a","browser_profile_1",10)
   const leave = (cookie, origin = parent) => fetch(base+"/_nexpoly/auth/leave", {method:"POST",
     headers:{Origin:origin, Cookie:cookie}, body:new URLSearchParams({page_context:sibling.page})})

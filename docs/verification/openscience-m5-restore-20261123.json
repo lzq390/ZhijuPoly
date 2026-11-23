@@ -1,0 +1,143 @@
+{
+  "status": "passed",
+  "environment": "dev-m1",
+  "workspace_image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+  "offline_window_utc": [
+    "2026-11-23T01:45:51.456128+00:00",
+    "2026-11-23T01:46:03.847659+00:00"
+  ],
+  "api_window_utc": [
+    "2026-11-23T01:46:26.269971+00:00",
+    "2026-11-23T01:48:13.021461+00:00"
+  ],
+  "scope": {
+    "content": [
+      "records/**",
+      "files/**"
+    ],
+    "excluded": [
+      "files/.runtime/**",
+      "home/**",
+      "cache/**",
+      "state/**",
+      "config/**"
+    ],
+    "metadata": [
+      ".m1-owner",
+      "root",
+      "empty standard directories"
+    ]
+  },
+  "backup_root_name": "openscience-m5-20261123-ooxy1c_i",
+  "mode": {
+    "backup_directory": "0700",
+    "archive_and_manifest": "0600"
+  },
+  "source_filesystem": "259:4",
+  "backup_filesystem": "259:0",
+  "source_disk": {
+    "device": "259:2",
+    "name": "nvme1n1"
+  },
+  "backup_disk": {
+    "device": "259:0",
+    "name": "nvme0n1"
+  },
+  "per_object_fsync_before_publish": true,
+  "capacity_policy_mib": {
+    "host_memory_floor_mib": 16384,
+    "volume_free_floor_mib": 32768,
+    "workspace_memory_mib": 4288
+  },
+  "backup_free_floor_bytes": 17179869184,
+  "restore_space_bytes": {
+    "preflight_volume_free_bytes": 111775055872,
+    "restore_reserved_bytes": 18892800,
+    "volume_free_floor_bytes": 34359738368
+  },
+  "swapped_owner_refused_before_allocating": true,
+  "source_registry_sha256": "83274cac893edfc08a000af90e1410bb2e4190b4413f5c4a5774d36cc44f4fff",
+  "source_registry_unchanged_after_drill": true,
+  "restored_to_new_deployment": "09da45dd16374d2abb86285bd5b8f883",
+  "users": {
+    "test-user-a": {
+      "sessions": {
+        "general": {
+          "id": "ses_e0d246e88ffevbXocpt2wmO8Cy",
+          "messages": 2,
+          "sha256": "4eab415543b6887c7295e9e2951d63451b3afe66988dc44da37bfdb5f9f55765",
+          "other_session_http": 404
+        },
+        "project": {
+          "id": "ses_e0d245dccffebKouYY5zYOn93K",
+          "messages": 2,
+          "sha256": "22c0a7314c9ebb5e53a543f6fe2ad23371ac1238412501c7469e78b1de3fd943",
+          "other_session_http": 404
+        }
+      },
+      "notebook_sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+      "attachment_reference_matches": true,
+      "workspace": "463fc2f89367468bb7fc6e048d522c9e",
+      "uid": 58161656,
+      "gid": 58161656,
+      "volume_root_mode": "0700",
+      "source_generation": 24,
+      "first_restored_generation": 25,
+      "reissued_credential_reads": true,
+      "previous_credential_http": 401,
+      "package": "a",
+      "manifest_sha256": "0e5fc8f3c4a79ee0e451d58ceca02123ff5c7087e6acebde82c72a32b04821e5",
+      "archive_sha256": "6199821b564aeed698db539fb08218bafef6718567f15b77d52e838093666ba0",
+      "archive_bytes": 3614720,
+      "original_and_restored_inventory": {
+        "directories": 374,
+        "file_bytes": 545523,
+        "files": 1338,
+        "tree_sha256": "295e5f56d98c35dd7710973844e436b4cf5ed8d7abdb1cf901f2f12c1dcfac46"
+      },
+      "offline_tree_hash_matched": true
+    },
+    "test-user-b": {
+      "sessions": {
+        "general": {
+          "id": "ses_e0d246e8affeWq2vp71xkqSlqA",
+          "messages": 2,
+          "sha256": "4108e5bd1603c0187cfa9e133dccc80c4bc6e7946ff5e645bb081450cc3da132",
+          "other_session_http": 404
+        },
+        "project": {
+          "id": "ses_e0d245d59ffeBtmwtCw0LpRpXJ",
+          "messages": 2,
+          "sha256": "1f667acd75fd52c04be6e4731031cbcc6292f76139c78bbc224519f311052e1a",
+          "other_session_http": 404
+        }
+      },
+      "notebook_sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+      "attachment_reference_matches": true,
+      "workspace": "3c137e9c236d4998bed842786c0f4548",
+      "uid": 43620582,
+      "gid": 43620582,
+      "volume_root_mode": "0700",
+      "source_generation": 24,
+      "first_restored_generation": 25,
+      "reissued_credential_reads": true,
+      "previous_credential_http": 401,
+      "package": "b",
+      "manifest_sha256": "802390af278487fe73780b042067399d04b407a07a27d9b41bf944b2bf3cc56e",
+      "archive_sha256": "7703753022801880b5df411771893332d7574ebf7fbb34099393b84abe2e8958",
+      "archive_bytes": 2785280,
+      "original_and_restored_inventory": {
+        "directories": 301,
+        "file_bytes": 389523,
+        "files": 1037,
+        "tree_sha256": "84e24287f0115c30741ce7f8673d6a336efb06b316b7eff3cb6958e167fbb473"
+      },
+      "offline_tree_hash_matched": true
+    }
+  },
+  "cleanup": {
+    "removed_scratch_volumes": 2,
+    "remaining_scratch_volumes": 0,
+    "original_volumes_preserved": true
+  }
+}
