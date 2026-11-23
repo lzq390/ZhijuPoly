@@ -1815,25 +1815,6 @@
   }
 }
 
-/* A narrow panel keeps every number while comparing; the scale steps aside, and the relay
-   buttons drop their icons so they stay on one line. */
-@container np-hp-panel (max-width: 440px) {
-  .np-homopolymer-prediction .np-hp-table.is-comparing :is(.np-hp-scale, .np-hp-table__scale-head) {
-    display: none;
-  }
-
-  .np-homopolymer-prediction .np-hp-next {
-    gap: 6px;
-  }
-
-  .np-homopolymer-prediction .np-hp-relay {
-    padding: 0 9px;
-  }
-
-  .np-homopolymer-prediction .np-hp-relay svg {
-    display: none;
-  }
-}
 
 .np-homopolymer-prediction .np-hp-footnote,
 .np-homopolymer-prediction .np-hp-empty {
@@ -1897,6 +1878,30 @@
 .np-homopolymer-prediction .np-hp-relay:focus-visible {
   outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
   outline-offset: 2px;
+}
+
+/* A narrow panel keeps every number while comparing; the scale steps aside, and the relay
+   buttons drop their icons so they stay on one line. */
+@container np-hp-panel (max-width: 440px) {
+  .np-homopolymer-prediction .np-hp-table.is-comparing :is(.np-hp-scale, .np-hp-table__scale-head) {
+    display: none;
+  }
+
+  .np-homopolymer-prediction .np-hp-next {
+    gap: 4px;
+  }
+
+  .np-homopolymer-prediction .np-hp-next > span {
+    margin-right: 2px;
+  }
+
+  .np-homopolymer-prediction .np-hp-relay {
+    padding: 0 7px;
+  }
+
+  .np-homopolymer-prediction .np-hp-relay svg {
+    display: none;
+  }
 }
 
 /* Touch screens: every control on this page gets a 44px target; text links grow their hit area
