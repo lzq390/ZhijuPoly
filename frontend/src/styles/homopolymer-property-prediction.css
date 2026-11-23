@@ -645,6 +645,14 @@
   display: none;
 }
 
+/* This page predicts one repeat unit, so two of Ketcher's left groups never reach the SMILES or
+   the prediction: reaction tools (plus, arrows, mapping) and annotations (shapes, text, images).
+   Without them the left toolbar needs ~382px instead of ~594px, so it fits without scroll arrows
+   down to 1280×720 even with the structure facts row. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [data-testid="left-toolbar-buttons"] > :is(:has([data-testid="reaction-plus"]), :has([data-testid="shapes-drop-down-button"])) {
+  display: none;
+}
+
 /* ---------- empty canvas: what to draw and where to start ---------- */
 /* Keep guidance clear of Ketcher's own top, side and template toolbars. */
 .np-structure-workbench.np-homopolymer-prediction .np-sw-empty-state {
@@ -1839,6 +1847,37 @@
 @media (max-width: 1199px) {
   .np-structure-workbench.np-homopolymer-prediction {
     --np-hp-gutter: 16px;
+  }
+}
+
+/* Short windows: the rows around the canvas give back ~26px so Ketcher's side toolbars keep
+   their full height with the structure facts row (right toolbar needs ~450px, left ~382px). */
+@media (min-width: 900px) and (max-height: 800px) {
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-page {
+    padding-bottom: 8px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-commandbar {
+    padding-top: 8px;
+    padding-bottom: 6px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > label {
+    top: 10px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > textarea {
+    padding-top: 9px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > button {
+    top: 7px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-facts {
+    min-height: calc(var(--np-hp-control) + 4px);
+    padding-top: 2px;
+    padding-bottom: 2px;
   }
 }
 
