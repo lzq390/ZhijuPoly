@@ -1025,15 +1025,24 @@
   font-size: var(--np-hp-fs-xs);
 }
 
-/* Channel marks: a short vertical bar, like a colour-coded instrument channel. */
-.np-homopolymer-prediction .np-hp-group > legend > i,
-.np-homopolymer-prediction .np-hp-table__group i {
-  display: inline-block;
-  width: 3px;
-  height: 11px;
+/* Channel badge: the group's icon (Lucide, chosen via Streamline) on a tint of its channel colour. */
+.np-homopolymer-prediction .np-hp-channel-badge {
+  --np-hp-badge: 20px;
+  display: inline-grid;
+  width: var(--np-hp-badge);
+  height: var(--np-hp-badge);
   flex: none;
-  border-radius: 2px;
-  background: var(--np-hp-channel);
+  place-items: center;
+  border-radius: 6px;
+  color: var(--np-hp-channel);
+  background: var(--np-hp-channel-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--np-hp-channel) 18%, transparent);
+}
+
+.np-homopolymer-prediction .np-hp-channel-badge svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2.1;
 }
 
 .np-homopolymer-prediction .np-hp-group__options {
@@ -1535,9 +1544,26 @@
   text-align: left;
 }
 
-.np-homopolymer-prediction .np-hp-table__group i {
-  margin: 0 7px 0 0;
-  vertical-align: -1px;
+.np-homopolymer-prediction .np-hp-table__group .np-hp-channel-badge {
+  --np-hp-badge: 18px;
+  margin: 0 8px 0 0;
+  vertical-align: -4px;
+}
+
+.np-homopolymer-prediction .np-hp-table__group .np-hp-channel-badge svg {
+  width: 12px;
+  height: 12px;
+}
+
+.np-hp-help dt .np-hp-channel-badge {
+  --np-hp-badge: 18px;
+  margin-right: 7px;
+  vertical-align: -4px;
+}
+
+.np-hp-help dt .np-hp-channel-badge svg {
+  width: 12px;
+  height: 12px;
 }
 
 .np-homopolymer-prediction .np-hp-table td strong {
@@ -1938,6 +1964,25 @@
   .np-homopolymer-prediction .np-hp-chip__check svg {
     width: 13px;
     height: 13px;
+  }
+
+  .np-homopolymer-prediction .np-hp-channel-badge {
+    --np-hp-badge: 26px;
+    border-radius: 8px;
+  }
+
+  .np-homopolymer-prediction .np-hp-channel-badge svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .np-homopolymer-prediction .np-hp-table__group .np-hp-channel-badge {
+    --np-hp-badge: 24px;
+  }
+
+  .np-homopolymer-prediction .np-hp-table__group .np-hp-channel-badge svg {
+    width: 15px;
+    height: 15px;
   }
 
   .np-homopolymer-prediction .np-hp-scale__rail {

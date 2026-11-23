@@ -20,6 +20,7 @@ import {
   type PredictionRun
 } from "./predictionFormat";
 import { PROPERTY_SCALES, scaleBounds, scalePosition, scaleRangeLabel, tickPercent } from "./predictionScale";
+import { ChannelBadge } from "./channelIcons";
 
 export type PredictionRelayModule = "databaseQuery" | "explorer" | "mdSimulationDemo";
 
@@ -255,7 +256,7 @@ function ResultTable({
         <tbody key={group.key} className={`is-${group.key}`}>
           <tr className="np-hp-table__group">
             <th scope="rowgroup" colSpan={compare ? 5 : 3}>
-              <i aria-hidden="true" />
+              <ChannelBadge group={group.key} />
               {GROUP_LABELS[group.key]}
             </th>
           </tr>
@@ -431,7 +432,7 @@ export function HomopolymerPredictionPanel({
                 return (
                   <fieldset key={group.key} className={`np-hp-group is-${group.key}`}>
                     <legend>
-                      <i aria-hidden="true" />
+                      <ChannelBadge group={group.key} />
                       {GROUP_LABELS[group.key]}
                       <button type="button" className="np-hp-link" onClick={() => toggleGroup(group.key)}>
                         {groupSelected === properties.length ? "取消本组" : "选择本组"}

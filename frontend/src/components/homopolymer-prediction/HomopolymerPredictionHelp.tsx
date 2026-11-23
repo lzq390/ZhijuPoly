@@ -1,4 +1,5 @@
 import { PREDICT_PROPERTY_CATALOG, PREDICT_PROPERTY_GROUPS } from "../../constants/predictableProperties";
+import { ChannelBadge } from "./channelIcons";
 import { STRUCTURE_FACTS } from "./structureFacts";
 
 /** Concise in-page help shown in the module dock. */
@@ -26,8 +27,8 @@ export function HomopolymerPredictionHelp({ structureFactsId }: { structureFacts
         <h3>预测内容</h3>
         <dl>
           {PREDICT_PROPERTY_GROUPS.map((group) => (
-            <div key={group.key}>
-              <dt>{group.label}</dt>
+            <div key={group.key} className={`is-${group.key}`}>
+              <dt><ChannelBadge group={group.key} />{group.label}</dt>
               <dd>
                 {PREDICT_PROPERTY_CATALOG.filter((property) => property.group === group.key)
                   .map((property) => `${property.label}（${property.unit}）`).join("、")}
