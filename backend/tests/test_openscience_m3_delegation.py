@@ -21,6 +21,7 @@ def test_native_targets_are_bound_to_the_tool_and_job():
     assert not allowed_target("dft_job_list", None, "POST", DFT, "")
     for tool in ("dft_job_status", "dft_job_result"):
         assert allowed_target(tool, job, "GET", DFT + "/" + job, "")
+        assert allowed_target(tool, job.upper(), "GET", DFT + "/" + job.upper(), "")
         assert not allowed_target(tool, job, "GET", DFT + "/" + other, "")
         assert not allowed_target(tool, job, "GET", DFT + "/" + job + "/artifacts/x", "")
     assert allowed_target("dft_job_submit", None, "POST", DFT, "")
@@ -52,6 +53,8 @@ def test_real_login_delegation_scope_replay_expiration_and_logout(monkeypatch, t
 
     # The probe exposes the native middleware's canonical owner and idempotency key.
     # Separate E2E exercises the six real routes, workers and entitlement accounting.
+    retire_before_delivery = asyncio.Event()
+
     def install_probe(app):
         @app.post("/api/v1/conditional-generation/polytao/jobs")
         @app.post("/api/v1/predict")
@@ -59,6 +62,8 @@ def test_real_login_delegation_scope_replay_expiration_and_logout(monkeypatch, t
             identity = current_identity()
             assert not is_service_context() and "authorization" not in request.headers
             assert "x-openscience-delegation" not in request.headers
+            if retire_before_delivery.is_set():
+                (tmp_path / "test-user-a").write_text("b" * 64)
             return {
                 "owner": identity.user_id,
                 "login": identity.session_id,
@@ -264,7 +269,16 @@ def test_real_login_delegation_scope_replay_expiration_and_logout(monkeypatch, t
             }
             # Replacing a workspace retires already issued credentials at both hops.
             old_native = (await exchange(req)).json()["access_token"]
-            (tmp_path / "test-user-a").write_text("b" * 64)
+            retiring = (await exchange(req)).json()["access_token"]
+            retire_before_delivery.set()
+            withheld = await trusted.post(
+                path, headers={**gateway, "X-OpenScience-Delegation": retiring}, content=payload
+            )
+            retire_before_delivery.clear()
+            assert withheld.status_code == 401
+            assert withheld.json() == {
+                "detail": "Native authorization expired", "code": "native_response_withheld"
+            }
             assert (await issue(first)).status_code == 401
             assert (await exchange(req)).status_code == 401
             assert (

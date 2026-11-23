@@ -363,6 +363,24 @@ try {
   const a1old = await app(device1),
     old = await workbench(a1old),
     oldData = await ownership(old, A, B);
+  assert.notEqual(r1.pageContext, oldData.pageContext);
+  const cookieFor = (key) => "__Host-np_os_m2_" + key;
+  const agentCookies = async () => new Set((await device1.cookies(agent)).map((c) => c.name));
+  const initialCookies = await agentCookies();
+  assert.ok([r1.pageContext, oldData.pageContext].every((key) => initialCookies.has(cookieFor(key))));
+  await a1.reload({ waitUntil: "domcontentloaded" });
+  const refreshedA = await ownership(await workbench(a1), A, B);
+  assert.notEqual(refreshedA.pageContext, r1.pageContext);
+  await within(async () => !(await agentCookies()).has(cookieFor(r1.pageContext)), "Retired page cookie");
+  const scopeProbe = await device1.newPage();
+  await scopeProbe.goto(agent + "/_nexpoly/expired");
+  const pageStatuses = await scopeProbe.evaluate(async (keys) => Promise.all(keys.map(async (key) =>
+    (await fetch("/_nexpoly/status", {headers:{"X-Nexpoly-Page":key}, cache:"no-store"})).status)),
+    [r1.pageContext, oldData.pageContext, refreshedA.pageContext]);
+  await scopeProbe.close();
+  assert.deepEqual(pageStatuses, [401, 200, 200]);
+  report.stages.page_reload = { old_cookie_removed: true, old_context_status: pageStatuses[0],
+    sibling_context_status: pageStatuses[1], replacement_context_status: pageStatuses[2] };
   const a2 = await app(device2);
   await login(a2, A);
   const f2 = await workbench(a2),

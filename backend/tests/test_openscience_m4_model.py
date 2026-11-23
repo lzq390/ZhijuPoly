@@ -2,6 +2,7 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -30,7 +31,22 @@ def ledger():
         if not conn.execute("SELECT to_regclass('openscience_m4.model_requests')").fetchone()[0]:
             migration = Path(__file__).resolve().parents[1] / "migrations/openscience-dev/0006_m4_model.sql"
             conn.execute(migration.read_text())
-    return ModelLedger(lambda: psycopg.connect(dsn, row_factory=dict_row), budget=30)
+        if not conn.execute(
+            "SELECT 1 FROM pg_attribute WHERE attrelid='openscience_m4.model_requests'::regclass "
+            "AND attname='request_tag' AND NOT attisdropped"
+        ).fetchone():
+            migration = (
+                Path(__file__).resolve().parents[1] / "migrations/openscience-dev/0008_m4_model_retry.sql"
+            )
+            conn.execute(migration.read_text())
+
+    @contextmanager
+    def connect():
+        with psycopg.connect(dsn, row_factory=dict_row) as conn:
+            conn.execute("SET LOCAL ROLE nexpoly_auth")
+            yield conn
+
+    return ModelLedger(connect, budget=30)
 
 
 def actor(owner=None):
@@ -104,7 +120,9 @@ def test_model_protocols_missing_usage_and_interrupted_provider(ledger):
         return httpx.Response(200, text=result)
 
     app = FastAPI()
-    install_model(app, principal, transport=httpx.MockTransport(provider), ledger=ledger)
+    install_model(
+        app, principal, request_key=b"dev-test-key", transport=httpx.MockTransport(provider), ledger=ledger
+    )
 
     async def exercise():
         async with httpx.AsyncClient(
@@ -178,7 +196,9 @@ def test_downstream_disconnect_and_late_worker_receipt(ledger):
         return {**current, "scope": "model.usage" if request.method == "GET" else "model.invoke"}
 
     app = FastAPI()
-    install_model(app, principal, transport=httpx.MockTransport(provider), ledger=ledger)
+    install_model(
+        app, principal, request_key=b"dev-test-key", transport=httpx.MockTransport(provider), ledger=ledger
+    )
     body = json.dumps(
         {"model": "qwen2.5-7b", "input": "hello", "stream": True, "max_output_tokens": 4}
     ).encode()
@@ -259,7 +279,9 @@ def test_concurrent_gateway_streams_reserve_per_owner(ledger):
         return requests[request.headers["test-id"]]
 
     app = FastAPI()
-    install_model(app, principal, transport=httpx.MockTransport(provider), ledger=ledger)
+    install_model(
+        app, principal, request_key=b"dev-test-key", transport=httpx.MockTransport(provider), ledger=ledger
+    )
     body = {"model": "qwen2.5-7b", "input": "hi", "stream": True, "max_output_tokens": 5}
 
     async def check():
@@ -283,5 +305,90 @@ def test_concurrent_gateway_streams_reserve_per_owner(ledger):
             assert all(response.status_code == 200 for response in done)
             assert ledger.summary(a["user_id"])["used_tokens"] == 22
             assert ledger.summary(b["user_id"])["used_tokens"] == 11
+
+    asyncio.run(check())
+
+
+def test_revocation_during_token_count_refuses_new_model_work(ledger):
+    owner = actor()
+    called = []
+    active = True
+
+    def principal(request: Request):
+        if not active:
+            raise HTTPException(401, "Login expired")
+        return owner
+
+    def provider(req):
+        nonlocal active
+        called.append(req.url.path)
+        if req.url.path == "/tokenize":
+            active = False
+            return httpx.Response(200, json={"input_tokens": 8})
+        return httpx.Response(200, text='{"usage":{"input_tokens":8,"output_tokens":1}}\n')
+
+    app = FastAPI()
+    install_model(
+        app, principal, request_key=b"dev-test-key", transport=httpx.MockTransport(provider), ledger=ledger
+    )
+
+    async def exercise():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://local"
+        ) as client:
+            reply = await client.post(BASE + "/v1/responses", json={"model": "qwen2.5-7b", "input": "hi"})
+        assert reply.status_code == 401
+        assert called == ["/tokenize"]
+        usage = ledger.summary(owner["user_id"])
+        assert usage["reserved_tokens"] == usage["estimated_tokens"] == usage["used_tokens"] == 0
+
+    asyncio.run(exercise())
+
+
+def test_busy_worker_retries_only_the_same_unstarted_request(ledger):
+    original = actor()
+    alternate = {**original, "session_id": str(uuid4())}
+    foreign = {**actor(), "request_id": original["request_id"]}
+    logins = {"original": original, "second": alternate, "foreign": foreign}
+    attempts = []
+
+    def principal(request: Request):
+        return logins[request.headers["test-login"]]
+
+    def provider(req):
+        if req.url.path == "/tokenize":
+            return httpx.Response(200, json={"input_tokens": 8})
+        attempts.append(json.loads(req.content)["request_id"])
+        if len(attempts) == 1:
+            return httpx.Response(429)
+        return httpx.Response(200, text='{"usage":{"input_tokens":8,"output_tokens":1}}\n')
+
+    app = FastAPI()
+    install_model(
+        app, principal, request_key=b"dev-test-key", transport=httpx.MockTransport(provider), ledger=ledger
+    )
+
+    async def check():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://local"
+        ) as client:
+
+            async def call(login="original", prompt="first"):
+                return await client.post(
+                    BASE + "/v1/responses",
+                    headers={"test-login": login},
+                    json={"model": "qwen2.5-7b", "input": prompt},
+                )
+
+            assert (await call()).status_code == 429
+            assert ledger.summary(original["user_id"])["reserved_tokens"] == 0
+            for login in ("second", "foreign"):
+                assert (await call(login)).status_code == 409
+            assert (await call(prompt="other")).status_code == 409
+            assert (await call()).status_code == 200
+            assert (await call()).status_code == 409
+            assert attempts == [original["request_id"]] * 2
+            usage = ledger.summary(original["user_id"])
+            assert usage["used_tokens"] == 9 and len(usage["records"]) == 1
 
     asyncio.run(check())

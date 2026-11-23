@@ -101,6 +101,70 @@ ADAPTER_IMAGES = {
 }
 
 
+def workspace_overlay(args, state, transport):
+    # A busy workspace may survive a development stack shutdown. Keep the exact
+    # bind sources addressable on the next run, independently of other services.
+    cache = state / "workspace-overlays"
+    cache.mkdir(mode=0o700, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=cache) as tmp:
+        code = Path(tmp) / "code"
+        runpy.run_path(str(ROOT / "ops/openscience-m3-dev/workspace.py"))["prepare"](
+            code, args.registry, args.m3_adapters, args.m4
+        )
+        signature = hashlib.sha256(json.dumps([args.m3_gateway_image, args.m3_adapters, args.m4]).encode())
+        sources = {path.name: hashlib.sha256(path.read_bytes()).digest() for path in sorted(code.iterdir())}
+        for name, digest in sources.items():
+            signature.update(name.encode() + b"\0" + digest)
+        overlay = cache / signature.hexdigest()
+        overlay.mkdir(mode=0o700, exist_ok=True)
+        target = overlay / "code"
+        if not target.exists():
+            code.rename(target)
+        elif {p.name: hashlib.sha256(p.read_bytes()).digest() for p in target.iterdir()} != sources:
+            raise RuntimeError("Retained workspace code differs from the reviewed development template")
+    # Host AF_UNIX paths are length-limited. Docker mounts the persistent real paths.
+    (transport / "m3").symlink_to(overlay, target_is_directory=True)
+    return overlay
+
+
+def attachment_matches(row, overlay):
+    if row["state"] == "recycled":
+        return True
+    mounts = json.loads(run("docker", "container", "inspect", "--format", "{{json .Mounts}}", row["container_id"]))
+    sources = {m["Destination"]: m["Source"] for m in mounts}
+    if overlay is None:
+        return "/m3-code" not in sources and "/m3-peer" not in sources
+    return (sources.get("/m3-code") == str(overlay / "code")
+            and sources.get("/m3-peer") == str(overlay / row["workspace"]))
+
+
+def recycle_workspaces(targets, attempt, grace_seconds=20):
+    pending = dict(targets)
+    deadline = time.monotonic() + grace_seconds
+    reasons = {}
+    while pending:
+        for user, volume in list(pending.items()):
+            try:
+                row = attempt(user)
+                if row["volume"] != volume:
+                    reasons[user] = "volume mismatch"
+                    continue
+                if row["state"] == "recycled":
+                    del pending[user]
+                    continue
+                reasons[user] = row.get("reason", row["state"])
+            except (OSError, subprocess.SubprocessError, ValueError, KeyError) as error:
+                reasons[user] = str(error)
+        if not pending:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            detail = ", ".join(f"{u}: {reasons[u]}" for u in pending)
+            raise RuntimeError("Workspace shutdown incomplete. Private volumes and workspace mounts retained; "
+                               f"restart this development stack with the same configuration ({detail}).")
+        time.sleep(min(1, remaining))
+
+
 def start_adapters(stack, state, transport, api_socket, cred, deploy, verify):
     endpoints, evidence = {}, {}
     for name, image in ADAPTER_IMAGES.items():
@@ -413,13 +477,13 @@ def run_stack(args, stack):
             USAGE_ENTITLEMENTS_POLICY_FILE="/m3policy.json",
             USAGE_METERING_ENABLED="true",
         )
-        policy = ROOT / "config/examples/entitlements-example-v1.json"
-        if args.m3_adapters:
-            policy_data = json.loads(policy.read_bytes())
-            policy_data["version"] = "dev-m1-adapters-v1"
-            policy_data["tiers"]["member"]["pools"].update(generation=50, chemistry_small=50)
-            policy = transport / "adapter-policy.json"
-            file(policy, json.dumps(policy_data), 0o444)
+        # Both gateway modes use the same retained accounts and monthly ledger.
+        # Keep their established development limits when starting either mode.
+        policy_data = json.loads((ROOT / "config/examples/entitlements-example-v1.json").read_bytes())
+        policy_data["version"] = "dev-m1-adapters-v1"
+        policy_data["tiers"]["member"]["pools"].update(generation=50, chemistry_small=50)
+        policy = transport / "m3-policy.json"
+        file(policy, json.dumps(policy_data), 0o444)
         common += mount(policy, "/m3policy.json")
         artifacts = state / "m3-artifacts"
         artifacts.mkdir(mode=0o700, exist_ok=True)
@@ -459,15 +523,11 @@ def run_stack(args, stack):
             "gateway_socket": str(peer_dir / "gateway.sock"),
         }
     if args.m3_gateway_image or args.m4:
-        overlay = transport / "m3"
-        overlay.mkdir()
+        overlay = workspace_overlay(args, state, transport)
         generations = overlay / "generations"
-        generations.mkdir(mode=0o755)
+        generations.mkdir(mode=0o755, exist_ok=True)
         generations.chmod(0o755)
         m3_api += mount(generations, "/m3generations")
-        runpy.run_path(str(ROOT / "ops/openscience-m3-dev/workspace.py"))["prepare"](
-            overlay / "code", args.registry, args.m3_adapters, args.m4
-        )
         manager_env["OPENSCIENCE_M3_OVERLAY"] = str(overlay)
         tool_config["peer_sockets"] = {}
     if args.m4:
@@ -662,43 +722,37 @@ def run_stack(args, stack):
     if len(retained) != 2:
         raise RuntimeError("Both retained dev-m1 bindings are required")
 
-    if args.m3_gateway_image or args.m4:
-        if (
-            any(v["state"] != "recycled" for v in retained.values())
-            or (args.registry / "supervisor.sock").exists()
-        ):
-            raise RuntimeError(
-                "M3 needs the retained development workspaces offline to attach its scoped transports"
-            )
+    scoped = bool(args.m3_gateway_image or args.m4)
+    if not all(attachment_matches(row, overlay if scoped else None) for row in retained.values()):
+        raise RuntimeError("A running development workspace belongs to a different configuration; "
+                           "resume its original stack and recycle it before switching.")
+    if scoped:
+        if (args.registry / "supervisor.sock").exists():
+            raise RuntimeError("A scoped development workspace requires its own supervisor")
         for user, row in retained.items():
             directory = overlay / row["workspace"]
-            directory.mkdir(mode=0o755)
+            directory.mkdir(mode=0o755, exist_ok=True)
             directory.chmod(0o755)
-            tool_config["peer_sockets"][user] = str(directory / "tools.sock")
+            peer = transport / "m3" / row["workspace"] / "tools.sock"
+            if peer.is_socket() and not peer.is_symlink():
+                # An abruptly terminated router may have left its socket inode.
+                # A live listener, including an independently started one, keeps ownership.
+                with socket.socket(socket.AF_UNIX) as probe:
+                    try:
+                        probe.connect(str(peer))
+                    except ConnectionRefusedError:
+                        peer.unlink()
+                    else:
+                        raise RuntimeError("The development workspace already has a live tool router")
+            tool_config["peer_sockets"][user] = str(peer)
 
-    def recycle():
-        for u, original in retained.items():
-            if original["state"] == "recycled":
-                result = json.loads(
-                    run(
-                        sys.executable,
-                        str(MANAGER),
-                        "--state-dir",
-                        str(args.registry),
-                        "recycle",
-                        "--environment",
-                        "dev-m1",
-                        "--user-id",
-                        u,
-                        env=manager_env,
-                    )
-                )
-                if result["state"] != "recycled" or result["volume"] != original["volume"]:
-                    raise RuntimeError(
-                        "Workspace did not finish draining with its original private volume"
-                    )
+    targets = {u: row["volume"] for u, row in retained.items() if scoped or row["state"] == "recycled"}
 
-    stack.callback(recycle)
+    def attempt_recycle(user):
+        return json.loads(run(sys.executable, str(MANAGER), "--state-dir", str(args.registry),
+                              "recycle", "--environment", "dev-m1", "--user-id", user, env=manager_env))
+
+    stack.callback(recycle_workspaces, targets, attempt_recycle)
     supervisor_socket = args.registry / "supervisor.sock"
     if not supervisor_socket.exists():
         launch(

@@ -47,3 +47,23 @@ it("drops a ticket response arriving after the signed-in frame unmounts", async 
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(submit).not.toHaveBeenCalled();
 });
+
+it("preserves a cached tab and releases its own page on unload once", async () => {
+  issue.mockResolvedValue(ticket());
+  const submitted = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+  const beacon = vi.fn(() => true);
+  vi.stubGlobal("navigator", Object.assign(Object.create(window.navigator), { sendBeacon: beacon }));
+  try {
+    const view = render(<PrivateAgentFrame url={origin} />);
+    await waitFor(() => expect(submitted).toHaveBeenCalledOnce());
+    const frame = screen.getByTitle("智聚万物智能体工作台") as HTMLIFrameElement;
+    fireEvent(window, new MessageEvent("message", { origin, source: frame.contentWindow,
+      data: {type: "nexpoly:openscience:ready", handoff_id: "current", page_context: "tab-a"} }));
+    fireEvent(window, new PageTransitionEvent("pagehide", {persisted: true}));
+    expect(beacon).not.toHaveBeenCalled();
+    fireEvent(window, new PageTransitionEvent("pagehide", {persisted: false}));
+    view.unmount();
+    expect(beacon).toHaveBeenCalledExactlyOnceWith(origin + "/_nexpoly/auth/leave",
+      new URLSearchParams({page_context: "tab-a"}));
+  } finally { vi.unstubAllGlobals(); }
+});

@@ -11,6 +11,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -175,6 +176,10 @@ class DelegatedCall:
                     )
             payload = json.loads(received)
             status = response.status_code
+        if status == 401 and isinstance(payload, dict) and payload.get("code") == "native_response_withheld":
+            # The native route already ran. Let the existing lost-receipt workflow
+            # look up the frozen submission key on a fresh authorization.
+            raise httpx.ReadError("The original native response could not be delivered.")
         if status in (200, 202) and key and isinstance(payload, dict) and payload.get("job_id"):
             job = payload["job_id"]
             if lookup:
@@ -200,6 +205,31 @@ class OwnerRuntime:
         payload = await super().draft_values(args, session, previous)
         payload["_m3_initiating_login"] = previous["_m3_initiating_login"] if previous else session.login
         return payload
+
+    async def execute_draft(self, name, args, owner, session):
+        if name in {
+            "get_polytao_draft", "get_retrosynthesis_draft",
+            "confirm_polytao_generation", "confirm_monomer_retrosynthesis",
+        }:
+            draft = self.journal.read_draft(owner, owner, args.conversation_id, args.draft_id)
+            if draft["state"] == "rejected" and draft["error_code"] == "SESSION_EXPIRED":
+                # Older adapters recorded an undelivered receipt as a rejection. Only
+                # a native receipt for the original frozen key can change that state.
+                key = f"draft:{args.draft_id}:{draft['revision']}"
+                if "polytao" in name:
+                    receipt = await self.recover(owner, key, session)
+                else:
+                    try:
+                        receipt = await self.recover(owner, key, self.submission_body(draft), session)
+                    except MCPFailure as error:
+                        if error.code != "SUBMISSION_NOT_RECEIVED":
+                            raise
+                        receipt = None
+                if receipt is not None:
+                    self.journal.finish_draft(
+                        owner, owner, args.conversation_id, args.draft_id, state="submitted", job_id=receipt.job_id
+                    )
+        return await super().execute_draft(name, args, owner, session)
 
 
 class PolyRecovery:
@@ -261,6 +291,17 @@ class PolyRecovery:
 
 
 class OwnerJournal:
+    def recover_submission(self, client_id, account_uuid, key, *, job_id, job_status):
+        with self._transaction() as db:
+            repaired = db.execute(
+                """UPDATE submissions SET state='accepted',job_id=?,job_status=?,error_code=NULL,updated_at=?
+                   WHERE client_id=? AND account_uuid=? AND idempotency_key=?
+                     AND state='rejected' AND error_code='SESSION_EXPIRED'""",
+                (job_id, job_status, datetime.now(timezone.utc).isoformat(), client_id, account_uuid, key),
+            ).rowcount
+        if not repaired:
+            super().recover_submission(client_id, account_uuid, key, job_id=job_id, job_status=job_status)
+
     def create_admissions(self):
         with self._transaction() as db:
             db.execute(

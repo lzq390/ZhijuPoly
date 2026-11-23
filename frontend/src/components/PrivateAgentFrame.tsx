@@ -40,6 +40,7 @@ export function PrivateAgentFrame({ url, iframeRef, onLoad, onVerified, onUnavai
     const origin = new URL(url).origin;
     let handoff = "";
     let context = "";
+    let released = false;
     let visibilityNonce = "";
     let active = true;
     const fail = (message: string) => {
@@ -77,6 +78,15 @@ export function PrivateAgentFrame({ url, iframeRef, onLoad, onVerified, onUnavai
       }
     }
     const conceal = () => { visibilityNonce = ""; unavailable.current?.(); };
+    const release = () => {
+      if (!context || released) return;
+      released = true;
+      const endpoint = new URL("/_nexpoly/auth/leave", origin).href;
+      const body = new URLSearchParams({page_context: context});
+      if (navigator.sendBeacon?.(endpoint, body)) return;
+      void fetch(endpoint, {method: "POST", credentials: "include", mode: "no-cors", keepalive: true, body}).catch(() => {});
+    };
+    const pageHide = (event: PageTransitionEvent) => { conceal(); if (!event.persisted) release(); };
     const verify = () => {
       if (!active || !context || document.hidden) return;
       visibilityNonce = randomId();
@@ -88,7 +98,7 @@ export function PrivateAgentFrame({ url, iframeRef, onLoad, onVerified, onUnavai
     const visibility = () => { if (document.hidden) conceal(); else verify(); };
     const restored = (event: PageTransitionEvent) => { if (event.persisted) verify(); };
     window.addEventListener("message", receive);
-    window.addEventListener("pagehide", conceal);
+    window.addEventListener("pagehide", pageHide);
     window.addEventListener("pageshow", restored);
     document.addEventListener("visibilitychange", visibility);
     void (async () => {
@@ -119,11 +129,12 @@ export function PrivateAgentFrame({ url, iframeRef, onLoad, onVerified, onUnavai
       try { form.submit(); } finally { form.remove(); }
     })().catch(e => fail(e instanceof Error ? e.message : "工作区启动失败，请重试。"));
     return () => {
+      release();
       active = false;
       controller.abort();
       clearTimeout(timeout);
       window.removeEventListener("message", receive);
-      window.removeEventListener("pagehide", conceal);
+      window.removeEventListener("pagehide", pageHide);
       window.removeEventListener("pageshow", restored);
       document.removeEventListener("visibilitychange", visibility);
     };

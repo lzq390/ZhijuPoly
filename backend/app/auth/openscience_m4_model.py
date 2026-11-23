@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+import hmac
 import json
 import os
 import time
@@ -21,6 +22,15 @@ from app.auth.openscience_m4_provider import MAX_OUTPUT, MODEL
 BASE = "/internal/openscience/m4/model"
 TABLE = "openscience_m4.model_requests"
 PRIVATE = {"Cache-Control": "private, no-store"}
+REQUEST_BINDING = (
+    "environment",
+    "user_id",
+    "session_id",
+    "workspace_user_id",
+    "workspace_session",
+    "turn_id",
+    "request_id",
+)
 
 
 class ModelLedger:
@@ -52,12 +62,21 @@ class ModelLedger:
             (owner,),
         ).fetchone()
 
-    def reserve(self, actor, protocol, input_tokens, max_output):
+    def reserve(self, actor, protocol, input_tokens, max_output, request_tag=None):
         with self.connect() as conn:
             # All admissions in this deployment take this short transaction lock. No inference holds it.
             conn.execute("SELECT pg_advisory_xact_lock(hashtext('dev-m1-open-science-model-budget'))")
             self.expire(conn)
-            if conn.execute(f"SELECT 1 FROM {TABLE} WHERE request_id=%s", (actor["request_id"],)).fetchone():
+            existing = conn.execute(
+                f"SELECT state,reason,request_tag FROM {TABLE} WHERE request_id=%s", (actor["request_id"],)
+            ).fetchone()
+            if existing and not (
+                existing["state"] == "released"
+                and existing["reason"] == "worker_busy"
+                and request_tag
+                and existing["request_tag"]
+                and hmac.compare_digest(request_tag, existing["request_tag"])
+            ):
                 raise HTTPException(409, "Model request already admitted")
             owner = actor["user_id"]
             limits = conn.execute(
@@ -76,11 +95,21 @@ class ModelLedger:
                 raise HTTPException(
                     429, "Model token budget or concurrent stream limit reached", headers={"Retry-After": "5"}
                 )
+            if existing:
+                # The worker definitely refused this particular request before starting it.
+                # Re-reserve against today's capacity and restart the six-minute lease clock.
+                conn.execute(
+                    f"""UPDATE {TABLE} SET state='reserved',reason=NULL,settled_at=NULL,
+                           created_at=clock_timestamp(),budget_date=timezone('UTC',CURRENT_TIMESTAMP)::date
+                         WHERE request_id=%s""",
+                    (actor["request_id"],),
+                )
+                return
             conn.execute(
                 f"""
                 INSERT INTO {TABLE}(request_id,environment,owner_id,login_id,workspace_user_id,
-                           workspace_session,turn_id,model,protocol,reserved_input,max_output)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                           workspace_session,turn_id,model,protocol,reserved_input,max_output,request_tag)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
                 (
                     actor["request_id"],
@@ -94,16 +123,17 @@ class ModelLedger:
                     protocol,
                     input_tokens,
                     max_output,
+                    request_tag,
                 ),
             )
 
-    def release(self, request_id):
-        # The worker explicitly refused before starting inference.
+    def release(self, request_id, reason="worker_busy"):
+        # Used only while the gateway can prove that inference never started.
         with self.connect() as conn:
             conn.execute(
-                f"""UPDATE {TABLE} SET state='released',reason='worker_busy',settled_at=clock_timestamp()
+                f"""UPDATE {TABLE} SET state='released',reason=%s,settled_at=clock_timestamp()
                             WHERE request_id=%s AND state='reserved'""",
-                (request_id,),
+                (reason, request_id),
             )
 
     def settle(self, request_id, usage, reason):
@@ -351,7 +381,7 @@ class Output:
         ]
 
 
-def install_model(app, principal, *, transport=None, ledger=None):
+def install_model(app, principal, *, request_key, transport=None, ledger=None):
     ledger = ledger or ModelLedger(app.state.auth.connection)
     socket_path = os.environ.get("M4_MODEL_SOCKET", "/m4provider/model.sock")
 
@@ -447,13 +477,38 @@ def install_model(app, principal, *, transport=None, ledger=None):
             inputs = tokenized.json()["input_tokens"]
             if type(inputs) is not int or not 0 < inputs <= 16384:
                 raise ValueError("Invalid token count")
-            await anyio.to_thread.run_sync(ledger.reserve, actor, protocol, inputs, work["max_output"])
+            # Bind a busy retry to its verified actor, turn, and exact inference input
+            # without keeping a copy of the prompt or a publicly guessable hash.
+            binding = [actor[field] for field in REQUEST_BINDING]
+            message = json.dumps(
+                [binding, MODEL, protocol, inputs, work], separators=(",", ":"), ensure_ascii=False
+            )
+            tag = hmac.digest(request_key, message.encode("utf-8"), "sha256")
+            await anyio.to_thread.run_sync(ledger.reserve, actor, protocol, inputs, work["max_output"], tag)
         except HTTPException:
             await client.aclose()
             raise
         except (httpx.HTTPError, ValueError, KeyError):
             await client.aclose()
             raise HTTPException(503, "Local model admission unavailable") from None
+
+        # Tokenization and budget admission can both wait. Check the original
+        # handoff and generation again before handing new work to the CPU worker.
+        try:
+            current = await anyio.to_thread.run_sync(principal, request)
+            scope(current, "model.invoke")
+            if (
+                any(current[field] != actor[field] for field in REQUEST_BINDING)
+                or await request.is_disconnected()
+            ):
+                raise HTTPException(401, "Workspace model request expired")
+        except BaseException:
+            with anyio.CancelScope(shield=True):
+                try:
+                    await anyio.to_thread.run_sync(ledger.release, request_id, "admission_cancelled")
+                finally:
+                    await client.aclose()
+            raise
 
         try:
             upstream = await client.send(

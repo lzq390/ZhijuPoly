@@ -139,6 +139,7 @@ export async function startRouter(c, loadUi = pinnedUi) {
   const pages = new Map(), profiles = new Map(), startups = new Map()
   const secure = origin.protocol === "https:"
   const cookieName = key => (secure ? "__Host-" : "") + "np_os_m2_" + key
+  const cookieAttributes = "; Path=/; HttpOnly; SameSite=Lax" + (secure ? "; Secure" : "")
   function retire(page) {
     pages.delete(page.key)
     for (const cancel of page.active) cancel.abort()
@@ -201,9 +202,24 @@ export async function startRouter(c, loadUi = pinnedUi) {
     if (header && query && header !== query) throw new Refusal(401,"page_mismatch")
     const key = header || query
     const page = opaque(key) && pages.get(key)
-    if (!page || cookies(req).get(cookieName(key)) !== page.cookie) throw new Refusal(401, "session_expired")
+    if (!page || page.clientClosed || cookies(req).get(cookieName(key)) !== page.cookie) throw new Refusal(401, "session_expired")
     gate(page, false)
     return page
+  }
+  async function leave(req, res) {
+    const parent = req.headers.origin
+    if (!parents.includes(parent) || (req.headers["content-type"] || "").split(";")[0] !== "application/x-www-form-urlencoded")
+      throw new Refusal(403, "origin_denied")
+    const form = new URLSearchParams((await body(req, 512)).toString())
+    const key = form.get("page_context")
+    const page = opaque(key) && pages.get(key)
+    if (!page || !page.profile.startsWith(parent + "/") || cookies(req).get(cookieName(key)) !== page.cookie)
+      throw new Refusal(401, "session_expired")
+    // Retire browser access separately from work already accepted for this login.
+    page.clientClosed = true
+    for (const controller of page.active) controller.abort()
+    res.writeHead(204, {"Cache-Control":"no-store", "Set-Cookie":cookieName(key) + "=; Max-Age=0" + cookieAttributes})
+    res.end()
   }
   async function exchange(req, res) {
     const parent = req.headers.origin
@@ -236,12 +252,13 @@ export async function startRouter(c, loadUi = pinnedUi) {
       const key = id(), cookie = id()
       pages.set(key, {key,cookie,grant:r.agent_session,login:r.session_id,user:r.user_id,owner:r.workspace_user_id,profile,
         checked:Date.now(),until:expires(current),expiry:Number(current.expires_at)*1000,route,active:new Set()})
-      const attributes = "; Path=/; HttpOnly; SameSite=Lax" + (secure ? "; Secure" : "")
       const prefix = cookieName("")
-      const expired = [...cookies(req).keys()].filter(name => name.startsWith(prefix) &&
-        opaque(name.slice(prefix.length)) && !pages.has(name.slice(prefix.length)))
-      res.setHeader("Set-Cookie", [...expired.map(name => name + "=; Max-Age=0" + attributes),
-        cookieName(key) + "=" + cookie + "; Max-Age=" + Math.max(1, Math.floor(current.expires_at-Date.now()/1000)) + attributes])
+      const expired = [...cookies(req).keys()].filter(name => {
+        const key = name.slice(prefix.length)
+        return name.startsWith(prefix) && opaque(key) && (!pages.has(key) || pages.get(key).clientClosed)
+      })
+      res.setHeader("Set-Cookie", [...expired.map(name => name + "=; Max-Age=0" + cookieAttributes),
+        cookieName(key) + "=" + cookie + "; Max-Age=" + Math.max(1, Math.floor(current.expires_at-Date.now()/1000)) + cookieAttributes])
       shell(res,parent,{type:"nexpoly:openscience:ready",handoff_id:handoff,page_context:key},true)
     } catch (e) { shell(res,parent,{type:"nexpoly:openscience:error",handoff_id:handoff,reason:e instanceof Refusal ? e.message : "workspace_unavailable"}) }
   }
@@ -265,6 +282,7 @@ export async function startRouter(c, loadUi = pinnedUi) {
       throw new Refusal(403, "write_origin_denied")
     const payload = writing ? await body(req, 8 * 1024 * 1024) : null
     await validate(page)
+    if (page.clientClosed) throw new Refusal(401, "session_expired")
     const headers = {host:"127.0.0.1:4096", connection:"close", "accept-encoding":"identity"}
     for (const k of ["accept","content-type","x-openscience-directory"]) if (typeof req.headers[k] === "string") headers[k] = req.headers[k]
     if (payload) headers["content-length"] = String(payload.length)
@@ -341,6 +359,7 @@ export async function startRouter(c, loadUi = pinnedUi) {
     res.setHeader("Content-Security-Policy","frame-ancestors " + parents.join(" ") + "; connect-src 'self'; object-src 'none'; base-uri 'self'")
     if (path === "/_nexpoly/expired" && req.method === "GET") return reply(res,401,"<!doctype html><html lang=zh><meta charset=utf-8><title>会话已失效</title><p>工作区会话已失效，请从平台重新进入。</p></html>",MIME[".html"])
     if (path === "/_nexpoly/auth/exchange" && req.method === "POST") return exchange(req,res)
+    if (path === "/_nexpoly/auth/leave" && req.method === "POST") return leave(req,res)
     if (path === "/_nexpoly/browser.js" && req.method === "GET") return reply(res,200,boot,MIME[".js"])
     if (path === "/_nexpoly/status" && req.method === "GET") {
       const page = scope(req,url)

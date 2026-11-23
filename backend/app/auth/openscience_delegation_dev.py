@@ -109,7 +109,7 @@ def allowed_target(tool, job_id, method, path, query):
         and job_id is not None
         and method == "GET"
         and path.startswith(DFT + "/")
-        and path[len(DFT) + 1 :].lower() == str(job_id)
+        and path[len(DFT) + 1 :].lower() == str(job_id).lower()
         and not query
     )
 
@@ -462,7 +462,9 @@ class Delegations:
                 if time.time() >= deadline or not self.current_generation(*generation):
                     denied = True
                     return await JSONResponse(
-                        {"detail": "Native authorization expired"}, status_code=401, headers=PRIVATE
+                        {"detail": "Native authorization expired", "code": "native_response_withheld"},
+                        status_code=401,
+                        headers=PRIVATE,
                     )(scope, replay, send)
                 message = {
                     **message,

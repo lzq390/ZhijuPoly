@@ -5,6 +5,7 @@ import hmac
 import os
 from pathlib import Path
 import re
+import time
 from uuid import UUID
 
 from fastapi import HTTPException, Request
@@ -55,7 +56,7 @@ def install(app, auth, agent_origin, parent_origin, inspect_handoff):
                 (row["handoff_id"],),
             ).fetchone()
         owner = grant["workspace_user_id"]
-        if not active or owner not in ("test-user-a", "test-user-b"):
+        if not active or grant["valid_until"] <= time.time() or owner not in ("test-user-a", "test-user-b"):
             raise HTTPException(401, "Workspace login expired")
         try:
             current = (generations / owner).read_text().strip()
@@ -91,4 +92,4 @@ def install(app, auth, agent_origin, parent_origin, inspect_handoff):
 
     app.state.openscience_m4 = True
     install_knowledge(app, principal)
-    install_model(app, principal)
+    install_model(app, principal, request_key=keys["model"])
