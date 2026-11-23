@@ -134,6 +134,11 @@ beforeEach(() => {
     predictions: { "Glass transition temperature": 123.456 },
     query_time_ms: 12.3
   });
+  mocks.fetchStructureDescriptors.mockResolvedValue({
+    canonical_smiles: "*CC*", formula: "C2H4", molecular_weight: 28.054, heavy_atom_count: 2,
+    attachment_point_count: 2, ring_count: 0, aromatic_ring_count: 0, rotatable_bond_count: 1,
+    hbond_donor_count: 0, hbond_acceptor_count: 0, heteroatom_count: 0, tpsa: 0, fraction_csp3: 1
+  });
 });
 
 afterEach(() => cleanup());
@@ -264,6 +269,12 @@ describe("HomopolymerPropertyPredictionPage", () => {
     expect(screen.getByRole("columnheader", { name: "上次" })).toBeTruthy();
     const delta = within(resultsTable()).getByText("+50");
     expect(delta.classList.contains("is-large")).toBe(true);
+    expect(delta.classList.contains("is-up")).toBe(true);
+    // Readout scale for Tg (-150–450 °C): this run at 50 %, the compared run's ring at 41.7 %.
+    const scale = delta.closest("tr")!.querySelector(".np-hp-scale")!;
+    expect(scale.getAttribute("aria-hidden")).toBe("true");
+    expect((scale.querySelector(".np-hp-scale__mark:not(.is-previous)") as HTMLElement).style.left).toBe("50%");
+    expect((scale.querySelector(".np-hp-scale__mark.is-previous") as HTMLElement).style.left).toBe("41.7%");
 
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "none" } });
     expect(screen.queryByRole("columnheader", { name: "变化" })).toBeNull();

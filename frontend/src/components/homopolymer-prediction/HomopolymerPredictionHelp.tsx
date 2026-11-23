@@ -51,6 +51,7 @@ export function HomopolymerPredictionHelp({ structureFactsId }: { structureFacts
       <section>
         <h3>结果说明</h3>
         <p>这些是模型预测值，用于研究辅助，需要结合适用范围、已有数据和实验验证判断。</p>
+        <p>每行中间的刻度条显示读数在一个固定显示区间里的位置，鼠标移到该行时显示区间两端。实心点是本次结果，空心圈是对比的那次运行；超出区间的读数停在端点并带箭头。断裂伸长率和三种渗透率用对数刻度。这些区间只为方便比较，不代表数据库里的分布。</p>
       </section>
     </div>
   );

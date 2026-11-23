@@ -1,20 +1,27 @@
 /* 均聚物性质预测：左侧共享结构画板 + 右侧常驻任务面板。
    Scoped to this page; the shared workbench keeps its own defaults elsewhere. */
 
+/* Visual language: a calibrated instrument. One ink, one action colour (platform cobalt), and three
+   channel colours that only ever mean a property group. See the page spec, “视觉层”. */
 .np-structure-workbench.np-homopolymer-prediction {
-  --np-hp-ink: #101828;
-  --np-hp-ink2: #344054;
-  --np-hp-muted: #667085;
-  --np-hp-line: #eaecf0;
-  --np-hp-line2: #d0d5dd;
-  --np-hp-hover: #f2f4f7;
+  --np-hp-ink: #13203a;
+  --np-hp-ink2: #3a4760;
+  --np-hp-muted: #6b7689;
+  --np-hp-line: #e4e8ef;
+  --np-hp-line2: #d2d9e3;
+  --np-hp-tick: #c3ccd8;
+  --np-hp-hover: #f2f5f9;
+  --np-hp-paper: #f3f5f8;
+  --np-hp-sheet: #fbfcfd;
+  --np-hp-dot: #d6dde7;
   --np-hp-blue: var(--np-theme-blue);
   --np-hp-blue-strong: var(--np-theme-blue-strong);
   --np-hp-blue-ink: #1d4ed8;
   --np-hp-blue-soft: #eef3fe;
-  --np-hp-thermal: #d9682b;
-  --np-hp-mechanical: #14897c;
-  --np-hp-permeability: #7a4fd6;
+  --np-hp-thermal: #c65a24;
+  --np-hp-mechanical: #0e8073;
+  --np-hp-permeability: #6a4fd0;
+  --np-hp-surface-shadow: 0 1px 2px rgba(19, 32, 58, 0.04), 0 12px 32px -18px rgba(19, 32, 58, 0.16);
   --np-hp-panel-min: 400px;
   --np-hp-panel-max: 480px;
   /* Fill the work area on common screens; only ultrawide windows hit this cap and centre. */
@@ -35,10 +42,15 @@
   --np-hp-tool-h: 32px;
   --np-hp-tool-fs: 13px;
   --np-hp-canvas-min: 360px;
-  background-color: #f5f6f8;
+  background-color: var(--np-hp-paper);
   background-image: none;
   color: var(--np-hp-ink);
 }
+
+/* Channel colour per property group; children read --np-hp-channel. */
+.np-homopolymer-prediction .is-thermal { --np-hp-channel: var(--np-hp-thermal); --np-hp-channel-soft: rgba(198, 90, 36, 0.08); }
+.np-homopolymer-prediction .is-mechanical { --np-hp-channel: var(--np-hp-mechanical); --np-hp-channel-soft: rgba(14, 128, 115, 0.08); }
+.np-homopolymer-prediction .is-permeability { --np-hp-channel: var(--np-hp-permeability); --np-hp-channel-soft: rgba(106, 79, 208, 0.08); }
 
 /* ---------- page frame ---------- */
 .np-structure-workbench.np-homopolymer-prediction .np-hp-page {
@@ -55,7 +67,7 @@
   border: 1px solid var(--np-hp-line);
   border-radius: var(--np-hp-radius);
   background: #fff;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  box-shadow: var(--np-hp-surface-shadow);
 }
 
 /* ---------- structure zone (shared canvas, quieter chrome) ---------- */
@@ -179,6 +191,37 @@
   content: none;
 }
 
+/* Drawing paper: a faint dot grid under Ketcher's transparent canvas. */
+.np-structure-workbench.np-homopolymer-prediction .np-sw-canvas-stage,
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root {
+  background-color: var(--np-hp-sheet);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root {
+  background-image: radial-gradient(circle at 1px 1px, var(--np-hp-dot) 1px, transparent 1.4px);
+  background-position: 10px 10px;
+  background-size: 22px 22px;
+}
+
+/* Ketcher's floating toolbars take the page's edge: hairline ring and a soft lift, same radius
+   family as the controls. Rings are shadows, so the toolbars keep their measured size. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is(
+  [class*="LeftToolbar-module_group"],
+  [class*="RightToolbar-module_buttons"],
+  [class*="BottomToolbar-module_group"]
+) {
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--np-hp-line), 0 4px 12px -6px rgba(19, 32, 58, 0.14);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [class*="RightToolbar-module_group"] {
+  box-shadow: none;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [class*="App-module_top"] {
+  box-shadow: 0 1px 0 var(--np-hp-line);
+}
+
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles {
   min-height: 0;
   border: 0;
@@ -205,8 +248,9 @@
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > textarea {
   min-height: 56px;
   padding: 13px 52px 20px 78px;
-  color: var(--np-hp-ink2);
+  color: var(--np-hp-ink);
   font-size: var(--np-hp-fs-sm);
+  letter-spacing: 0.01em;
 }
 
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > button {
@@ -226,9 +270,33 @@
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p {
   right: 52px;
   bottom: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--np-hp-muted);
   font-family: var(--font-body);
   font-size: 11px;
+}
+
+/* Sync status reads as an indicator lamp: teal when the field and canvas agree, red on error. */
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--np-hp-mechanical);
+  box-shadow: 0 0 0 3px rgba(14, 128, 115, 0.12);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p:is([data-state="pending"], [data-state="syncing"])::before {
+  background: #d99a1e;
+  box-shadow: 0 0 0 3px rgba(217, 154, 30, 0.14);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p.is-error::before {
+  background: var(--np-theme-danger);
+  box-shadow: 0 0 0 3px var(--np-theme-danger-soft);
 }
 
 /* ---------- structure facts (RDKit, under the SMILES field) ---------- */
@@ -281,6 +349,18 @@
 
 .np-homopolymer-prediction .np-hp-fact {
   position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* Nameplate rules between facts. */
+.np-homopolymer-prediction .np-hp-fact + .np-hp-fact::before {
+  content: "";
+  width: 1px;
+  height: 12px;
+  flex: none;
+  margin: 0 3px;
+  background: var(--np-hp-line2);
 }
 
 .np-homopolymer-prediction .np-hp-fact > button {
@@ -449,6 +529,10 @@
     padding: 0 4px;
   }
 
+  .np-homopolymer-prediction .np-hp-fact + .np-hp-fact::before {
+    margin: 0;
+  }
+
   .np-homopolymer-prediction .np-hp-fact__tip,
   .np-homopolymer-prediction .np-hp-fact.is-start .np-hp-fact__tip,
   .np-homopolymer-prediction .np-hp-fact.is-end .np-hp-fact__tip {
@@ -487,6 +571,10 @@
     flex-basis: 100%;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     margin-left: -6px;
+  }
+
+  .np-homopolymer-prediction .np-hp-fact + .np-hp-fact::before {
+    content: none;
   }
 
   .np-homopolymer-prediction .np-hp-fact > button {
@@ -564,7 +652,7 @@
 }
 
 .np-homopolymer-prediction .np-hp-start {
-  width: min(600px, 100%);
+  width: min(620px, 100%);
   color: var(--np-hp-muted);
   font-size: var(--np-hp-fs);
   line-height: 1.6;
@@ -574,19 +662,20 @@
 .np-homopolymer-prediction .np-hp-start > strong {
   display: block;
   margin-bottom: 4px;
-  color: var(--np-hp-ink2);
-  font-size: var(--np-hp-fs-lg);
+  color: var(--np-hp-ink);
+  font-size: calc(var(--np-hp-fs-lg) + 2px);
   font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .np-homopolymer-prediction .np-hp-start > p {
-  margin: 0 0 14px;
+  margin: 0 0 18px;
 }
 
 .np-homopolymer-prediction .np-hp-start ul {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 10px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -595,36 +684,44 @@
 .np-homopolymer-prediction .np-hp-start button {
   display: grid;
   width: 100%;
-  grid-template-columns: 76px minmax(0, 1fr);
+  grid-template-columns: 96px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
+  gap: 12px;
+  padding: 8px 12px 8px 8px;
   border: 1px solid var(--np-hp-line);
-  border-radius: 10px;
+  border-radius: 12px;
   color: inherit;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 2px rgba(19, 32, 58, 0.04);
   text-align: left;
   cursor: pointer;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
 .np-homopolymer-prediction .np-hp-start button:hover {
-  border-color: var(--np-hp-line2);
-  background: #f9fafb;
+  border-color: rgba(37, 99, 235, 0.38);
+  box-shadow: 0 6px 18px -10px rgba(37, 99, 235, 0.45);
+}
+
+.np-homopolymer-prediction .np-hp-start button:focus-visible {
+  outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
+  outline-offset: 2px;
 }
 
 .np-homopolymer-prediction .np-hp-start img {
   display: block;
-  width: 76px;
-  height: 42px;
-  border-radius: 6px;
-  background: #f9fafb;
+  width: 96px;
+  height: 56px;
+  border-radius: 8px;
+  background: var(--np-hp-sheet);
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
   object-fit: contain;
 }
 
 .np-homopolymer-prediction .np-hp-start b {
   display: block;
   color: var(--np-hp-ink);
-  font-size: var(--np-hp-fs-sm);
+  font-size: var(--np-hp-fs);
   font-weight: 600;
 }
 
@@ -639,8 +736,8 @@
 
 /* ---------- session runs ---------- */
 .np-homopolymer-prediction .np-hp-runs {
-  margin-top: 18px;
-  padding-top: 12px;
+  margin-top: 20px;
+  padding-top: 14px;
   border-top: 1px solid var(--np-hp-line);
 }
 
@@ -675,7 +772,7 @@
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 7px 8px;
   border: 0;
   border-radius: 8px;
@@ -686,12 +783,30 @@
 }
 
 .np-homopolymer-prediction .np-hp-runs button:hover:not(:disabled) {
-  background: #f9fafb;
+  background: var(--np-hp-hover);
 }
 
 .np-homopolymer-prediction .np-hp-runs button.is-current {
-  background: #f6f8fe;
+  background: #f5f8fe;
   cursor: default;
+}
+
+/* Same marks as the readout scale: filled is this run, ring is the compared run. */
+.np-homopolymer-prediction .np-hp-runs__mark {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--np-hp-line);
+}
+
+.np-homopolymer-prediction .np-hp-runs__mark.is-current {
+  background: var(--np-hp-ink2);
+}
+
+.np-homopolymer-prediction .np-hp-runs__mark.is-previous {
+  background: #fff;
+  box-shadow: inset 0 0 0 1.5px var(--np-hp-ink2);
 }
 
 .np-homopolymer-prediction .np-hp-runs__main {
@@ -720,6 +835,7 @@
   color: var(--np-hp-ink);
   font-size: var(--np-hp-fs-sm);
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- help (module dock) ---------- */
@@ -733,6 +849,10 @@
   font-family: var(--font-body);
   font-size: 1em;
   font-weight: 600;
+}
+
+.np-hp-help p + p {
+  margin-top: 6px;
 }
 
 .np-hp-help p,
@@ -776,6 +896,7 @@
 
 /* ---------- task panel ---------- */
 .np-structure-workbench.np-homopolymer-prediction .np-hp-panel {
+  container: np-hp-panel / inline-size;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -789,12 +910,13 @@
   padding: var(--np-hp-pad) var(--np-hp-pad) 0;
 }
 
+/* Section titles carry the hierarchy; no small labels above them. */
 .np-homopolymer-prediction .np-hp-label {
   margin: 0 0 6px;
-  color: var(--np-hp-muted);
+  color: var(--np-hp-ink);
   font-family: var(--font-body);
-  font-size: var(--np-hp-fs-sm);
-  font-weight: 500;
+  font-size: var(--np-hp-fs-title);
+  font-weight: 600;
   line-height: 1.4;
 }
 
@@ -807,17 +929,41 @@
 
 .np-homopolymer-prediction .np-hp-selection__summary strong {
   display: block;
-  color: var(--np-hp-ink);
-  font-size: var(--np-hp-fs-lg);
-  font-weight: 600;
-  line-height: 1.4;
+  color: var(--np-hp-ink2);
+  font-size: var(--np-hp-fs);
+  font-weight: 500;
+  line-height: 1.45;
 }
 
 .np-homopolymer-prediction .np-hp-selection__summary small {
   display: block;
-  margin-top: 2px;
+  margin-top: 1px;
   color: var(--np-hp-muted);
   font-size: var(--np-hp-fs-sm);
+}
+
+/* Nine segments, one per property, in channel colour when selected. */
+.np-homopolymer-prediction .np-hp-meter {
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 3px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.np-homopolymer-prediction .np-hp-meter li {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--np-hp-line);
+}
+
+.np-homopolymer-prediction .np-hp-meter li.is-on {
+  background: var(--np-hp-channel);
+}
+
+.np-homopolymer-prediction .np-hp-meter :is(.is-thermal + .is-mechanical, .is-mechanical + .is-permeability) {
+  margin-left: 6px;
 }
 
 .np-homopolymer-prediction .np-hp-link {
@@ -847,12 +993,12 @@
 
 .np-homopolymer-prediction .np-hp-selection__editor {
   display: grid;
-  gap: 12px;
+  gap: 14px;
   margin-top: 12px;
-  padding: 12px;
+  padding: 14px;
   border: 1px solid var(--np-hp-line);
-  border-radius: 10px;
-  background: #fafbfc;
+  border-radius: 12px;
+  background: var(--np-hp-sheet);
 }
 
 .np-homopolymer-prediction .np-hp-group {
@@ -866,10 +1012,10 @@
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 7px;
-  margin-bottom: 6px;
+  gap: 8px;
+  margin-bottom: 7px;
   padding: 0;
-  color: var(--np-hp-ink2);
+  color: var(--np-hp-ink);
   font-size: var(--np-hp-fs-sm);
   font-weight: 600;
 }
@@ -879,21 +1025,16 @@
   font-size: var(--np-hp-fs-xs);
 }
 
+/* Channel marks: a short vertical bar, like a colour-coded instrument channel. */
 .np-homopolymer-prediction .np-hp-group > legend > i,
 .np-homopolymer-prediction .np-hp-table__group i {
   display: inline-block;
-  width: 6px;
-  height: 6px;
+  width: 3px;
+  height: 11px;
   flex: none;
-  border-radius: 50%;
+  border-radius: 2px;
+  background: var(--np-hp-channel);
 }
-
-.np-homopolymer-prediction .is-thermal > legend > i,
-.np-homopolymer-prediction tbody.is-thermal .np-hp-table__group i { background: var(--np-hp-thermal); }
-.np-homopolymer-prediction .is-mechanical > legend > i,
-.np-homopolymer-prediction tbody.is-mechanical .np-hp-table__group i { background: var(--np-hp-mechanical); }
-.np-homopolymer-prediction .is-permeability > legend > i,
-.np-homopolymer-prediction tbody.is-permeability .np-hp-table__group i { background: var(--np-hp-permeability); }
 
 .np-homopolymer-prediction .np-hp-group__options {
   display: flex;
@@ -905,15 +1046,20 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   min-height: var(--np-hp-control);
-  padding: 0 10px;
+  padding: 0 11px 0 9px;
   border: 1px solid var(--np-hp-line2);
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--np-hp-ink2);
   background: #fff;
   font-size: var(--np-hp-fs-sm);
   cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.np-homopolymer-prediction .np-hp-chip:hover {
+  border-color: var(--np-hp-tick);
 }
 
 .np-homopolymer-prediction .np-hp-chip > input {
@@ -937,7 +1083,7 @@
   height: 14px;
   flex: none;
   place-items: center;
-  border: 1.5px solid var(--np-hp-line2);
+  border: 1.5px solid var(--np-hp-tick);
   border-radius: 4px;
   background: #fff;
 }
@@ -945,30 +1091,29 @@
 .np-homopolymer-prediction .np-hp-chip__check svg {
   width: 10px;
   height: 10px;
+  stroke-width: 3;
 }
 
 .np-homopolymer-prediction .np-hp-chip.is-selected {
-  border-color: rgba(37, 99, 235, 0.42);
-  color: var(--np-hp-blue-ink);
-  background: var(--np-hp-blue-soft);
+  border-color: var(--np-hp-channel);
+  border-color: color-mix(in srgb, var(--np-hp-channel) 42%, #fff);
+  color: var(--np-hp-ink);
+  background: var(--np-hp-channel-soft);
 }
 
 .np-homopolymer-prediction .np-hp-chip.is-selected .np-hp-chip__check {
-  border-color: var(--np-hp-blue);
+  border-color: var(--np-hp-channel);
   color: #fff;
-  background: var(--np-hp-blue);
+  background: var(--np-hp-channel);
 }
 
 .np-homopolymer-prediction .np-hp-selection__bulk {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 14px;
   color: var(--np-hp-muted);
   font-size: var(--np-hp-fs-sm);
-}
-
-.np-homopolymer-prediction .np-hp-selection__bulk {
-  justify-content: flex-end;
 }
 
 .np-homopolymer-prediction .np-hp-run {
@@ -976,27 +1121,40 @@
 }
 
 .np-homopolymer-prediction .np-hp-primary {
+  position: relative;
   display: flex;
   width: 100%;
   height: var(--np-hp-btn);
   align-items: center;
   justify-content: center;
   gap: 8px;
+  overflow: hidden;
   border: 0;
-  border-radius: 9px;
+  border-radius: 10px;
   color: #fff;
   background: var(--np-hp-blue);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 1px 2px rgba(19, 32, 58, 0.14),
+    0 10px 22px -14px rgba(37, 99, 235, 0.75);
   font-size: var(--np-hp-fs-title);
   font-weight: 600;
+  letter-spacing: 0.02em;
   cursor: pointer;
-  transition: background-color var(--np-motion-control, 120ms) ease;
+  transition: background-color var(--np-motion-control, 120ms) ease, box-shadow var(--np-motion-control, 120ms) ease;
 }
 
 .np-homopolymer-prediction .np-hp-primary:hover:not(:disabled) {
   background: var(--np-hp-blue-strong);
 }
 
+.np-homopolymer-prediction .np-hp-primary:focus-visible {
+  outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
+  outline-offset: 2px;
+}
+
 .np-homopolymer-prediction .np-hp-primary:disabled {
+  box-shadow: none;
   cursor: not-allowed;
   opacity: 0.45;
 }
@@ -1004,6 +1162,55 @@
 .np-homopolymer-prediction .np-hp-primary svg {
   width: 16px;
   height: 16px;
+}
+
+.np-homopolymer-prediction .np-hp-primary__keys {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.86);
+  background: rgba(255, 255, 255, 0.16);
+  font: 500 11px / 1.6 var(--font-body);
+  letter-spacing: 0.02em;
+  transform: translateY(-50%);
+}
+
+/* Running: a thin progress line along the button's lower edge. */
+.np-homopolymer-prediction .np-hp-primary[aria-busy="true"]::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.8);
+  animation: np-hp-progress 1.15s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes np-hp-progress {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(250%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .np-homopolymer-prediction .np-hp-primary[aria-busy="true"]::after {
+    width: 100%;
+    opacity: 0.45;
+    animation: none;
+  }
+}
+
+@media (hover: none) {
+  .np-homopolymer-prediction .np-hp-primary__keys {
+    display: none;
+  }
 }
 
 .np-homopolymer-prediction .np-hp-hint {
@@ -1027,10 +1234,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .np-homopolymer-prediction .np-hp-results__header h2 {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
   margin: 0;
   color: var(--np-hp-ink);
   font-family: var(--font-body);
@@ -1039,11 +1250,23 @@
   line-height: 1.4;
 }
 
-.np-homopolymer-prediction .np-hp-results__header h2 small {
-  margin-left: 8px;
+.np-homopolymer-prediction .np-hp-results__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   color: var(--np-hp-muted);
-  font-size: var(--np-hp-fs-sm);
+  font-size: var(--np-hp-fs-xs);
   font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.np-homopolymer-prediction .np-hp-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--np-hp-ink2);
+  background: var(--np-hp-hover);
+  font-weight: 500;
 }
 
 .np-homopolymer-prediction .np-hp-button {
@@ -1053,7 +1276,7 @@
   gap: 6px;
   padding: 0 10px;
   border: 1px solid var(--np-hp-line2);
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--np-hp-ink2);
   background: #fff;
   font-size: var(--np-hp-fs-sm);
@@ -1063,7 +1286,8 @@
 }
 
 .np-homopolymer-prediction .np-hp-button:hover {
-  background: #f9fafb;
+  border-color: var(--np-hp-tick);
+  background: var(--np-hp-hover);
 }
 
 .np-homopolymer-prediction .np-hp-button svg {
@@ -1093,9 +1317,9 @@
   min-width: 140px;
   padding: 4px;
   border: 1px solid var(--np-hp-line);
-  border-radius: 9px;
+  border-radius: 10px;
   background: #fff;
-  box-shadow: 0 10px 28px rgba(16, 24, 40, 0.12);
+  box-shadow: 0 14px 32px -12px rgba(19, 32, 58, 0.22);
 }
 
 .np-homopolymer-prediction .np-hp-export__menu button {
@@ -1194,19 +1418,69 @@
   white-space: nowrap;
 }
 
+.np-homopolymer-prediction .np-hp-compare-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 4px;
+}
+
+.np-homopolymer-prediction .np-hp-compare-row > .np-hp-compare {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
 .np-homopolymer-prediction .np-hp-compare select {
   min-width: 0;
   height: calc(var(--np-hp-control) - 2px);
   flex: 1 1 auto;
-  padding: 0 8px;
+  padding: 0 28px 0 10px;
   border: 1px solid var(--np-hp-line2);
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--np-hp-ink2);
-  background: #fff;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b7689' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 8px center / 14px;
   font-family: var(--font-mono);
   font-size: var(--np-hp-fs-xs);
+  appearance: none;
+  cursor: pointer;
 }
 
+.np-homopolymer-prediction .np-hp-compare select:hover {
+  border-color: var(--np-hp-tick);
+}
+
+.np-homopolymer-prediction .np-hp-legend {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  white-space: nowrap;
+}
+
+.np-homopolymer-prediction .np-hp-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.np-homopolymer-prediction .np-hp-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.np-homopolymer-prediction .np-hp-legend i.is-current {
+  background: var(--np-hp-ink2);
+}
+
+.np-homopolymer-prediction .np-hp-legend i.is-previous {
+  box-shadow: inset 0 0 0 1.5px var(--np-hp-ink2);
+}
+
+/* ---------- readout table ---------- */
 .np-homopolymer-prediction .np-hp-table {
   width: 100%;
   border-collapse: collapse;
@@ -1214,7 +1488,7 @@
 }
 
 .np-homopolymer-prediction .np-hp-table thead th {
-  padding: 6px 0 4px;
+  padding: 6px 0;
   border-bottom: 1px solid var(--np-hp-line);
   color: var(--np-hp-muted);
   font-size: var(--np-hp-fs-xs);
@@ -1229,9 +1503,17 @@
   white-space: nowrap;
 }
 
+.np-homopolymer-prediction .np-hp-table tbody tr:not(.np-hp-table__group) {
+  border-bottom: 1px solid #f0f3f7;
+}
+
+.np-homopolymer-prediction .np-hp-table tbody tr:not(.np-hp-table__group):last-child {
+  border-bottom: 0;
+}
+
 .np-homopolymer-prediction .np-hp-table tbody th[scope="row"] {
   height: var(--np-hp-row);
-  padding: 0;
+  padding: 0 4px 0 0;
   color: var(--np-hp-ink2);
   font-weight: 400;
   text-align: left;
@@ -1246,15 +1528,16 @@
 
 .np-homopolymer-prediction .np-hp-table__group th {
   height: auto;
-  padding: 12px 0 2px;
-  color: var(--np-hp-muted);
+  padding: 14px 0 4px;
+  color: var(--np-hp-ink);
   font-size: var(--np-hp-fs-xs);
   font-weight: 600;
   text-align: left;
 }
 
 .np-homopolymer-prediction .np-hp-table__group i {
-  margin: 0 7px 1px 0;
+  margin: 0 7px 0 0;
+  vertical-align: -1px;
 }
 
 .np-homopolymer-prediction .np-hp-table td strong {
@@ -1286,13 +1569,32 @@
   font-weight: 600;
 }
 
+/* Direction as a small triangle; colour stays neutral because higher is not always better. */
+.np-homopolymer-prediction .np-hp-table td.is-delta:is(.is-up, .is-down)::before {
+  content: "";
+  display: inline-block;
+  margin: 0 5px 0 0;
+  border-right: 3.5px solid transparent;
+  border-left: 3.5px solid transparent;
+  opacity: 0.55;
+  vertical-align: 2px;
+}
+
+.np-homopolymer-prediction .np-hp-table td.is-delta.is-up::before {
+  border-bottom: 5px solid currentColor;
+}
+
+.np-homopolymer-prediction .np-hp-table td.is-delta.is-down::before {
+  border-top: 5px solid currentColor;
+}
+
 .np-homopolymer-prediction .np-hp-table__missing {
   color: var(--np-hp-muted);
   font-size: var(--np-hp-fs-sm);
 }
 
 .np-homopolymer-prediction .np-hp-table__placeholder {
-  color: #c9ced6;
+  color: var(--np-hp-tick);
 }
 
 .np-homopolymer-prediction .np-hp-table.is-placeholder tbody th[scope="row"] {
@@ -1301,6 +1603,144 @@
 
 .np-homopolymer-prediction .np-hp-table-wrap.is-dimmed {
   opacity: 0.45;
+}
+
+/* The readout scale: hairline track, ticks, filled dot for this run, ring for the compared run. */
+.np-homopolymer-prediction .np-hp-table__scale-head,
+.np-homopolymer-prediction .np-hp-scale {
+  width: 100%;
+  min-width: 64px;
+}
+
+.np-homopolymer-prediction .np-hp-scale {
+  padding: 0 10px 0 14px;
+  vertical-align: middle;
+}
+
+.np-homopolymer-prediction .np-hp-scale__rail {
+  position: relative;
+  display: block;
+  height: 14px;
+}
+
+.np-homopolymer-prediction .np-hp-scale__rail::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background: var(--np-hp-line);
+}
+
+.np-homopolymer-prediction .np-hp-scale__rail > i {
+  position: absolute;
+  top: 50%;
+  width: 1px;
+  height: 6px;
+  margin: -3px 0 0 -0.5px;
+  background: var(--np-hp-tick);
+}
+
+.np-homopolymer-prediction .np-hp-scale__span {
+  position: absolute;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--np-hp-channel);
+  opacity: 0.4;
+}
+
+.np-homopolymer-prediction .np-hp-scale__mark {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%;
+  background: var(--np-hp-channel);
+  box-shadow: 0 0 0 2px #fff, 0 1px 3px rgba(19, 32, 58, 0.3);
+}
+
+.np-homopolymer-prediction .np-hp-scale__mark.is-previous {
+  width: 11px;
+  height: 11px;
+  margin: -5.5px 0 0 -5.5px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--np-hp-ink2);
+}
+
+/* Off-scale readouts stop at the end with an arrow pointing outward. */
+.np-homopolymer-prediction .np-hp-scale__mark:is(.is-above, .is-below)::after {
+  content: "";
+  position: absolute;
+  top: 1.5px;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+}
+
+.np-homopolymer-prediction .np-hp-scale__mark.is-above::after {
+  left: 11px;
+  border-left: 5px solid var(--np-hp-channel);
+}
+
+.np-homopolymer-prediction .np-hp-scale__mark.is-below::after {
+  right: 11px;
+  border-right: 5px solid var(--np-hp-channel);
+}
+
+.np-homopolymer-prediction .np-hp-scale__ends {
+  display: flex;
+  height: 0;
+  justify-content: space-between;
+  color: var(--np-hp-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.np-homopolymer-prediction .np-hp-scale__ends::before {
+  content: attr(data-low);
+}
+
+.np-homopolymer-prediction .np-hp-scale__ends::after {
+  content: attr(data-high);
+}
+
+.np-homopolymer-prediction .np-hp-table tbody tr:hover .np-hp-scale__ends {
+  opacity: 1;
+}
+
+/* The one orchestrated motion: readouts slide to their new position when a run finishes. */
+@media (prefers-reduced-motion: no-preference) {
+  .np-homopolymer-prediction .np-hp-scale__mark,
+  .np-homopolymer-prediction .np-hp-scale__span {
+    transition: left 420ms cubic-bezier(0.2, 0.7, 0.2, 1), width 420ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+}
+
+/* A narrow panel keeps every number while comparing; the scale steps aside, and the relay
+   buttons drop their icons so they stay on one line. */
+@container np-hp-panel (max-width: 440px) {
+  .np-homopolymer-prediction .np-hp-table.is-comparing :is(.np-hp-scale, .np-hp-table__scale-head) {
+    display: none;
+  }
+
+  .np-homopolymer-prediction .np-hp-next {
+    gap: 6px;
+  }
+
+  .np-homopolymer-prediction .np-hp-relay {
+    padding: 0 9px;
+  }
+
+  .np-homopolymer-prediction .np-hp-relay svg {
+    display: none;
+  }
 }
 
 .np-homopolymer-prediction .np-hp-footnote,
@@ -1316,16 +1756,55 @@
   font-size: var(--np-hp-fs-sm);
 }
 
+/* ---------- continue with this structure ---------- */
 .np-homopolymer-prediction .np-hp-next {
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 16px;
-  padding: 13px var(--np-hp-pad) 15px;
+  gap: 8px;
+  padding: 12px var(--np-hp-pad) 14px;
   border-top: 1px solid var(--np-hp-line);
   color: var(--np-hp-muted);
+  background: var(--np-hp-sheet);
   font-size: var(--np-hp-fs-sm);
+}
+
+.np-homopolymer-prediction .np-hp-next > span {
+  margin-right: 4px;
+}
+
+.np-homopolymer-prediction .np-hp-relay {
+  display: inline-flex;
+  height: calc(var(--np-hp-control) - 2px);
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px 0 9px;
+  border: 1px solid var(--np-hp-line2);
+  border-radius: 999px;
+  color: var(--np-hp-ink2);
+  background: #fff;
+  font-size: var(--np-hp-fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.np-homopolymer-prediction .np-hp-relay svg {
+  width: 14px;
+  height: 14px;
+  color: var(--np-hp-blue);
+}
+
+.np-homopolymer-prediction .np-hp-relay:hover {
+  border-color: rgba(37, 99, 235, 0.42);
+  color: var(--np-hp-blue-ink);
+}
+
+.np-homopolymer-prediction .np-hp-relay:focus-visible {
+  outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
+  outline-offset: 2px;
 }
 
 /* ---------- tiers ---------- */
@@ -1454,6 +1933,62 @@
   .np-homopolymer-prediction .np-hp-chip__check {
     width: 18px;
     height: 18px;
+  }
+
+  .np-homopolymer-prediction .np-hp-chip__check svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .np-homopolymer-prediction .np-hp-scale__rail {
+    height: 18px;
+  }
+
+  .np-homopolymer-prediction .np-hp-scale__rail > i {
+    height: 8px;
+    margin-top: -4px;
+  }
+
+  .np-homopolymer-prediction .np-hp-scale__mark {
+    width: 12px;
+    height: 12px;
+    margin: -6px 0 0 -6px;
+  }
+
+  .np-homopolymer-prediction .np-hp-scale__mark:is(.is-above, .is-below)::after {
+    top: 2px;
+    border-top-width: 4px;
+    border-bottom-width: 4px;
+  }
+
+  .np-homopolymer-prediction .np-hp-scale__ends {
+    font-size: 12.5px;
+  }
+
+  .np-homopolymer-prediction .np-hp-meter li {
+    height: 5px;
+  }
+
+  .np-homopolymer-prediction .np-hp-primary__keys {
+    right: 16px;
+    font-size: 14px;
+  }
+
+  .np-homopolymer-prediction .np-hp-relay svg,
+  .np-homopolymer-prediction .np-hp-legend i,
+  .np-homopolymer-prediction .np-hp-runs__mark {
+    width: 18px;
+    height: 18px;
+  }
+
+  .np-homopolymer-prediction .np-hp-legend i,
+  .np-homopolymer-prediction .np-hp-runs__mark {
+    width: 10px;
+    height: 10px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .Ketcher-root {
+    background-size: 28px 28px;
   }
 }
 

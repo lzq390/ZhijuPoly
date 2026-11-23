@@ -293,6 +293,7 @@ export function StructureCanvasSurface({
         {smilesStatus ? (
           <p
             className={canvas.smilesDraftState === "error" ? "is-error" : ""}
+            data-state={canvas.smilesDraftState}
             role={canvas.smilesDraftState === "error" ? "alert" : "status"}
             aria-live="polite"
           >

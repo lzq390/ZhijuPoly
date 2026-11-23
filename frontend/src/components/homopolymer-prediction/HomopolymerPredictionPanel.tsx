@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Download, LoaderCircle, Play, TriangleAlert } from "lucide-react";
+import { Atom, Check, ChevronDown, Database, Download, LoaderCircle, Network, Play, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from "react";
 import {
   PREDICTABLE_PROPERTIES,
@@ -19,14 +19,17 @@ import {
   toTsv,
   type PredictionRun
 } from "./predictionFormat";
+import { PROPERTY_SCALES, scaleBounds, scalePosition, scaleRangeLabel, tickPercent } from "./predictionScale";
 
 export type PredictionRelayModule = "databaseQuery" | "explorer" | "mdSimulationDemo";
 
-const RELAY_LINKS: readonly { id: PredictionRelayModule; label: string }[] = [
-  { id: "databaseQuery", label: "数据库查询" },
-  { id: "explorer", label: "相似性探索" },
-  { id: "mdSimulationDemo", label: "MD 模拟" }
-];
+const RELAY_LINKS = [
+  { id: "databaseQuery", label: "数据库查询", Icon: Database },
+  { id: "explorer", label: "相似性探索", Icon: Network },
+  { id: "mdSimulationDemo", label: "MD 模拟", Icon: Atom }
+] as const satisfies readonly { id: PredictionRelayModule; label: string; Icon: typeof Database }[];
+
+const SHORTCUT_LABEL = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘ ↵" : "Ctrl ↵";
 
 const SHORT_NAMES: Record<PredictableProperty, string> = {
   "Glass transition temperature": "Tg",
@@ -187,6 +190,44 @@ function ExportMenu({ run, comparison }: { run: PredictionRun; comparison: Predi
   );
 }
 
+/** The readout rail: fixed display range, filled dot for this run, ring for the compared run. */
+function ReadoutScale({
+  property,
+  unit,
+  value,
+  previous
+}: {
+  property: PredictableProperty;
+  unit: string;
+  value: number | null;
+  previous: number | null;
+}) {
+  const current = scalePosition(property, value);
+  const before = scalePosition(property, previous);
+  const [low, high] = scaleBounds(property);
+  const span = current && before ? [Math.min(current.percent, before.percent), Math.abs(current.percent - before.percent)] : null;
+  return (
+    <td className="np-hp-scale" aria-hidden="true">
+      <span className="np-hp-scale__rail" title={`刻度 ${scaleRangeLabel(property, unit)}`}>
+        {PROPERTY_SCALES[property].ticks.map((tick) => (
+          <i key={tick} style={{ left: `${tickPercent(property, tick)}%` }} />
+        ))}
+        {span ? <span className="np-hp-scale__span" style={{ left: `${span[0]}%`, width: `${span[1]}%` }} /> : null}
+        {current ? (
+          <b
+            className={`np-hp-scale__mark${current.outside ? ` is-${current.outside}` : ""}`}
+            style={{ left: `${current.percent}%` }}
+          />
+        ) : null}
+        {/* The ring is drawn last and hollow, so a nearby filled dot stays visible through it. */}
+        {before ? <b className="np-hp-scale__mark is-previous" style={{ left: `${before.percent}%` }} /> : null}
+      </span>
+      {/* Range ends are drawn by CSS from these attributes, so they never read as values. */}
+      <span className="np-hp-scale__ends" data-low={low} data-high={high} />
+    </td>
+  );
+}
+
 function ResultTable({
   properties,
   run,
@@ -200,10 +241,11 @@ function ResultTable({
 }) {
   const compare = Boolean(comparison) && !placeholder;
   return (
-    <table className={`np-hp-table${placeholder ? " is-placeholder" : ""}`}>
+    <table className={`np-hp-table${placeholder ? " is-placeholder" : ""}${compare ? " is-comparing" : ""}`}>
       <thead>
         <tr>
           <th scope="col">性质</th>
+          <th aria-hidden="true" className="np-hp-table__scale-head" />
           <th scope="col" className="is-num">本次</th>
           {compare ? <th scope="col" className="is-num">上次</th> : null}
           {compare ? <th scope="col" className="is-num">变化</th> : null}
@@ -212,7 +254,7 @@ function ResultTable({
       {groupedProperties(properties).map(({ group, properties: groupProperties }) => (
         <tbody key={group.key} className={`is-${group.key}`}>
           <tr className="np-hp-table__group">
-            <th scope="rowgroup" colSpan={compare ? 4 : 2}>
+            <th scope="rowgroup" colSpan={compare ? 5 : 3}>
               <i aria-hidden="true" />
               {GROUP_LABELS[group.key]}
             </th>
@@ -224,12 +266,14 @@ function ResultTable({
             const delta = compare ? predictionDelta(value, previous) : null;
             const formatted = formatPredictionValue(value);
             const previousFormatted = formatPredictionValue(previous);
+            const direction = value !== null && previous !== null && value !== previous ? (value > previous ? " is-up" : " is-down") : "";
             return (
               <tr key={property}>
                 <th scope="row">
                   <span>{meta.label}</span>
                   {meta.shortLabel.length <= 3 ? <small>{meta.shortLabel}</small> : null}
                 </th>
+                <ReadoutScale property={property} unit={meta.unit} value={value} previous={previous} />
                 <td className="is-num" title={value !== null ? `${value} ${meta.unit}` : undefined}>
                   {placeholder ? (
                     <span className="np-hp-table__placeholder">—</span>
@@ -245,7 +289,7 @@ function ResultTable({
                   </td>
                 ) : null}
                 {compare ? (
-                  <td className={`is-num is-delta${delta?.large ? " is-large" : ""}`}>
+                  <td className={`is-num is-delta${delta?.large ? " is-large" : ""}${direction}`}>
                     {delta?.text ?? <span className="np-hp-table__missing">—</span>}
                   </td>
                 ) : null}
@@ -290,6 +334,10 @@ function SessionRuns({
                 disabled={isCurrent}
                 onClick={() => onRestore(run)}
               >
+                <i
+                  className={`np-hp-runs__mark${isCurrent ? " is-current" : comparison?.id === run.id ? " is-previous" : ""}`}
+                  aria-hidden="true"
+                />
                 <span className="np-hp-runs__main">
                   <code title={run.smiles}>{displaySmiles(run.smiles)}</code>
                   <small>{formatRunTime(run.finishedAt)}，{run.properties.length} 项{role ? `，${role}` : ""}</small>
@@ -368,6 +416,13 @@ export function HomopolymerPredictionPanel({
               {selectionOpen ? "收起" : "调整"}
             </button>
           </div>
+          {!selectionOpen ? (
+            <ol className="np-hp-meter" aria-hidden="true">
+              {PREDICT_PROPERTY_CATALOG.map((property) => (
+                <li key={property.key} className={`is-${property.group}${selected.has(property.key) ? " is-on" : ""}`} />
+              ))}
+            </ol>
+          ) : null}
           {selectionOpen ? (
             <div id={`${selectionId}-editor`} className="np-hp-selection__editor">
               {PREDICT_PROPERTY_GROUPS.map((group) => {
@@ -429,7 +484,8 @@ export function HomopolymerPredictionPanel({
             aria-keyshortcuts="Control+Enter Meta+Enter"
           >
             {loading ? <LoaderCircle className="np-sw-spin" aria-hidden="true" /> : <Play aria-hidden="true" />}
-            {loading ? "重新预测" : "运行预测"}
+            <span>{loading ? "重新预测" : "运行预测"}</span>
+            <kbd className="np-hp-primary__keys" aria-hidden="true">{SHORTCUT_LABEL}</kbd>
           </button>
           {structureMissing ? (
             <p className="np-hp-hint" role="alert">请先在左侧画出结构，或在 SMILES 框中输入结构。</p>
@@ -442,9 +498,9 @@ export function HomopolymerPredictionPanel({
           <h2 id={resultsTitleId}>
             预测结果
             {latestRun && !loading ? (
-              <small>
-                {runs.length > 1 ? `第 ${runNumber} 次运行，` : ""}
-                {latestRun.queryTimeMs.toFixed(1)} ms
+              <small className="np-hp-results__meta">
+                {runs.length > 1 ? <span className="np-hp-badge">第 {runNumber} 次运行</span> : null}
+                <span>{latestRun.queryTimeMs.toFixed(1)} ms</span>
               </small>
             ) : null}
           </h2>
@@ -481,18 +537,26 @@ export function HomopolymerPredictionPanel({
               </>
             ) : null}
             {comparisonOptions.length > 0 ? (
-              <label className="np-hp-compare">
-                <span>对比</span>
-                <select
-                  value={comparison?.id ?? "none"}
-                  onChange={(event) => onComparisonChange(event.currentTarget.value === "none" ? null : Number(event.currentTarget.value))}
-                >
-                  <option value="none">不对比</option>
-                  {comparisonOptions.map((run) => (
-                    <option key={run.id} value={run.id}>{`${formatRunTime(run.finishedAt)}  ${displaySmiles(run.smiles)}`}</option>
-                  ))}
-                </select>
-              </label>
+              <div className="np-hp-compare-row">
+                <label className="np-hp-compare">
+                  <span>对比</span>
+                  <select
+                    value={comparison?.id ?? "none"}
+                    onChange={(event) => onComparisonChange(event.currentTarget.value === "none" ? null : Number(event.currentTarget.value))}
+                  >
+                    <option value="none">不对比</option>
+                    {comparisonOptions.map((run) => (
+                      <option key={run.id} value={run.id}>{`${formatRunTime(run.finishedAt)}  ${displaySmiles(run.smiles)}`}</option>
+                    ))}
+                  </select>
+                </label>
+                {comparison ? (
+                  <span className="np-hp-legend" aria-hidden="true">
+                    <span><i className="is-current" />本次</span>
+                    <span><i className="is-previous" />对比</span>
+                  </span>
+                ) : null}
+              </div>
             ) : null}
             <div className="np-hp-table-wrap">
               <ResultTable properties={latestRun.properties} run={latestRun} comparison={comparison} />
@@ -534,9 +598,10 @@ export function HomopolymerPredictionPanel({
       {onOpenModule && showRelay ? (
         <nav className="np-hp-next" aria-label="用这个结构继续">
           <span>用这个结构继续</span>
-          {RELAY_LINKS.map((link) => (
-            <button key={link.id} type="button" className="np-hp-link" onClick={() => onOpenModule(link.id)}>
-              {link.label}
+          {RELAY_LINKS.map(({ id, label, Icon }) => (
+            <button key={id} type="button" className="np-hp-relay" onClick={() => onOpenModule(id)}>
+              <Icon aria-hidden="true" />
+              {label}
             </button>
           ))}
         </nav>
