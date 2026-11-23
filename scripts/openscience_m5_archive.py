@@ -79,6 +79,11 @@ def add_tree(root, archive, uid, workspace):
                 archive.addfile(member, source)
 
 
+def hash_entry(tree_hash, name, directory, mode, owner, group, size, checksum):
+    record = [name, directory, mode, owner, group, size, checksum]
+    tree_hash.update(json.dumps(record, ensure_ascii=True, separators=(",", ":")).encode() + b"\n")
+
+
 def process_archive(stream, uid, workspace, target=None):
     """Validate before restore; during restore only create new regular files/directories."""
     tree_hash = hashlib.sha256()
@@ -131,8 +136,7 @@ def process_archive(stream, uid, workspace, target=None):
                 checksum = calculated.hexdigest()
             if dest is not None:
                 metadata.append((dest, member))
-            record = [name, folder, member.mode, member.uid, member.gid, member.size, checksum]
-            tree_hash.update(json.dumps(record, ensure_ascii=True, separators=(",", ":")).encode() + b"\n")
+            hash_entry(tree_hash, name, folder, member.mode, member.uid, member.gid, member.size, checksum)
     if not (SKELETON | {".m1-owner"}) <= seen:
         raise ValueError("Incomplete workspace directory layout")
     for path, member in reversed(metadata):

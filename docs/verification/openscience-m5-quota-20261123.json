@@ -1,0 +1,445 @@
+{
+  "status": "passed",
+  "environment": "dev-m1",
+  "start": "2026-11-23T02:07:43.843974+00:00",
+  "end": "2026-11-23T02:13:45.806210+00:00",
+  "guest": {
+    "status": "passed",
+    "environment": "dev-m1",
+    "policy_bytes": 2000000000,
+    "kernel": {
+      "release": "6.8.0-147-generic",
+      "quota_config": [
+        "CONFIG_QUOTA=y",
+        "CONFIG_QUOTA_TREE=m",
+        "CONFIG_QFMT_V2=m"
+      ],
+      "resident_quota_modules": [
+        "quota_tree",
+        "quota_v2"
+      ]
+    },
+    "users": {
+      "a": {
+        "user_id": "test-user-a",
+        "workspace": "463fc2f89367468bb7fc6e048d522c9e",
+        "uid": 58161656,
+        "gid": 58161656,
+        "source_kernel": {
+          "filesystem_type": "ext4",
+          "filesystem_uuid": "8344df3f-ecae-4b61-a42a-6c861061c311",
+          "volume_label": "m5quota-src-a",
+          "accounting": true,
+          "enforced": true,
+          "uid": 58161656,
+          "used_bytes": 0,
+          "hard_kib": 1953125,
+          "hard_bytes": 2000000000
+        },
+        "initial_inventory": {
+          "tree_sha256": "295e5f56d98c35dd7710973844e436b4cf5ed8d7abdb1cf901f2f12c1dcfac46",
+          "files": 1338,
+          "directories": 374,
+          "file_bytes": 545523
+        },
+        "original_notebook": {
+          "sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+          "uid": 58161656,
+          "gid": 58161656,
+          "mode": 384
+        },
+        "backup_manifest_sha256": "b94b320fc498d675238f0a6cabb95550370dc9a17a97e584690e8556cb2d60fd",
+        "backup_inventory": {
+          "tree_sha256": "23f802bd438eaccb8ce0e6e77067f883bbdb23d48377b3dead71826579a90090",
+          "files": 1339,
+          "directories": 374,
+          "file_bytes": 549619
+        },
+        "source_cross_read_errno": 13,
+        "restored_kernel": {
+          "filesystem_type": "ext4",
+          "filesystem_uuid": "ae8aab8e-0670-4f5b-9f1f-c5225cf82c3a",
+          "volume_label": "m5quota-dst-a",
+          "accounting": true,
+          "enforced": true,
+          "uid": 58161656,
+          "used_bytes": 7131136,
+          "hard_kib": 1953125,
+          "hard_bytes": 2000000000
+        },
+        "restored_inventory": {
+          "tree_sha256": "23f802bd438eaccb8ce0e6e77067f883bbdb23d48377b3dead71826579a90090",
+          "files": 1339,
+          "directories": 374,
+          "file_bytes": 549619
+        },
+        "restored_notebook": {
+          "sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+          "uid": 58161656,
+          "gid": 58161656,
+          "mode": 384
+        },
+        "restored_new_file": {
+          "sha256": "16ca5109ae3ab59c6edb25f67b7253db26e34fe6fe770ee1dd4d62afacd08e59",
+          "uid": 58161656,
+          "gid": 58161656,
+          "mode": 384
+        },
+        "wrong_owner_refused_before_writes": true,
+        "restored_cross_read_errno": 13,
+        "restored_full": {
+          "before": {
+            "filesystem_type": "ext4",
+            "filesystem_uuid": "ae8aab8e-0670-4f5b-9f1f-c5225cf82c3a",
+            "volume_label": "m5quota-dst-a",
+            "accounting": true,
+            "enforced": true,
+            "uid": 58161656,
+            "used_bytes": 7131136,
+            "hard_kib": 1953125,
+            "hard_bytes": 2000000000
+          },
+          "at_limit": {
+            "filesystem_type": "ext4",
+            "filesystem_uuid": "ae8aab8e-0670-4f5b-9f1f-c5225cf82c3a",
+            "volume_label": "m5quota-dst-a",
+            "accounting": true,
+            "enforced": true,
+            "uid": 58161656,
+            "used_bytes": 1999998976,
+            "hard_kib": 1953125,
+            "hard_bytes": 2000000000
+          },
+          "backing_free_bytes": 1077297152,
+          "allocated_bytes": 1992867840,
+          "new_file_write": {
+            "errno": 122,
+            "error": "EDQUOT",
+            "stage": "write"
+          },
+          "notebook": {
+            "sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+            "uid": 58161656,
+            "gid": 58161656,
+            "mode": 384
+          }
+        },
+        "restored_delete_and_retry": {
+          "retried_original_write": {
+            "sha256": "ad7facb2586fc6e966c004d7d1d16b024f5805ff7cb47c7a85dabd8b48892ca7",
+            "uid": 58161656,
+            "gid": 58161656,
+            "mode": 384
+          },
+          "new_file": {
+            "sha256": "16ca5109ae3ab59c6edb25f67b7253db26e34fe6fe770ee1dd4d62afacd08e59",
+            "uid": 58161656,
+            "gid": 58161656,
+            "mode": 384
+          },
+          "after_release": {
+            "filesystem_type": "ext4",
+            "filesystem_uuid": "ae8aab8e-0670-4f5b-9f1f-c5225cf82c3a",
+            "volume_label": "m5quota-dst-a",
+            "accounting": true,
+            "enforced": true,
+            "uid": 58161656,
+            "used_bytes": 7131136,
+            "hard_kib": 1953125,
+            "hard_bytes": 2000000000
+          }
+        }
+      },
+      "b": {
+        "user_id": "test-user-b",
+        "workspace": "3c137e9c236d4998bed842786c0f4548",
+        "uid": 43620582,
+        "gid": 43620582,
+        "source_kernel": {
+          "filesystem_type": "ext4",
+          "filesystem_uuid": "3f720f01-f137-4756-a381-2f1273ce0a9c",
+          "volume_label": "m5quota-src-b",
+          "accounting": true,
+          "enforced": true,
+          "uid": 43620582,
+          "used_bytes": 0,
+          "hard_kib": 1953125,
+          "hard_bytes": 2000000000
+        },
+        "initial_inventory": {
+          "tree_sha256": "84e24287f0115c30741ce7f8673d6a336efb06b316b7eff3cb6958e167fbb473",
+          "files": 1037,
+          "directories": 301,
+          "file_bytes": 389523
+        },
+        "original_notebook": {
+          "sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+          "uid": 43620582,
+          "gid": 43620582,
+          "mode": 384
+        },
+        "backup_manifest_sha256": "ef196ddd9755683e9822a00d990b5197b7dfff7a007470a70f6e3a3ddc0cfed0",
+        "backup_inventory": {
+          "tree_sha256": "36b876b59c9dea449d87c84d7c548c3e76097ffa65850078051ff86d0e20f03f",
+          "files": 1038,
+          "directories": 301,
+          "file_bytes": 393619
+        },
+        "source_cross_read_errno": 13,
+        "restored_kernel": {
+          "filesystem_type": "ext4",
+          "filesystem_uuid": "cdc51c76-05e9-46b6-9739-a7bd29fbe187",
+          "volume_label": "m5quota-dst-b",
+          "accounting": true,
+          "enforced": true,
+          "uid": 43620582,
+          "used_bytes": 5554176,
+          "hard_kib": 1953125,
+          "hard_bytes": 2000000000
+        },
+        "restored_inventory": {
+          "tree_sha256": "36b876b59c9dea449d87c84d7c548c3e76097ffa65850078051ff86d0e20f03f",
+          "files": 1038,
+          "directories": 301,
+          "file_bytes": 393619
+        },
+        "restored_notebook": {
+          "sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+          "uid": 43620582,
+          "gid": 43620582,
+          "mode": 384
+        },
+        "restored_new_file": {
+          "sha256": "b606065e290e3ff4a26495d6af16793f1e0da11c7b3d27646ef0f1f7b42c9882",
+          "uid": 43620582,
+          "gid": 43620582,
+          "mode": 384
+        },
+        "wrong_owner_refused_before_writes": true,
+        "restored_cross_read_errno": 13,
+        "restored_full": {
+          "before": {
+            "filesystem_type": "ext4",
+            "filesystem_uuid": "cdc51c76-05e9-46b6-9739-a7bd29fbe187",
+            "volume_label": "m5quota-dst-b",
+            "accounting": true,
+            "enforced": true,
+            "uid": 43620582,
+            "used_bytes": 5554176,
+            "hard_kib": 1953125,
+            "hard_bytes": 2000000000
+          },
+          "at_limit": {
+            "filesystem_type": "ext4",
+            "filesystem_uuid": "cdc51c76-05e9-46b6-9739-a7bd29fbe187",
+            "volume_label": "m5quota-dst-b",
+            "accounting": true,
+            "enforced": true,
+            "uid": 43620582,
+            "used_bytes": 1999998976,
+            "hard_kib": 1953125,
+            "hard_bytes": 2000000000
+          },
+          "backing_free_bytes": 1077297152,
+          "allocated_bytes": 1994444800,
+          "new_file_write": {
+            "errno": 122,
+            "error": "EDQUOT",
+            "stage": "write"
+          },
+          "notebook": {
+            "sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+            "uid": 43620582,
+            "gid": 43620582,
+            "mode": 384
+          }
+        },
+        "restored_delete_and_retry": {
+          "retried_original_write": {
+            "sha256": "ad7facb2586fc6e966c004d7d1d16b024f5805ff7cb47c7a85dabd8b48892ca7",
+            "uid": 43620582,
+            "gid": 43620582,
+            "mode": 384
+          },
+          "new_file": {
+            "sha256": "b606065e290e3ff4a26495d6af16793f1e0da11c7b3d27646ef0f1f7b42c9882",
+            "uid": 43620582,
+            "gid": 43620582,
+            "mode": 384
+          },
+          "after_release": {
+            "filesystem_type": "ext4",
+            "filesystem_uuid": "cdc51c76-05e9-46b6-9739-a7bd29fbe187",
+            "volume_label": "m5quota-dst-b",
+            "accounting": true,
+            "enforced": true,
+            "uid": 43620582,
+            "used_bytes": 5554176,
+            "hard_kib": 1953125,
+            "hard_bytes": 2000000000
+          }
+        }
+      }
+    },
+    "source_a_full": {
+      "before": {
+        "filesystem_type": "ext4",
+        "filesystem_uuid": "8344df3f-ecae-4b61-a42a-6c861061c311",
+        "volume_label": "m5quota-src-a",
+        "accounting": true,
+        "enforced": true,
+        "uid": 58161656,
+        "used_bytes": 7127040,
+        "hard_kib": 1953125,
+        "hard_bytes": 2000000000
+      },
+      "at_limit": {
+        "filesystem_type": "ext4",
+        "filesystem_uuid": "8344df3f-ecae-4b61-a42a-6c861061c311",
+        "volume_label": "m5quota-src-a",
+        "accounting": true,
+        "enforced": true,
+        "uid": 58161656,
+        "used_bytes": 1999998976,
+        "hard_kib": 1953125,
+        "hard_bytes": 2000000000
+      },
+      "backing_free_bytes": 1077297152,
+      "allocated_bytes": 1992871936,
+      "new_file_write": {
+        "errno": 122,
+        "error": "EDQUOT",
+        "stage": "write"
+      },
+      "notebook": {
+        "sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+        "uid": 58161656,
+        "gid": 58161656,
+        "mode": 384
+      }
+    },
+    "b_write_while_a_full": {
+      "sha256": "b606065e290e3ff4a26495d6af16793f1e0da11c7b3d27646ef0f1f7b42c9882",
+      "uid": 43620582,
+      "gid": 43620582,
+      "mode": 384
+    },
+    "a_still_blocked_after_b_write": {
+      "errno": 122,
+      "error": "EDQUOT",
+      "stage": "write"
+    },
+    "source_a_recovered": {
+      "retried_original_write": {
+        "sha256": "ad7facb2586fc6e966c004d7d1d16b024f5805ff7cb47c7a85dabd8b48892ca7",
+        "uid": 58161656,
+        "gid": 58161656,
+        "mode": 384
+      },
+      "new_file": {
+        "sha256": "16ca5109ae3ab59c6edb25f67b7253db26e34fe6fe770ee1dd4d62afacd08e59",
+        "uid": 58161656,
+        "gid": 58161656,
+        "mode": 384
+      },
+      "after_release": {
+        "filesystem_type": "ext4",
+        "filesystem_uuid": "8344df3f-ecae-4b61-a42a-6c861061c311",
+        "volume_label": "m5quota-src-a",
+        "accounting": true,
+        "enforced": true,
+        "uid": 58161656,
+        "used_bytes": 7131136,
+        "hard_kib": 1953125,
+        "hard_bytes": 2000000000
+      }
+    }
+  },
+  "vm": {
+    "image_sha256": "04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94",
+    "image_version": "24.04-20261017",
+    "linux_release": "6.8.0-147-generic",
+    "ubuntu_modules_extra_package_sha256": "b3f16d16b54796497884b27810b0942243bdc6ef26da1ce821e948ece39a9492",
+    "guest_quota_modules_sha256": {
+      "quota_tree.ko.zst": "6d5206a8ae384b03ec41b11e3be5a4a13ff30cbaefe4a6d2ce62bf6fc062b216",
+      "quota_v2.ko.zst": "a54b39dc4719e7a2dd407acfa0ff913da311b374761ef5e25eff0c8f607436bd"
+    },
+    "accelerator": "tcg",
+    "guest_memory_mib": 1536,
+    "virtual_cpus": 2,
+    "network_adapters": 0,
+    "host_directory_shares": 0,
+    "test_device_bytes": 3221225472,
+    "backup_device_bytes": 268435456,
+    "elapsed_seconds": 359.41
+  },
+  "originals": {
+    "before": {
+      "registry_sha256": "83274cac893edfc08a000af90e1410bb2e4190b4413f5c4a5774d36cc44f4fff",
+      "workspaces": {
+        "test-user-a": {
+          "workspace": "463fc2f89367468bb7fc6e048d522c9e",
+          "uid": 58161656,
+          "generation": 24,
+          "volume": "nexpoly-m1-67e4414ac390-463fc2f89367468bb7fc6e048d522c9e-data",
+          "created_at": "2026-11-19T16:10:25+08:00",
+          "state": "recycled"
+        },
+        "test-user-b": {
+          "workspace": "3c137e9c236d4998bed842786c0f4548",
+          "uid": 43620582,
+          "generation": 24,
+          "volume": "nexpoly-m1-67e4414ac390-3c137e9c236d4998bed842786c0f4548-data",
+          "created_at": "2026-11-19T16:10:17+08:00",
+          "state": "recycled"
+        }
+      }
+    },
+    "unchanged": true
+  },
+  "temporary_vm_and_volumes_removed": true,
+  "inputs": {
+    "version": 1,
+    "environment": "dev-m1",
+    "workspace_image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+    "hard_limit_bytes": 2000000000,
+    "users": {
+      "a": {
+        "environment": "dev-m1",
+        "user_id": "test-user-a",
+        "workspace": "463fc2f89367468bb7fc6e048d522c9e",
+        "uid": 58161656,
+        "inventory": {
+          "directories": 374,
+          "file_bytes": 545523,
+          "files": 1338,
+          "tree_sha256": "295e5f56d98c35dd7710973844e436b4cf5ed8d7abdb1cf901f2f12c1dcfac46"
+        },
+        "archive_sha256": "6199821b564aeed698db539fb08218bafef6718567f15b77d52e838093666ba0",
+        "gid": 58161656,
+        "manifest_sha256": "0e5fc8f3c4a79ee0e451d58ceca02123ff5c7087e6acebde82c72a32b04821e5",
+        "notebook_sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+        "archive_generation": 24,
+        "registered_generation": 24
+      },
+      "b": {
+        "environment": "dev-m1",
+        "user_id": "test-user-b",
+        "workspace": "3c137e9c236d4998bed842786c0f4548",
+        "uid": 43620582,
+        "inventory": {
+          "directories": 301,
+          "file_bytes": 389523,
+          "files": 1037,
+          "tree_sha256": "84e24287f0115c30741ce7f8673d6a336efb06b316b7eff3cb6958e167fbb473"
+        },
+        "archive_sha256": "7703753022801880b5df411771893332d7574ebf7fbb34099393b84abe2e8958",
+        "gid": 43620582,
+        "manifest_sha256": "802390af278487fe73780b042067399d04b407a07a27d9b41bf944b2bf3cc56e",
+        "notebook_sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+        "archive_generation": 24,
+        "registered_generation": 24
+      }
+    }
+  }
+}
