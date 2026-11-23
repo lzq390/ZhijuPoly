@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { createRequire } from "node:module";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { createKetcherAdapter, type KetcherInstance } from "./editor";
+import { createKetcherAdapter, dropStarAtomLabels, type KetcherInstance } from "./editor";
 import fixture from "./__fixtures__/wildcard-stereo-export.json";
 
 // Exercise the installed local Indigo WASM. No server, image inference, or
@@ -44,8 +44,10 @@ describe("native Molfile SMILES export", () => {
     const actual = await createKetcherAdapter(sdk).getSmiles();
     expect(actual.match(/\[C@@?H\]/g)).toHaveLength(2);
     expect(actual).toContain("*");
-    expect(actual).toContain("star_e"); // Meaningful CX labels remain intact.
-    expect(actual).toBe(convert(fixture.native_molfile));
+    // Indigo labels its star atoms; the adapter drops only those labels and keeps Indigo's SMILES.
+    expect(convert(fixture.native_molfile)).toContain("star_e");
+    expect(actual).not.toContain("star_e");
+    expect(actual).toBe(dropStarAtomLabels(convert(fixture.native_molfile)));
     expect(sdk.getSmiles).not.toHaveBeenCalled();
     expect(sdk.getMolfile).toHaveBeenCalledWith("v2000");
   });
@@ -56,7 +58,7 @@ describe("native Molfile SMILES export", () => {
       const actual = await createKetcherAdapter(sdkFor(molfile)).getSmiles();
       // Compare with the real serializer's original input representation;
       // a separate RDKit test independently checks molecular equivalence.
-      expect(actual).toBe(convert(source));
+      expect(actual).toBe(dropStarAtomLabels(convert(source)));
     }
   );
 
@@ -120,5 +122,48 @@ describe("native Molfile SMILES export", () => {
     sdk.getSmiles.mockResolvedValue("CC>>C=C");
     expect(await createKetcherAdapter(sdk).getSmiles()).toBe("CC>>C=C");
     expect(sdk.structService.convert).not.toHaveBeenCalled();
+  });
+});
+
+describe("star-atom labels", () => {
+  function atomLabels(source: string) {
+    return (JSON.parse(convert(source, "ket")).mol0.atoms as Array<{ label?: string; type?: string }>)
+      .map((atom) => atom.label ?? atom.type);
+  }
+
+  it("drops only star_e labels and keeps every other CX field", () => {
+    expect(dropStarAtomLabels("*CC* |$star_e;;;star_e$|")).toBe("*CC*");
+    expect(dropStarAtomLabels("*CC* |$;;;$|")).toBe("*CC*");
+    expect(dropStarAtomLabels("*CC(c1ccccc1)* |$star_e;;;;;;;;;star_e$|")).toBe("*CC(c1ccccc1)*");
+    expect(dropStarAtomLabels("*C[C](*)C |^1:2,$star_e;;;star_e;$|")).toBe("*C[C](*)C |^1:2|");
+    expect(dropStarAtomLabels("*CC* |$Q_e;;;star_e$|")).toBe("*CC* |$Q_e;;;$|");
+    expect(dropStarAtomLabels("C[C@H](N)C(O)=O |&1:1|")).toBe("C[C@H](N)C(O)=O |&1:1|");
+    expect(dropStarAtomLabels("*CC* |$_AV:star_e;;;$|")).toBe("*CC* |$_AV:star_e;;;$|");
+    expect(dropStarAtomLabels("*CC*")).toBe("*CC*");
+    expect(dropStarAtomLabels("")).toBe("");
+  });
+
+  it.each(["*CC*", "*CC(*)c1ccccc1", "*c1ccc(Oc2ccc(*)cc2)cc1"])(
+    "loads %s back into Indigo with the same star atoms", (source) => {
+      const exported = convert(layoutMolfile(source));
+      expect(exported).toContain("star_e");
+      expect(atomLabels(dropStarAtomLabels(exported))).toEqual(atomLabels(exported));
+    }
+  );
+
+  it("keeps the labels Indigo uses for query atoms", () => {
+    const query = (symbol: string) => convert([
+      "", "  test", "",
+      "  3  2  0  0  0  0  0  0  0  0999 V2000",
+      `    0.0000    0.0000    0.0000 ${symbol.padEnd(3)} 0  0  0  0  0  0  0  0  0  0  0  0`,
+      "    1.0000    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0",
+      `    2.0000    0.0000    0.0000 ${symbol.padEnd(3)} 0  0  0  0  0  0  0  0  0  0  0  0`,
+      "  1  2  1  0", "  2  3  1  0", "M  END", ""
+    ].join("\n"));
+    for (const symbol of ["Q", "X"]) {
+      const exported = query(symbol);
+      expect(dropStarAtomLabels(exported)).toBe(exported);
+      expect(atomLabels(dropStarAtomLabels(exported))).toEqual([symbol, "C", symbol]);
+    }
   });
 });

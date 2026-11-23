@@ -82,6 +82,38 @@ export function enlargeImportedStructure(ketcher: KetcherInstance) {
   editor.centerStruct?.();
 }
 
+/**
+ * Indigo labels every star atom `star_e` in a CXSMILES atom-label block (`*CC* |$star_e;;;star_e$|`)
+ * only to tell it apart from a query "any atom", which it writes as a bare `*`. Indigo reads a bare
+ * `*` back as a star atom and RDKit ignores the label, so for repeat-unit connection points it
+ * carries nothing but noise. Drop those labels, and the block when nothing else is left in it;
+ * every other CX field and label (query atoms, attachment points, enhanced stereo, radicals) stays.
+ */
+export function dropStarAtomLabels(smiles: string): string {
+  const match = /^(\S+)\s+\|(.*)\|\s*$/.exec(smiles.trim());
+  if (!match) return smiles;
+  const [, body, extension] = match;
+  const fields: string[] = [];
+  let current = "";
+  let inLabels = false;
+  for (const char of extension) {
+    if (char === "$") inLabels = !inLabels;
+    if (char === "," && !inLabels) {
+      fields.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  fields.push(current);
+  const kept = fields.flatMap((field) => {
+    if (!field.startsWith("$") || field.startsWith("$_AV:") || !field.endsWith("$")) return [field];
+    const labels = field.slice(1, -1).split(";").map((label) => (label === "star_e" ? "" : label));
+    return labels.some(Boolean) ? [`$${labels.join(";")}$`] : [];
+  }).filter(Boolean);
+  return kept.length ? `${body} |${kept.join(",")}|` : body;
+}
+
 export function createKetcherAdapter(
   ketcher: KetcherInstance,
   refresh?: () => void,
@@ -119,14 +151,14 @@ export function createKetcherAdapter(
         value = await ketcher.getSmiles(false);
         checkCurrent();
       }
-      // Indigo may append an entirely empty CX atom-label block to wildcard
-      // structures. Only that chemically empty suffix is discarded.
       const trimmed = value.trim();
       // Never treat a serializer's Molfile/KET response as business SMILES.
       if (/[\r\n]/.test(trimmed) || (trimmed.startsWith("{") && trimmed !== "{}")) {
         throw new Error("结构编辑器未返回有效的 SMILES，已保留上次成功的内容。");
       }
-      return value.replace(/\s+\|\$;*\$\|\s*$/, "");
+      // Indigo may append an empty CX atom-label block, or one holding only star-atom labels,
+      // to wildcard structures. Only that chemically empty content is discarded.
+      return dropStarAtomLabels(value);
     },
     getKet: () => ketcher.getKet?.() ?? missing("KET 导出"),
     getMolfile: readMolfile,
