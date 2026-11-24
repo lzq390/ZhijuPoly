@@ -4,13 +4,14 @@ import {
   Atom,
   Box,
   Check,
+  ChevronDown,
   Copy,
   Eraser,
   ImagePlus,
   LoaderCircle,
   RefreshCcw
 } from "lucide-react";
-import type { ReactNode, RefObject } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { useTgStructureCanvas } from "../../hooks/useTgStructureCanvas";
 import type { StructureWorkspaceContext } from "../../types";
 import { StructurePreview3D } from "../StructurePreview3D";
@@ -51,7 +52,104 @@ type StructureCanvasSurfaceProps = {
   footer?: ReactNode;
   /** Render 清空画布 after the other tools, so focus order matches a layout that shows it last. */
   clearLast?: boolean;
+  /** "segmented" shows 2D and 3D side by side instead of one toggle button. */
+  viewSwitch?: "toggle" | "segmented";
+  /** When given, 加载示例 opens a menu of these structures instead of loading one example. */
+  examples?: readonly StructureExample[];
 };
+
+export type StructureExample = { id: string; label: string; description: string; smiles: string; image?: string };
+
+/** A small menu of starting structures; closes on Escape or outside click and returns focus. */
+function ExampleMenu({
+  examples,
+  busy,
+  disabled,
+  onPick
+}: {
+  examples: readonly StructureExample[];
+  busy: boolean;
+  disabled: boolean;
+  onPick: (smiles: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    rootRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    function handlePointer(event: PointerEvent) {
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
+    }
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        buttonRef.current?.focus();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const items = [...(rootRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+      const index = items.indexOf(document.activeElement as HTMLElement);
+      if (index < 0) return;
+      event.preventDefault();
+      items[(index + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
+    }
+    document.addEventListener("pointerdown", handlePointer);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointer);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="np-sw-menu">
+      <button
+        ref={buttonRef}
+        type="button"
+        className="np-sw-tool"
+        data-workbench-tool="load"
+        aria-label="加载示例"
+        title="加载示例"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        disabled={disabled}
+        aria-busy={busy || undefined}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {busy ? <LoaderCircle className="np-sw-spin" aria-hidden="true" /> : <Atom aria-hidden="true" />}
+        <span>示例</span>
+        <ChevronDown className="np-sw-menu__chevron" aria-hidden="true" />
+      </button>
+      {open ? (
+        <div id={menuId} className="np-sw-menu__list" role="menu" aria-label="示例结构">
+          {examples.map((example) => (
+            <button
+              key={example.id}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                buttonRef.current?.focus();
+                onPick(example.smiles);
+              }}
+            >
+              {example.image ? <img src={example.image} alt="" /> : null}
+              <span>
+                <b>{example.label}</b>
+                <small>{example.description}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * Canvas writes from outside the editor (examples, history, buttons) must cancel pending SMILES
@@ -139,7 +237,9 @@ export function StructureCanvasSurface({
   onSmilesDraftChange,
   emptyState,
   footer,
-  clearLast = false
+  clearLast = false,
+  viewSwitch = "toggle",
+  examples
 }: StructureCanvasSurfaceProps) {
   const mutate = (action: () => void | Promise<unknown>, writesEditor = true) =>
     runCanvasMutation(structure, canvas, action, writesEditor);
@@ -154,6 +254,7 @@ export function StructureCanvasSurface({
         : canvas.feedback
   );
 
+  const view3dDisabled = operationBusy || canvas.smilesDraftState !== "synced" || !canvas.isEditorReady;
   const clearTool = (
     <ToolButton
       label="清空画布"
@@ -185,14 +286,23 @@ export function StructureCanvasSurface({
       <header className="np-sw-commandbar" aria-label="结构工作台工具栏">
         {commandbarLabel ? <span className="np-sw-commandbar__label">{commandbarLabel}</span> : null}
         <div className="np-sw-toolbar">
-          <ToolButton
-            label="加载示例"
-            tool="load"
-            busy={canvas.isLoadingStructure}
-            icon={<Atom aria-hidden="true" />}
-            disabled={operationBusy}
-            onClick={() => void mutate(onLoadExample)}
-          />
+          {examples?.length ? (
+            <ExampleMenu
+              examples={examples}
+              busy={canvas.isLoadingStructure}
+              disabled={operationBusy}
+              onPick={(smiles) => { if (requestServiceAccess()) void mutate(() => canvas.loadStructure(smiles)); }}
+            />
+          ) : (
+            <ToolButton
+              label="加载示例"
+              tool="load"
+              busy={canvas.isLoadingStructure}
+              icon={<Atom aria-hidden="true" />}
+              disabled={operationBusy}
+              onClick={() => void mutate(onLoadExample)}
+            />
+          )}
           <ToolButton
             label="导入图片"
             tool="import"
@@ -211,15 +321,43 @@ export function StructureCanvasSurface({
             primary
             onClick={() => void mutate(onSync, false)}
           />
-          <ToolButton
-            label={canvas.isFlipped ? "2D画布" : "3D构象"}
-            tool="3d"
-            busy={canvas.isFlipping}
-            icon={<Box aria-hidden="true" />}
-            disabled={operationBusy || canvas.smilesDraftState !== "synced" || !canvas.isEditorReady}
-            active={canvas.isFlipped}
-            onClick={() => { if (requestServiceAccess()) void onToggle3D(); }}
-          />
+          {viewSwitch === "segmented" ? (
+            <div className="np-sw-seg" role="group" aria-label="画板视图">
+              <button
+                type="button"
+                className={canvas.isFlipped ? undefined : "is-on"}
+                aria-label="2D画布"
+                aria-pressed={!canvas.isFlipped}
+                disabled={canvas.isFlipped ? view3dDisabled : false}
+                onClick={() => { if (canvas.isFlipped && requestServiceAccess()) void onToggle3D(); }}
+              >
+                2D
+              </button>
+              <button
+                type="button"
+                className={canvas.isFlipped ? "is-on" : undefined}
+                data-workbench-tool="3d"
+                aria-label="3D构象"
+                aria-pressed={canvas.isFlipped}
+                aria-busy={canvas.isFlipping || undefined}
+                disabled={view3dDisabled}
+                onClick={() => { if (!canvas.isFlipped && requestServiceAccess()) void onToggle3D(); }}
+              >
+                {canvas.isFlipping ? <LoaderCircle className="np-sw-spin" aria-hidden="true" /> : <Box aria-hidden="true" />}
+                3D
+              </button>
+            </div>
+          ) : (
+            <ToolButton
+              label={canvas.isFlipped ? "2D画布" : "3D构象"}
+              tool="3d"
+              busy={canvas.isFlipping}
+              icon={<Box aria-hidden="true" />}
+              disabled={view3dDisabled}
+              active={canvas.isFlipped}
+              onClick={() => { if (requestServiceAccess()) void onToggle3D(); }}
+            />
+          )}
           <CanvasLibraryActions workspace={structure.workspace} canvas={canvas} disabled={operationBusy} />
           {clearLast ? clearTool : null}
           {utilityActions.length ? <span className="np-sw-toolbar-separator" aria-hidden="true" /> : null}

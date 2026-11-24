@@ -431,6 +431,15 @@ describe("HomopolymerPropertyPredictionPage", () => {
     }
   });
 
+  it("画板视图用 2D / 3D 分段切换，当前视图处于按下状态", () => {
+    render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
+    const view = screen.getByRole("group", { name: "画板视图" });
+    expect(within(view).getByRole("button", { name: "2D画布" }).getAttribute("aria-pressed")).toBe("true");
+    expect(within(view).getByRole("button", { name: "3D构象" }).getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(within(view).getByRole("button", { name: "2D画布" }));
+    expect(mocks.toggle3D).not.toHaveBeenCalled();
+  });
+
   it("键盘可跳过画板工具，工具栏焦点顺序与显示顺序一致", () => {
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
     expect(screen.getByLabelText("导入结构图片").getAttribute("tabindex")).toBe("-1");
@@ -515,11 +524,19 @@ describe("HomopolymerPropertyPredictionPage", () => {
     expect(await screen.findByTestId("prediction-structure-3d")).toBeTruthy();
   });
 
-  it("加载 *CC* 示例并暴露离页静默同步句柄", async () => {
+  it("示例菜单载入所选结构并暴露离页静默同步句柄", async () => {
     const ref = createRef<StructureCanvasOwnerHandle>();
     render(<HomopolymerPropertyPredictionPage ref={ref} structure={makeStructure()} />);
-    fireEvent.click(screen.getByRole("button", { name: "加载示例" }));
-    await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledWith("*CC*"));
+    const trigger = screen.getByRole("button", { name: "加载示例" });
+    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+    fireEvent.click(trigger);
+    const menu = screen.getByRole("menu", { name: "示例结构" });
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "PE聚乙烯", "PS聚苯乙烯", "PMMA聚甲基丙烯酸甲酯", "PI聚酰亚胺 PMDA-ODA"
+    ]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /PS/ }));
+    await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledWith("*CC(*)c1ccccc1"));
+    expect(screen.queryByRole("menu")).toBeNull();
 
     await ref.current?.syncBeforeLeave();
     expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledWith({ preserveExisting: true, quiet: true });

@@ -1,51 +1,63 @@
 /* 均聚物性质预测：左侧共享结构画板 + 右侧常驻任务面板。
    Scoped to this page; the shared workbench keeps its own defaults elsewhere. */
 
-/* Visual language: a calibrated instrument. One ink, one action colour (platform cobalt), and three
-   channel colours that only ever mean a property group. See the page spec, “视觉层”. */
+/* Visual system “精密白” (precision light), see the page spec. Foundation first: one ink, the
+   platform cobalt as the only action colour, three channel colours that only mean a property
+   group; IBM Plex Sans/Mono served by the app; a 4px spacing grid; three radii (control 8, card
+   12, surface 14 as on every platform page) and two elevations (raised control, floating card). */
 .np-structure-workbench.np-homopolymer-prediction {
-  --np-hp-ink: #13203a;
+  --np-hp-ink: #101a2e;
   --np-hp-ink2: #3a4760;
   /* ≥ 4.9:1 on every surface this page uses, hover tint included. */
   --np-hp-muted: #5f6b80;
   --np-hp-line: #e4e8ef;
-  --np-hp-line2: #d2d9e3;
+  --np-hp-line2: #d3dae4;
   --np-hp-tick: #c3ccd8;
-  --np-hp-hover: #f2f5f9;
-  --np-hp-paper: #f3f5f8;
+  --np-hp-hover: #f1f4f8;
+  --np-hp-paper: #f2f4f7;
+  --np-hp-tint: #f7f9fb;
+  --np-hp-sunken: #f1f4f8;
   --np-hp-sheet: #fbfcfd;
   --np-hp-dot: #d6dde7;
   --np-hp-blue: var(--np-theme-blue);
   --np-hp-blue-strong: var(--np-theme-blue-strong);
-  --np-hp-blue-ink: #1d4ed8;
-  --np-hp-blue-soft: #eef3fe;
+  --np-hp-blue-ink: #1d47c8;
+  --np-hp-blue-soft: #edf2ff;
   --np-hp-thermal: #c65a24;
   --np-hp-mechanical: #0e8073;
   --np-hp-permeability: #6a4fd0;
-  --np-hp-surface-shadow: 0 1px 2px rgba(19, 32, 58, 0.04), 0 12px 32px -18px rgba(19, 32, 58, 0.16);
+  --np-hp-mono: "IBM Plex Mono", var(--font-mono);
+  --np-hp-radius-control: 8px;
+  --np-hp-radius-card: 12px;
+  --np-hp-raise: 0 1px 2px rgba(16, 26, 46, 0.06);
+  --np-hp-float: 0 1px 2px rgba(16, 26, 46, 0.04), 0 16px 36px -18px rgba(16, 26, 46, 0.24);
+  --np-hp-surface-shadow: 0 1px 2px rgba(16, 26, 46, 0.04), 0 14px 36px -20px rgba(16, 26, 46, 0.2);
   --np-hp-panel-min: 400px;
   --np-hp-panel-max: 480px;
   /* Fill the work area on common screens; only ultrawide windows hit this cap and centre. */
   --np-hp-frame-max: 1680px;
   --np-hp-gutter: 24px;
-  --np-hp-pad: 22px;
+  --np-hp-pad: 18px;
+  /* The platform's surface radius; cards (12) and controls (8) step down from it. */
   --np-hp-radius: 14px;
-  --np-hp-fs: 13.5px;
-  --np-hp-fs-sm: 12.5px;
+  --np-hp-fs: 14px;
+  --np-hp-fs-sm: 13px;
   --np-hp-fs-xs: 12px;
-  --np-hp-fs-title: 14px;
-  --np-hp-fs-lg: 15px;
-  --np-hp-fs-value: 14px;
-  --np-hp-row: 34px;
-  --np-hp-btn: 42px;
-  --np-hp-control: 30px;
-  --np-hp-icon: 15px;
+  --np-hp-fs-title: 16px;
+  --np-hp-fs-lg: 16px;
+  --np-hp-fs-value: 16px;
+  --np-hp-row: 36px;
+  --np-hp-btn: 48px;
+  --np-hp-control: 32px;
+  --np-hp-icon: 16px;
+  --np-hp-glyph: 26px;
   --np-hp-tool-h: 32px;
   --np-hp-tool-fs: 13px;
   --np-hp-canvas-min: 360px;
   background-color: var(--np-hp-paper);
   background-image: none;
   color: var(--np-hp-ink);
+  font-family: var(--font-body);
 }
 
 /* Channel colour per property group; children read --np-hp-channel. */
@@ -86,26 +98,50 @@
   flex: 0 0 auto;
   justify-content: space-between;
   gap: 12px;
-  min-height: 0;
-  padding: 12px 14px 8px 20px;
+  min-height: 58px;
+  padding: 12px 14px 10px 20px;
 }
 
 .np-structure-workbench.np-homopolymer-prediction .np-sw-commandbar__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   color: var(--np-hp-ink);
   font-size: var(--np-hp-fs-title);
   font-weight: 600;
+  letter-spacing: 0.01em;
   white-space: nowrap;
 }
 
+/* Section glyph: every region names itself with the same tinted icon tile. */
+.np-homopolymer-prediction .np-hp-glyph {
+  display: inline-grid;
+  width: var(--np-hp-glyph);
+  height: var(--np-hp-glyph);
+  flex: none;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--np-hp-blue);
+  background: var(--np-hp-blue-soft);
+}
+
+.np-homopolymer-prediction .np-hp-glyph svg {
+  width: calc(var(--np-hp-glyph) * 0.58);
+  height: calc(var(--np-hp-glyph) * 0.58);
+}
+
 .np-structure-workbench.np-homopolymer-prediction .np-sw-toolbar {
+  align-items: center;
   gap: 2px;
 }
 
+/* Tool buttons: quiet ghost buttons of the kit, one height, one radius, icon then label. */
 .np-structure-workbench.np-homopolymer-prediction .np-sw-tool {
   min-height: var(--np-hp-tool-h);
-  padding: 0 9px;
+  gap: 6px;
+  padding: 0 10px;
   border-color: transparent;
-  border-radius: 7px;
+  border-radius: var(--np-hp-radius-control);
   color: var(--np-hp-ink2);
   background: transparent;
   box-shadow: none;
@@ -120,10 +156,11 @@
 }
 
 .np-structure-workbench.np-homopolymer-prediction .np-sw-tool:hover:not(:disabled),
-.np-structure-workbench.np-homopolymer-prediction .np-sw-tool.is-primary:hover:not(:disabled) {
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool.is-primary:hover:not(:disabled),
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool[aria-expanded="true"] {
   border-color: transparent;
   color: var(--np-hp-ink);
-  background: var(--np-hp-hover);
+  background: var(--np-hp-sunken);
   box-shadow: none;
 }
 
@@ -169,13 +206,177 @@
   color: var(--np-theme-danger);
 }
 
+/* Segmented 2D | 3D: a sunken track with the current view raised; group rules on both sides. */
+.np-structure-workbench.np-homopolymer-prediction .np-sw-seg {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  margin: 0 12px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--np-hp-sunken);
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-seg::before,
+.np-structure-workbench.np-homopolymer-prediction .np-sw-seg::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 1px;
+  height: 18px;
+  margin-top: -9px;
+  background: var(--np-hp-line2);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-seg::before {
+  left: -9px;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-seg::after {
+  right: -9px;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-seg > button {
+  display: inline-flex;
+  height: calc(var(--np-hp-tool-h) - 4px);
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--np-hp-muted);
+  background: transparent;
+  font: 600 12.5px / 1 var(--font-body);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-seg > button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-seg > button:hover:not(:disabled):not(.is-on) {
+  color: var(--np-hp-ink);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-seg > button.is-on {
+  color: var(--np-hp-ink);
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--np-hp-line), 0 1px 2px rgba(16, 26, 46, 0.12);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-seg > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-seg > button:focus-visible {
+  outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
+  outline-offset: 1px;
+}
+
+/* Examples menu: a floating card of starting structures. */
+.np-structure-workbench.np-homopolymer-prediction .np-sw-menu {
+  position: relative;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__chevron {
+  width: 14px !important;
+  height: 14px !important;
+  margin-left: -2px;
+  transition: transform 140ms ease;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-tool[aria-expanded="true"] .np-sw-menu__chevron {
+  transform: rotate(180deg);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  width: 280px;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--np-hp-line), 0 18px 40px -16px rgba(16, 26, 46, 0.3);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list button {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 6px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--np-hp-ink2);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list button:is(:hover, :focus-visible) {
+  background: var(--np-hp-sunken);
+  outline: none;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list img {
+  width: 64px;
+  height: 40px;
+  border-radius: 6px;
+  background: var(--np-hp-sheet);
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
+  object-fit: contain;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list b {
+  display: block;
+  color: var(--np-hp-ink);
+  font-size: var(--np-hp-fs-sm);
+  font-weight: 600;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list small {
+  display: block;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+}
+
+/* The drawing sheet sits inset in the surface, like a sample window in an instrument. */
 .np-structure-workbench.np-homopolymer-prediction .np-sw-canvas-stage {
   flex: 1 1 auto;
   min-height: var(--np-hp-canvas-min);
+  margin: 0 12px;
+  overflow: hidden;
   aspect-ratio: auto;
   border: 0;
-  border-radius: 0;
-  box-shadow: none;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
+}
+
+/* Registration marks at the sheet's corners, clear of Ketcher's toolbars; decoration only. */
+.np-structure-workbench.np-homopolymer-prediction .np-sw-canvas-stage::after {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  inset: 52px 58px 56px;
+  pointer-events: none;
+  --m: #bac4d3;
+  background:
+    linear-gradient(var(--m), var(--m)) left top / 14px 1.5px no-repeat,
+    linear-gradient(var(--m), var(--m)) left top / 1.5px 14px no-repeat,
+    linear-gradient(var(--m), var(--m)) right top / 14px 1.5px no-repeat,
+    linear-gradient(var(--m), var(--m)) right top / 1.5px 14px no-repeat,
+    linear-gradient(var(--m), var(--m)) left bottom / 14px 1.5px no-repeat,
+    linear-gradient(var(--m), var(--m)) left bottom / 1.5px 14px no-repeat,
+    linear-gradient(var(--m), var(--m)) right bottom / 14px 1.5px no-repeat,
+    linear-gradient(var(--m), var(--m)) right bottom / 1.5px 14px no-repeat;
 }
 
 .np-structure-workbench.np-homopolymer-prediction .np-sw-editor,
@@ -242,15 +443,15 @@
   background-size: 22px 22px;
 }
 
-/* Ketcher's floating toolbars take the page's edge: hairline ring and a soft lift, same radius
-   family as the controls. Rings are shadows, so the toolbars keep their measured size. */
+/* Ketcher's floating toolbars take the kit's edge: hairline ring, soft lift, 10px radius.
+   Rings are shadows, so the toolbars keep their measured size. */
 .np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is(
   [class*="LeftToolbar-module_group"],
   [class*="RightToolbar-module_buttons"],
   [class*="BottomToolbar-module_group"]
 ) {
-  border-radius: 8px;
-  box-shadow: 0 0 0 1px var(--np-hp-line), 0 4px 12px -6px rgba(19, 32, 58, 0.14);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--np-hp-line), 0 6px 16px -10px rgba(16, 26, 46, 0.28);
 }
 
 .np-structure-workbench.np-homopolymer-prediction .Ketcher-root [class*="RightToolbar-module_group"] {
@@ -261,41 +462,72 @@
   box-shadow: 0 1px 0 var(--np-hp-line);
 }
 
+/* The selected Ketcher tool uses the page's action colour instead of Ketcher's teal. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [class*="ActionButton-module_selected"] {
+  color: var(--np-hp-blue-ink);
+  background: var(--np-hp-blue-soft);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.22);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [class*="ActionButton-module_button"]:hover:not([class*="ActionButton-module_selected"]) {
+  color: var(--np-hp-blue-ink);
+}
+
+/* SMILES field: a sunken code field with a tag, the sync lamp and copy on the right. */
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles {
   min-height: 0;
+  margin: 10px 12px 0;
   border: 0;
-  border-top: 1px solid var(--np-hp-line);
-  border-radius: 0;
-  box-shadow: none;
+  border-radius: 10px;
+  background: var(--np-hp-sunken);
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
+  transition: background-color 140ms ease, box-shadow 140ms ease;
 }
 
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles:focus-within {
-  border-color: var(--np-hp-line);
-  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.22);
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.45), 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > label {
-  top: 14px;
-  left: 20px;
+  top: 12px;
+  left: 12px;
+  padding: 3px 7px;
+  border-radius: 6px;
   color: var(--np-hp-muted);
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
   font-family: var(--font-body);
-  font-size: var(--np-hp-fs-xs);
-  font-weight: 500;
-  letter-spacing: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
 }
 
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > textarea {
-  min-height: 56px;
-  padding: 13px 52px 20px 78px;
+  min-height: 48px;
+  padding: 14px 200px 12px 90px;
   color: var(--np-hp-ink);
-  font-size: var(--np-hp-fs-sm);
+  font-family: var(--np-hp-mono);
+  font-size: var(--np-hp-fs);
+  font-weight: 500;
   letter-spacing: 0.01em;
+  line-height: 1.45;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > textarea::placeholder {
+  color: var(--np-hp-muted);
+  font-family: var(--font-body);
+  font-weight: 400;
 }
 
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > button {
-  top: 11px;
-  right: 14px;
+  top: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
   border-color: transparent;
+  border-radius: var(--np-hp-radius-control);
   background: transparent;
   box-shadow: none;
 }
@@ -307,35 +539,72 @@
 }
 
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p {
-  right: 52px;
-  bottom: 4px;
+  top: 16px;
+  right: 48px;
+  bottom: auto;
   display: inline-flex;
+  max-width: 150px;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
+  overflow: hidden;
   color: var(--np-hp-muted);
   font-family: var(--font-body);
-  font-size: 11px;
+  font-size: var(--np-hp-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Sync status reads as an indicator lamp: teal when the field and canvas agree, red on error. */
+/* Sync status reads as an indicator lamp: teal when the field and canvas agree, amber while
+   syncing, red on error. */
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p::before {
   content: "";
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   flex: none;
   border-radius: 50%;
   background: var(--np-hp-mechanical);
-  box-shadow: 0 0 0 3px rgba(14, 128, 115, 0.12);
+  box-shadow: 0 0 0 3px rgba(14, 128, 115, 0.14);
 }
 
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p:is([data-state="pending"], [data-state="syncing"])::before {
   background: #d99a1e;
-  box-shadow: 0 0 0 3px rgba(217, 154, 30, 0.14);
+  box-shadow: 0 0 0 3px rgba(217, 154, 30, 0.16);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p.is-error {
+  max-width: none;
+  color: var(--np-theme-danger-text);
 }
 
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p.is-error::before {
   background: var(--np-theme-danger);
   box-shadow: 0 0 0 3px var(--np-theme-danger-soft);
+}
+
+/* Narrow structure zones keep the field one line tall (the canvas needs the height): the status
+   shrinks to its lamp, its words stay in the live region, and errors still show in full. */
+@container np-hp-structure (max-width: 760px) {
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > textarea {
+    padding-right: 64px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p:not(.is-error) {
+    width: 7px;
+    max-width: 7px;
+    gap: 0;
+    font-size: 0;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p.is-error {
+    top: auto;
+    right: 12px;
+    bottom: 6px;
+    left: 90px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles:has(> p.is-error) > textarea {
+    padding-bottom: 28px;
+  }
 }
 
 /* ---------- structure facts (RDKit, under the SMILES field) ---------- */
@@ -348,9 +617,8 @@
   align-items: center;
   gap: 10px;
   min-height: calc(var(--np-hp-control) + 12px);
-  padding: 5px 12px 5px 20px;
-  border-top: 1px solid var(--np-hp-line);
-  background: #fcfcfd;
+  padding: 4px 12px 6px 20px;
+  background: transparent;
   font-family: var(--font-body);
   font-size: var(--np-hp-fs-xs);
   line-height: 1.4;
@@ -436,6 +704,7 @@
   align-items: baseline;
   gap: 3px;
   color: var(--np-hp-ink);
+  font-size: calc(var(--np-hp-fs-xs) + 1px);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -699,7 +968,7 @@
 }
 
 .np-homopolymer-prediction .np-hp-start {
-  width: min(620px, 100%);
+  width: min(680px, 100%);
   color: var(--np-hp-muted);
   font-size: var(--np-hp-fs);
   line-height: 1.6;
@@ -710,13 +979,13 @@
   display: block;
   margin-bottom: 4px;
   color: var(--np-hp-ink);
-  font-size: calc(var(--np-hp-fs-lg) + 2px);
+  font-size: calc(var(--np-hp-fs-title) + 2px);
   font-weight: 600;
   letter-spacing: 0.01em;
 }
 
 .np-homopolymer-prediction .np-hp-start > p {
-  margin: 0 0 18px;
+  margin: 0 0 20px;
 }
 
 .np-homopolymer-prediction .np-hp-start ul {
@@ -735,19 +1004,18 @@
   align-items: center;
   gap: 12px;
   padding: 8px 12px 8px 8px;
-  border: 1px solid var(--np-hp-line);
+  border: 0;
   border-radius: 12px;
   color: inherit;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 1px 2px rgba(19, 32, 58, 0.04);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 0 0 1px var(--np-hp-line), 0 6px 16px -12px rgba(16, 26, 46, 0.3);
   text-align: left;
   cursor: pointer;
-  transition: border-color 140ms ease, box-shadow 140ms ease;
+  transition: box-shadow 140ms ease, transform 140ms ease;
 }
 
 .np-homopolymer-prediction .np-hp-start button:hover {
-  border-color: rgba(37, 99, 235, 0.38);
-  box-shadow: 0 6px 18px -10px rgba(37, 99, 235, 0.45);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.4), 0 10px 22px -12px rgba(37, 99, 235, 0.45);
 }
 
 .np-homopolymer-prediction .np-hp-start button:focus-visible {
@@ -760,7 +1028,7 @@
   width: 96px;
   height: 56px;
   border-radius: 8px;
-  background: var(--np-hp-sheet);
+  background: var(--np-hp-tint);
   box-shadow: inset 0 0 0 1px var(--np-hp-line);
   object-fit: contain;
 }
@@ -781,35 +1049,63 @@
   white-space: nowrap;
 }
 
+/* Wide sheets: four example cards in a row, structure on top. */
+@container np-hp-structure (min-width: 860px) {
+  .np-homopolymer-prediction .np-hp-start ul {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .np-homopolymer-prediction .np-hp-start button {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px 8px 10px;
+  }
+
+  .np-homopolymer-prediction .np-hp-start img {
+    width: 100%;
+    height: 72px;
+  }
+
+  .np-homopolymer-prediction .np-hp-start button > span {
+    padding: 0 4px;
+  }
+}
+
 /* ---------- session runs ---------- */
 .np-homopolymer-prediction .np-hp-runs {
-  margin-top: 20px;
+  margin-top: 18px;
   padding-top: 14px;
   border-top: 1px solid var(--np-hp-line);
 }
 
 .np-homopolymer-prediction .np-hp-runs > header {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.np-homopolymer-prediction .np-hp-runs > header .np-hp-glyph {
+  --np-hp-glyph: 24px;
 }
 
 .np-homopolymer-prediction .np-hp-runs h3 {
   margin: 0;
   color: var(--np-hp-ink);
   font-family: var(--font-body);
-  font-size: var(--np-hp-fs-title);
+  font-size: calc(var(--np-hp-fs-title) - 1px);
   font-weight: 600;
 }
 
 .np-homopolymer-prediction .np-hp-runs > header small {
+  margin-left: auto;
   color: var(--np-hp-muted);
   font-size: var(--np-hp-fs-xs);
 }
 
 .np-homopolymer-prediction .np-hp-runs ol {
+  display: grid;
+  gap: 2px;
   margin: 0 -8px;
   padding: 0;
   list-style: none;
@@ -818,11 +1114,12 @@
 .np-homopolymer-prediction .np-hp-runs button {
   display: flex;
   width: 100%;
+  min-height: 46px;
   align-items: center;
   gap: 10px;
-  padding: 7px 8px;
+  padding: 6px 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 9px;
   color: inherit;
   background: transparent;
   text-align: left;
@@ -834,7 +1131,7 @@
 }
 
 .np-homopolymer-prediction .np-hp-runs button.is-current {
-  background: #f5f8fe;
+  background: var(--np-hp-blue-soft);
   cursor: default;
 }
 
@@ -844,7 +1141,7 @@
   height: 8px;
   flex: none;
   border-radius: 50%;
-  background: var(--np-hp-line);
+  background: var(--np-hp-line2);
 }
 
 .np-homopolymer-prediction .np-hp-runs__mark.is-current {
@@ -852,7 +1149,9 @@
 }
 
 .np-homopolymer-prediction .np-hp-runs__mark.is-previous {
-  background: #fff;
+  width: 10px;
+  height: 10px;
+  background: transparent;
   box-shadow: inset 0 0 0 1.5px var(--np-hp-ink2);
 }
 
@@ -865,8 +1164,9 @@
   display: block;
   overflow: hidden;
   color: var(--np-hp-ink2);
-  font-family: var(--font-mono);
-  font-size: var(--np-hp-fs-xs);
+  font-family: var(--np-hp-mono);
+  font-size: var(--np-hp-fs-sm);
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -941,86 +1241,181 @@
   font-size: 0.92em;
 }
 
-/* ---------- task panel ---------- */
+/* ---------- task panel: a tinted column holding two cards (input, output) and the relay strip ---------- */
 .np-structure-workbench.np-homopolymer-prediction .np-hp-panel {
   container: np-hp-panel / inline-size;
   display: flex;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+  gap: 12px;
+  padding: 12px 12px 0;
+  background: var(--np-hp-tint);
   font-size: var(--np-hp-fs);
   line-height: 1.55;
+}
+
+/* Cards: one radius, one ring, one raise. */
+.np-homopolymer-prediction .np-hp-task,
+.np-homopolymer-prediction .np-hp-results {
+  border-radius: var(--np-hp-radius-card);
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--np-hp-line), var(--np-hp-raise);
 }
 
 .np-homopolymer-prediction .np-hp-task {
   position: relative;
   z-index: 1;
   flex: 0 0 auto;
-  padding: var(--np-hp-pad) var(--np-hp-pad) 0;
-  background: #fff;
+  padding: var(--np-hp-pad);
   transition: box-shadow 140ms ease;
 }
 
-/* Once the results scroll, the fixed controls get an edge so rows don't slide under the button. */
+/* Once the results scroll, the input card lifts so rows read as moving beneath it. */
 .np-homopolymer-prediction .np-hp-panel.is-results-scrolled > .np-hp-task {
-  padding-bottom: 14px;
-  box-shadow: 0 1px 0 var(--np-hp-line), 0 8px 14px -12px rgba(19, 32, 58, 0.22);
+  box-shadow: 0 0 0 1px var(--np-hp-line), 0 10px 22px -16px rgba(16, 26, 46, 0.35);
 }
 
-/* Section titles carry the hierarchy; no small labels above them. */
+/* Section header: glyph, title, status badge, action on the right. */
+.np-homopolymer-prediction .np-hp-section-head {
+  display: flex;
+  min-height: var(--np-hp-glyph);
+  align-items: center;
+  gap: 10px;
+}
+
 .np-homopolymer-prediction .np-hp-label {
-  margin: 0 0 6px;
+  margin: 0;
   color: var(--np-hp-ink);
   font-family: var(--font-body);
   font-size: var(--np-hp-fs-title);
   font-weight: 600;
-  line-height: 1.4;
+  letter-spacing: 0.01em;
+  line-height: 1.3;
 }
 
-.np-homopolymer-prediction .np-hp-selection__summary {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.np-homopolymer-prediction .np-hp-selection__summary strong {
-  display: block;
+.np-homopolymer-prediction .np-hp-badge {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 999px;
   color: var(--np-hp-ink2);
-  font-size: var(--np-hp-fs);
+  background: var(--np-hp-sunken);
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
+  font-size: var(--np-hp-fs-xs);
   font-weight: 500;
-  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.np-homopolymer-prediction .np-hp-selection__summary small {
-  display: block;
-  margin-top: 1px;
+.np-homopolymer-prediction .np-hp-badge.is-accent {
+  color: var(--np-hp-blue-ink);
+  background: var(--np-hp-blue-soft);
+  box-shadow: none;
+}
+
+/* Ghost button of the kit: text and a trailing chevron, sunken on hover. */
+.np-homopolymer-prediction .np-hp-ghost {
+  display: inline-flex;
+  height: var(--np-hp-control);
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: var(--np-hp-radius-control);
+  color: var(--np-hp-ink2);
+  background: transparent;
+  font-size: var(--np-hp-fs-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.np-homopolymer-prediction .np-hp-ghost svg {
+  width: 15px;
+  height: 15px;
+  color: var(--np-hp-muted);
+  transition: transform 140ms ease;
+}
+
+.np-homopolymer-prediction .np-hp-ghost svg.is-flipped {
+  transform: rotate(180deg);
+}
+
+.np-homopolymer-prediction .np-hp-ghost:hover {
+  color: var(--np-hp-ink);
+  background: var(--np-hp-sunken);
+}
+
+.np-homopolymer-prediction .np-hp-ghost:focus-visible {
+  outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
+  outline-offset: 2px;
+}
+
+.np-homopolymer-prediction .np-hp-selection__detail {
+  margin: 8px 0 0;
   color: var(--np-hp-muted);
   font-size: var(--np-hp-fs-sm);
 }
 
-/* Nine segments, one per property, in channel colour when selected. */
+/* Collapsed selection: one bar per property, grouped by channel, labelled under each group. */
 .np-homopolymer-prediction .np-hp-meter {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.np-homopolymer-prediction .np-hp-meter__group {
   display: grid;
-  grid-template-columns: repeat(9, minmax(0, 1fr));
+  min-width: 0;
+  flex-basis: 0;
+  gap: 8px;
+}
+
+.np-homopolymer-prediction .np-hp-meter__group ol {
+  display: flex;
   gap: 3px;
-  margin: 10px 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.np-homopolymer-prediction .np-hp-meter li {
-  height: 4px;
-  border-radius: 2px;
+.np-homopolymer-prediction .np-hp-meter__group li {
+  height: 5px;
+  flex: 1 1 0;
+  border-radius: 3px;
   background: var(--np-hp-line);
 }
 
-.np-homopolymer-prediction .np-hp-meter li.is-on {
+.np-homopolymer-prediction .np-hp-meter__group li.is-on {
   background: var(--np-hp-channel);
 }
 
-.np-homopolymer-prediction .np-hp-meter :is(.is-thermal + .is-mechanical, .is-mechanical + .is-permeability) {
-  margin-left: 6px;
+.np-homopolymer-prediction .np-hp-meter__group > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.np-homopolymer-prediction .np-hp-meter__group > span b {
+  color: var(--np-hp-ink2);
+  font-weight: 500;
+}
+
+.np-homopolymer-prediction .np-hp-meter__group .np-hp-channel-badge {
+  --np-hp-badge: 18px;
+}
+
+.np-homopolymer-prediction .np-hp-meter__group .np-hp-channel-badge svg {
+  width: 11px;
+  height: 11px;
 }
 
 .np-homopolymer-prediction .np-hp-link {
@@ -1029,7 +1424,7 @@
   border: 0;
   color: var(--np-hp-blue-ink);
   background: none;
-  font-size: var(--np-hp-fs-sm);
+  font-size: var(--np-hp-fs-xs);
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
@@ -1048,14 +1443,15 @@
   opacity: 0.6;
 }
 
+/* Expanded selection: groups on a tinted well, properties as two-column toggle tiles. */
 .np-homopolymer-prediction .np-hp-selection__editor {
   display: grid;
   gap: 14px;
-  margin-top: 12px;
+  margin-top: 14px;
   padding: 14px;
-  border: 1px solid var(--np-hp-line);
   border-radius: 12px;
-  background: var(--np-hp-sheet);
+  background: var(--np-hp-tint);
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
 }
 
 .np-homopolymer-prediction .np-hp-group {
@@ -1069,31 +1465,37 @@
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 7px;
+  gap: 9px;
+  margin-bottom: 8px;
   padding: 0;
   color: var(--np-hp-ink);
   font-size: var(--np-hp-fs-sm);
   font-weight: 600;
 }
 
+.np-homopolymer-prediction .np-hp-group__count {
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
 .np-homopolymer-prediction .np-hp-group > legend .np-hp-link {
   margin-left: auto;
-  font-size: var(--np-hp-fs-xs);
 }
 
 /* Channel badge: the group's icon (Lucide, chosen via Streamline) on a tint of its channel colour. */
 .np-homopolymer-prediction .np-hp-channel-badge {
-  --np-hp-badge: 20px;
+  --np-hp-badge: 22px;
   display: inline-grid;
   width: var(--np-hp-badge);
   height: var(--np-hp-badge);
   flex: none;
   place-items: center;
-  border-radius: 6px;
+  border-radius: 7px;
   color: var(--np-hp-channel);
   background: var(--np-hp-channel-soft);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--np-hp-channel) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--np-hp-channel) 20%, transparent);
 }
 
 .np-homopolymer-prediction .np-hp-channel-badge svg {
@@ -1103,29 +1505,31 @@
 }
 
 .np-homopolymer-prediction .np-hp-group__options {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 
 .np-homopolymer-prediction .np-hp-chip {
   position: relative;
-  display: inline-flex;
+  display: flex;
+  min-width: 0;
+  min-height: 40px;
   align-items: center;
-  gap: 7px;
-  min-height: var(--np-hp-control);
-  padding: 0 11px 0 9px;
-  border: 1px solid var(--np-hp-line2);
-  border-radius: 8px;
+  gap: 9px;
+  padding: 0 12px 0 10px;
+  border: 0;
+  border-radius: 9px;
   color: var(--np-hp-ink2);
   background: #fff;
+  box-shadow: inset 0 0 0 1px var(--np-hp-line2);
   font-size: var(--np-hp-fs-sm);
   cursor: pointer;
-  transition: border-color 120ms ease, background-color 120ms ease;
+  transition: box-shadow 120ms ease, background-color 120ms ease;
 }
 
 .np-homopolymer-prediction .np-hp-chip:hover {
-  border-color: var(--np-hp-tick);
+  box-shadow: inset 0 0 0 1px var(--np-hp-tick);
 }
 
 .np-homopolymer-prediction .np-hp-chip > input {
@@ -1145,32 +1549,45 @@
 
 .np-homopolymer-prediction .np-hp-chip__check {
   display: grid;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   flex: none;
   place-items: center;
-  border: 1.5px solid var(--np-hp-tick);
-  border-radius: 4px;
+  border-radius: 5px;
   background: #fff;
+  box-shadow: inset 0 0 0 1.5px var(--np-hp-tick);
 }
 
 .np-homopolymer-prediction .np-hp-chip__check svg {
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
   stroke-width: 3;
 }
 
+.np-homopolymer-prediction .np-hp-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-homopolymer-prediction .np-hp-chip__unit {
+  margin-left: auto;
+  flex: none;
+  color: var(--np-hp-muted);
+  font-size: 11.5px;
+}
+
 .np-homopolymer-prediction .np-hp-chip.is-selected {
-  border-color: var(--np-hp-channel);
-  border-color: color-mix(in srgb, var(--np-hp-channel) 42%, #fff);
   color: var(--np-hp-ink);
-  background: var(--np-hp-channel-soft);
+  background: color-mix(in srgb, var(--np-hp-channel) 7%, #fff);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--np-hp-channel) 42%, transparent);
 }
 
 .np-homopolymer-prediction .np-hp-chip.is-selected .np-hp-chip__check {
-  border-color: var(--np-hp-channel);
   color: #fff;
   background: var(--np-hp-channel);
+  box-shadow: none;
 }
 
 .np-homopolymer-prediction .np-hp-selection__bulk {
@@ -1183,9 +1600,10 @@
 }
 
 .np-homopolymer-prediction .np-hp-run {
-  padding: 16px 0 2px;
+  padding: 16px 0 0;
 }
 
+/* Primary button: the one cobalt surface on the page. */
 .np-homopolymer-prediction .np-hp-primary {
   position: relative;
   display: flex;
@@ -1196,16 +1614,16 @@
   gap: 8px;
   overflow: hidden;
   border: 0;
-  border-radius: 10px;
+  border-radius: 11px;
   color: #fff;
   background: var(--np-hp-blue);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    0 1px 2px rgba(19, 32, 58, 0.14),
-    0 10px 22px -14px rgba(37, 99, 235, 0.75);
-  font-size: var(--np-hp-fs-title);
+    0 1px 2px rgba(16, 26, 46, 0.16),
+    0 12px 26px -16px rgba(37, 99, 235, 0.85);
+  font-size: calc(var(--np-hp-fs-title) - 1px);
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   cursor: pointer;
   transition: background-color var(--np-motion-control, 120ms) ease, box-shadow var(--np-motion-control, 120ms) ease;
 }
@@ -1225,22 +1643,36 @@
   opacity: 0.45;
 }
 
-.np-homopolymer-prediction .np-hp-primary svg {
-  width: 16px;
-  height: 16px;
+.np-homopolymer-prediction .np-hp-primary > svg {
+  width: 17px;
+  height: 17px;
 }
 
 .np-homopolymer-prediction .np-hp-primary__keys {
   position: absolute;
   top: 50%;
   right: 12px;
-  padding: 1px 7px;
-  border-radius: 6px;
-  color: rgba(255, 255, 255, 0.86);
-  background: rgba(255, 255, 255, 0.16);
-  font: 500 11px / 1.6 var(--font-body);
-  letter-spacing: 0.02em;
+  display: inline-flex;
+  gap: 4px;
   transform: translateY(-50%);
+}
+
+.np-homopolymer-prediction .np-hp-primary__keys kbd {
+  display: inline-grid;
+  min-width: 22px;
+  height: 22px;
+  place-items: center;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.16);
+  font: 500 11px / 1 var(--font-body);
+  letter-spacing: 0.02em;
+}
+
+.np-homopolymer-prediction .np-hp-primary__keys svg {
+  width: 12px;
+  height: 12px;
 }
 
 /* Running: a thin progress line along the button's lower edge. */
@@ -1291,7 +1723,7 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 24px var(--np-hp-pad) 14px;
+  padding: 16px var(--np-hp-pad) 14px;
 }
 
 .np-homopolymer-prediction .np-hp-results__header {
@@ -1308,6 +1740,7 @@
   min-width: 0;
   align-items: center;
   gap: 10px;
+  white-space: nowrap;
   margin: 0;
   color: var(--np-hp-ink);
   font-family: var(--font-body);
@@ -1327,14 +1760,7 @@
   white-space: nowrap;
 }
 
-.np-homopolymer-prediction .np-hp-badge {
-  padding: 1px 8px;
-  border-radius: 999px;
-  color: var(--np-hp-ink2);
-  background: var(--np-hp-hover);
-  font-weight: 500;
-}
-
+/* Secondary button of the kit: white, hairline ring, raised. */
 .np-homopolymer-prediction .np-hp-button {
   display: inline-flex;
   min-height: var(--np-hp-control);
@@ -1342,9 +1768,10 @@
   gap: 6px;
   padding: 0 10px;
   border: 1px solid var(--np-hp-line2);
-  border-radius: 8px;
+  border-radius: var(--np-hp-radius-control);
   color: var(--np-hp-ink2);
   background: #fff;
+  box-shadow: var(--np-hp-raise);
   font-size: var(--np-hp-fs-sm);
   font-weight: 500;
   white-space: nowrap;
@@ -1479,7 +1906,7 @@
 }
 
 .np-homopolymer-prediction .np-hp-submitted > span,
-.np-homopolymer-prediction .np-hp-compare > span {
+.np-homopolymer-prediction .np-hp-compare > span:first-child {
   flex: none;
 }
 
@@ -1498,7 +1925,7 @@
   min-width: 0;
   align-items: center;
   gap: 14px;
-  margin: 0 0 4px;
+  margin: 4px 0 6px;
 }
 
 .np-homopolymer-prediction .np-hp-compare-row > .np-hp-compare {
@@ -1506,23 +1933,103 @@
   margin: 0;
 }
 
-.np-homopolymer-prediction .np-hp-compare select {
+/* Comparison picker: a styled face showing the compared run (ring mark, time, SMILES, Tg) over a
+   transparent native select, which keeps keyboard and screen-reader behaviour. */
+.np-homopolymer-prediction .np-hp-select {
+  position: relative;
+  display: block;
   min-width: 0;
-  height: calc(var(--np-hp-control) - 2px);
+  height: 38px;
   flex: 1 1 auto;
-  padding: 0 28px 0 10px;
-  border: 1px solid var(--np-hp-line2);
-  border-radius: 8px;
-  color: var(--np-hp-ink2);
-  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b7689' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 8px center / 14px;
-  font-family: var(--font-mono);
-  font-size: var(--np-hp-fs-xs);
-  appearance: none;
-  cursor: pointer;
 }
 
-.np-homopolymer-prediction .np-hp-compare select:hover {
-  border-color: var(--np-hp-tick);
+.np-homopolymer-prediction .np-hp-select__face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 0 12px;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--np-hp-line2), var(--np-hp-raise);
+  pointer-events: none;
+  transition: box-shadow 120ms ease;
+}
+
+.np-homopolymer-prediction .np-hp-select:hover .np-hp-select__face {
+  box-shadow: inset 0 0 0 1px var(--np-hp-tick), var(--np-hp-raise);
+}
+
+.np-homopolymer-prediction .np-hp-select:has(select:focus-visible) .np-hp-select__face {
+  outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
+  outline-offset: 2px;
+}
+
+.np-homopolymer-prediction .np-hp-select__ring {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--np-hp-ink2);
+}
+
+.np-homopolymer-prediction .np-hp-select__time {
+  flex: none;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.np-homopolymer-prediction .np-hp-select__face code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--np-hp-ink2);
+  font-family: var(--np-hp-mono);
+  font-size: var(--np-hp-fs-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-homopolymer-prediction .np-hp-select__tg {
+  margin-left: auto;
+  flex: none;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.np-homopolymer-prediction .np-hp-select__tg b {
+  color: var(--np-hp-ink);
+  font-weight: 600;
+}
+
+.np-homopolymer-prediction .np-hp-select__none {
+  color: var(--np-hp-ink2);
+  font-size: var(--np-hp-fs-sm);
+}
+
+.np-homopolymer-prediction .np-hp-select__face > svg {
+  width: 15px;
+  height: 15px;
+  margin-left: auto;
+  flex: none;
+  color: var(--np-hp-muted);
+}
+
+.np-homopolymer-prediction .np-hp-select__tg + svg {
+  margin-left: 0;
+}
+
+.np-homopolymer-prediction .np-hp-select select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .np-homopolymer-prediction .np-hp-legend {
@@ -1836,10 +2343,12 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 12px var(--np-hp-pad) 14px;
+  /* Spans the tinted column edge to edge, closing the panel like an instrument's footer. */
+  margin: 0 -12px;
+  padding: 12px calc(var(--np-hp-pad) + 2px) 14px;
   border-top: 1px solid var(--np-hp-line);
   color: var(--np-hp-muted);
-  background: var(--np-hp-sheet);
+  background: #fff;
   font-size: var(--np-hp-fs-sm);
 }
 
@@ -1887,6 +2396,34 @@
     display: none;
   }
 
+  /* Property tiles become wrapping chips so every label stays whole; units live in the results. */
+  .np-homopolymer-prediction .np-hp-group__options {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .np-homopolymer-prediction .np-hp-chip {
+    min-height: 34px;
+    gap: 7px;
+    padding: 0 10px 0 8px;
+  }
+
+  .np-homopolymer-prediction .np-hp-chip__unit {
+    display: none;
+  }
+
+  .np-homopolymer-prediction .np-hp-selection__editor {
+    padding: 12px;
+  }
+
+  /* The legend explains the scale marks, which this width hides while comparing. */
+  .np-homopolymer-prediction .np-hp-legend,
+  .np-homopolymer-prediction .np-hp-select__time,
+  .np-homopolymer-prediction .np-hp-results__meta > span:last-child:not(.np-hp-badge),
+  .np-homopolymer-prediction .np-hp-meter__group .np-hp-channel-badge {
+    display: none;
+  }
+
   .np-homopolymer-prediction .np-hp-next {
     gap: 4px;
   }
@@ -1911,7 +2448,7 @@
     min-height: 44px;
   }
 
-  .np-homopolymer-prediction .np-hp-compare select {
+  .np-homopolymer-prediction .np-hp-select {
     height: 44px;
   }
 
@@ -1941,7 +2478,7 @@
     --np-hp-panel-min: 440px;
     --np-hp-panel-max: 600px;
     --np-hp-gutter: 32px;
-    --np-hp-pad: 24px;
+    --np-hp-pad: 20px;
   }
 }
 
@@ -1950,8 +2487,8 @@
     --np-hp-panel-min: 372px;
     --np-hp-panel-max: 372px;
     --np-hp-gutter: 20px;
-    --np-hp-pad: 20px;
-    --np-hp-row: 32px;
+    --np-hp-pad: 16px;
+    --np-hp-row: 34px;
   }
 }
 
@@ -1960,7 +2497,7 @@
   .np-structure-workbench.np-homopolymer-prediction {
     --np-hp-panel-min: 340px;
     --np-hp-panel-max: 340px;
-    --np-hp-pad: 18px;
+    --np-hp-pad: 14px;
   }
 }
 
@@ -1978,6 +2515,7 @@
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-sw-commandbar {
+    min-height: 46px;
     padding-top: 8px;
     padding-bottom: 6px;
   }
@@ -2003,18 +2541,20 @@
 
 @media (min-width: 900px) and (max-height: 760px) {
   .np-structure-workbench.np-homopolymer-prediction {
-    --np-hp-row: 28px;
-    --np-hp-btn: 38px;
-    --np-hp-pad: 18px;
+    --np-hp-row: 30px;
+    --np-hp-btn: 42px;
+    --np-hp-pad: 14px;
+    --np-hp-glyph: 24px;
     --np-hp-canvas-min: 300px;
   }
 
-  .np-structure-workbench.np-homopolymer-prediction .np-hp-task {
-    padding-top: 14px;
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-panel {
+    gap: 10px;
+    padding-top: 10px;
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-hp-results {
-    padding-top: 14px;
+    padding-top: 12px;
     padding-bottom: 8px;
   }
 
@@ -2044,40 +2584,102 @@
     --np-hp-panel-max: 780px;
     --np-hp-frame-max: 2184px;
     --np-hp-gutter: 36px;
-    --np-hp-pad: 30px;
+    --np-hp-pad: 24px;
     --np-hp-radius: 20px;
-    --np-hp-fs: 17.5px;
-    --np-hp-fs-sm: 16px;
+    --np-hp-radius-control: 10px;
+    --np-hp-radius-card: 16px;
+    --np-hp-fs: 18px;
+    --np-hp-fs-sm: 17px;
     --np-hp-fs-xs: 15.5px;
-    --np-hp-fs-title: 18px;
-    --np-hp-fs-lg: 19.5px;
-    --np-hp-fs-value: 18px;
-    --np-hp-row: 44px;
-    --np-hp-btn: 54px;
-    --np-hp-control: 40px;
-    --np-hp-icon: 19px;
+    --np-hp-fs-title: 21px;
+    --np-hp-fs-lg: 21px;
+    --np-hp-fs-value: 21px;
+    --np-hp-row: 46px;
+    --np-hp-btn: 60px;
+    --np-hp-control: 42px;
+    --np-hp-icon: 20px;
+    --np-hp-glyph: 34px;
     --np-hp-tool-h: 42px;
     --np-hp-tool-fs: 17px;
     --np-hp-canvas-min: 460px;
   }
 
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-panel {
+    gap: 16px;
+    padding: 16px 16px 0;
+  }
+
+  .np-homopolymer-prediction .np-hp-next {
+    margin: 0 -16px;
+  }
+
+  .np-homopolymer-prediction .np-hp-badge {
+    height: 28px;
+    padding: 0 12px;
+  }
+
+  .np-homopolymer-prediction .np-hp-chip {
+    min-height: 52px;
+  }
+
+  .np-homopolymer-prediction .np-hp-select {
+    height: 50px;
+  }
+
+  .np-homopolymer-prediction .np-hp-primary__keys kbd {
+    min-width: 28px;
+    height: 28px;
+    font-size: 14px;
+  }
+
+  .np-homopolymer-prediction .np-hp-primary__keys svg {
+    width: 15px;
+    height: 15px;
+  }
+
   .np-structure-workbench.np-homopolymer-prediction .np-sw-commandbar {
-    padding: 16px 18px 10px 26px;
+    min-height: 74px;
+    padding: 16px 18px 12px 26px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-seg > button {
+    padding: 0 15px;
+    font-size: 16px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-canvas-stage {
+    margin: 0 16px;
+    border-radius: 16px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles {
+    margin: 14px 16px 0;
+    border-radius: 13px;
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > label {
-    top: 19px;
-    left: 26px;
+    top: 17px;
+    left: 16px;
+    font-size: 14px;
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > textarea {
-    min-height: 64px;
-    padding: 18px 64px 18px 100px;
+    min-height: 62px;
+    padding: 18px 250px 16px 116px;
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > button {
-    top: 15px;
-    right: 18px;
+    top: 11px;
+    right: 11px;
+    width: 40px;
+    height: 40px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > p {
+    top: 21px;
+    right: 62px;
+    max-width: 200px;
+    font-size: 15px;
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-hp-facts {
@@ -2278,14 +2880,26 @@
     text-align: center;
   }
 
+  /* Phones: the title keeps the first row; the tools take a full-width second row. */
   .np-structure-workbench.np-homopolymer-prediction .np-sw-commandbar {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    row-gap: 8px;
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-sw-toolbar {
+    width: 100%;
     flex-wrap: nowrap;
-    justify-content: flex-end;
+    justify-content: space-between;
     gap: 0;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-seg {
+    margin: 0 4px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-seg::before,
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-seg::after {
+    content: none;
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-sw-tool,
@@ -2620,5 +3234,16 @@
   .np-structure-workbench.np-homopolymer-prediction .np-sw-tool:not(.np-sw-tool--icon) {
     min-width: 44px;
     min-height: 44px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-seg > button {
+    height: 44px;
+    min-width: 44px;
+    justify-content: center;
+  }
+
+  .np-homopolymer-prediction .np-hp-ghost {
+    min-height: 44px;
+    margin-block: -6px;
   }
 }

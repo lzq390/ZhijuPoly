@@ -1,4 +1,4 @@
-import { Atom, Check, ChevronDown, Database, Download, LoaderCircle, Network, Play, TriangleAlert } from "lucide-react";
+import { Atom, Check, ChevronDown, CornerDownLeft, Database, Download, Gauge, History, ListChecks, LoaderCircle, Network, Play, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from "react";
 import {
   PREDICTABLE_PROPERTIES,
@@ -30,7 +30,7 @@ const RELAY_LINKS = [
   { id: "mdSimulationDemo", label: "MD 模拟", Icon: Atom }
 ] as const satisfies readonly { id: PredictionRelayModule; label: string; Icon: typeof Database }[];
 
-const SHORTCUT_LABEL = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘ ↵" : "Ctrl ↵";
+const SHORTCUT_MODIFIER = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
 
 const SHORT_NAMES: Record<PredictableProperty, string> = {
   "Glass transition temperature": "Tg",
@@ -318,6 +318,7 @@ function SessionRuns({
   return (
     <section className="np-hp-runs" aria-labelledby={headingId}>
       <header>
+        <span className="np-hp-glyph" aria-hidden="true"><History /></span>
         <h3 id={headingId}>本次会话的运行</h3>
         <small>点一条可恢复结构和结果</small>
       </header>
@@ -397,33 +398,51 @@ export function HomopolymerPredictionPanel({
   }
 
   const tableProperties = latestRun?.properties ?? PREDICTABLE_PROPERTIES.filter((property) => selected.has(property));
+  const comparisonTg = comparison ? formatPredictionValue(predictionValue(comparison, "Glass transition temperature")) : null;
 
   return (
     <aside className={`np-hp-panel${resultsScrolled ? " is-results-scrolled" : ""}`} aria-label="性质预测">
       <form ref={formRef} id="np-hp-task" className="np-hp-task" noValidate onSubmit={onSubmit}>
         <section className="np-hp-selection" aria-labelledby={`${selectionId}-label`}>
-          <h2 id={`${selectionId}-label`} className="np-hp-label">预测内容</h2>
-          <div className="np-hp-selection__summary">
-            <div>
-              <strong>{summary.title}</strong>
-              <small>{summary.detail}</small>
-            </div>
+          <div className="np-hp-section-head">
+            <span className="np-hp-glyph" aria-hidden="true"><ListChecks /></span>
+            <h2 id={`${selectionId}-label`} className="np-hp-label">预测内容</h2>
+            <strong className="np-hp-badge">{summary.title}</strong>
             <button
               type="button"
-              className="np-hp-link"
+              className="np-hp-ghost"
               aria-expanded={selectionOpen}
               aria-controls={`${selectionId}-editor`}
               onClick={() => onSelectionOpenChange(!selectionOpen)}
             >
               {selectionOpen ? "收起" : "调整"}
+              <ChevronDown className={selectionOpen ? "is-flipped" : undefined} aria-hidden="true" />
             </button>
           </div>
+          {selectionOpen || (selectedProperties.length > 0 && selectedProperties.length < PREDICTABLE_PROPERTIES.length) ? (
+            <p className="np-hp-selection__detail">{summary.detail}</p>
+          ) : null}
           {!selectionOpen ? (
-            <ol className="np-hp-meter" aria-hidden="true">
-              {PREDICT_PROPERTY_CATALOG.map((property) => (
-                <li key={property.key} className={`is-${property.group}${selected.has(property.key) ? " is-on" : ""}`} />
-              ))}
-            </ol>
+            <div className="np-hp-meter" aria-hidden="true">
+              {PREDICT_PROPERTY_GROUPS.map((group) => {
+                const properties = PREDICT_PROPERTY_CATALOG.filter((property) => property.group === group.key);
+                const on = properties.filter((property) => selected.has(property.key)).length;
+                return (
+                  <div key={group.key} className={`np-hp-meter__group is-${group.key}`} style={{ flexGrow: properties.length }}>
+                    <ol>
+                      {properties.map((property) => (
+                        <li key={property.key} className={selected.has(property.key) ? "is-on" : undefined} />
+                      ))}
+                    </ol>
+                    <span>
+                      <ChannelBadge group={group.key} />
+                      <b>{GROUP_LABELS[group.key]}</b>
+                      {on === properties.length ? `${on} 项` : `${on} / ${properties.length}`}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           ) : null}
           {selectionOpen ? (
             <div id={`${selectionId}-editor`} className="np-hp-selection__editor">
@@ -435,6 +454,7 @@ export function HomopolymerPredictionPanel({
                     <legend>
                       <ChannelBadge group={group.key} />
                       {GROUP_LABELS[group.key]}
+                      <span className="np-hp-group__count">{groupSelected} / {properties.length}</span>
                       <button type="button" className="np-hp-link" onClick={() => toggleGroup(group.key)}>
                         {groupSelected === properties.length ? "取消本组" : "选择本组"}
                       </button>
@@ -446,7 +466,8 @@ export function HomopolymerPredictionPanel({
                           <label key={property.key} className={`np-hp-chip${checked ? " is-selected" : ""}`}>
                             <input type="checkbox" checked={checked} onChange={() => toggleProperty(property.key)} />
                             <span className="np-hp-chip__check" aria-hidden="true">{checked ? <Check /> : null}</span>
-                            <span>{property.label}</span>
+                            <span className="np-hp-chip__label">{property.label}</span>
+                            <small className="np-hp-chip__unit">{property.unit}</small>
                           </label>
                         );
                       })}
@@ -487,7 +508,10 @@ export function HomopolymerPredictionPanel({
           >
             {loading ? <LoaderCircle className="np-sw-spin" aria-hidden="true" /> : <Play aria-hidden="true" />}
             <span>{loading ? "重新预测" : "运行预测"}</span>
-            <kbd className="np-hp-primary__keys" aria-hidden="true">{SHORTCUT_LABEL}</kbd>
+            <span className="np-hp-primary__keys" aria-hidden="true">
+              <kbd>{SHORTCUT_MODIFIER}</kbd>
+              <kbd><CornerDownLeft /></kbd>
+            </span>
           </button>
           {structureMissing ? (
             <p className="np-hp-hint" role="alert">请先在左侧画出结构，或在 SMILES 框中输入结构。</p>
@@ -503,10 +527,11 @@ export function HomopolymerPredictionPanel({
       >
         <header className="np-hp-results__header">
           <h2 id={resultsTitleId}>
+            <span className="np-hp-glyph" aria-hidden="true"><Gauge /></span>
             预测结果
             {latestRun && !loading ? (
               <small className="np-hp-results__meta">
-                {runs.length > 1 ? <span className="np-hp-badge">第 {runNumber} 次运行</span> : null}
+                {runs.length > 1 ? <span className="np-hp-badge is-accent">第 {runNumber} 次运行</span> : null}
                 <span>{latestRun.queryTimeMs.toFixed(1)} ms</span>
               </small>
             ) : null}
@@ -554,15 +579,32 @@ export function HomopolymerPredictionPanel({
               <div className="np-hp-compare-row">
                 <label className="np-hp-compare">
                   <span>对比</span>
-                  <select
-                    value={comparison?.id ?? "none"}
-                    onChange={(event) => onComparisonChange(event.currentTarget.value === "none" ? null : Number(event.currentTarget.value))}
-                  >
-                    <option value="none">不对比</option>
-                    {comparisonOptions.map((run) => (
-                      <option key={run.id} value={run.id}>{`${formatRunTime(run.finishedAt)}  ${displaySmiles(run.smiles)}`}</option>
-                    ))}
-                  </select>
+                  <span className="np-hp-select">
+                    <span className="np-hp-select__face" aria-hidden="true">
+                      {comparison ? (
+                        <>
+                          <i className="np-hp-select__ring" />
+                          <span className="np-hp-select__time">{formatRunTime(comparison.finishedAt)}</span>
+                          <code>{displaySmiles(comparison.smiles)}</code>
+                          {comparisonTg !== null ? (
+                            <span className="np-hp-select__tg">Tg <b>{comparisonTg}</b> °C</span>
+                          ) : null}
+                        </>
+                      ) : (
+                        <span className="np-hp-select__none">不对比</span>
+                      )}
+                      <ChevronDown aria-hidden="true" />
+                    </span>
+                    <select
+                      value={comparison?.id ?? "none"}
+                      onChange={(event) => onComparisonChange(event.currentTarget.value === "none" ? null : Number(event.currentTarget.value))}
+                    >
+                      <option value="none">不对比</option>
+                      {comparisonOptions.map((run) => (
+                        <option key={run.id} value={run.id}>{`${formatRunTime(run.finishedAt)}  ${displaySmiles(run.smiles)}`}</option>
+                      ))}
+                    </select>
+                  </span>
                 </label>
                 {comparison ? (
                   <span className="np-hp-legend" aria-hidden="true">

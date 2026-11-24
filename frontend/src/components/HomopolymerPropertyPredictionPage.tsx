@@ -1,7 +1,7 @@
 import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
-import { BookOpen, Sparkles } from "lucide-react";
+import { BookOpen, Hexagon, Sparkles } from "lucide-react";
 import {
   forwardRef,
   useCallback,
@@ -44,6 +44,13 @@ type HomopolymerPropertyPredictionPageProps = {
 
 const HOMOPOLYMER_EXAMPLE_SMILES = "*CC*";
 const STRUCTURE_FACTS_HELP_ID = "np-hp-help-structure-facts";
+const STRUCTURE_EXAMPLES = HOMOPOLYMER_EXAMPLES.map((example) => ({
+  id: example.abbr,
+  label: example.abbr,
+  description: example.name,
+  smiles: example.smiles,
+  image: example.image
+}));
 const RUN_HISTORY_LIMIT = 10;
 
 function sameProperties(left: readonly PredictableProperty[], right: readonly PredictableProperty[]) {
@@ -282,8 +289,10 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
                 hasActivated3D={hasActivated3D}
                 operationBusy={operationBusy}
                 editorTitle="均聚物性质预测结构编辑器"
-                commandbarLabel="结构"
+                commandbarLabel={<><span className="np-hp-glyph" aria-hidden="true"><Hexagon /></span>结构</>}
                 clearLast
+                viewSwitch="segmented"
+                examples={STRUCTURE_EXAMPLES}
                 onLoadExample={() => canvas.loadStructure(HOMOPOLYMER_EXAMPLE_SMILES)}
                 onImportFile={(file) => canvas.importImageFile(file)}
                 onClear={() => canvas.clearCanvas()}
