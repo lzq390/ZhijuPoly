@@ -60,6 +60,16 @@ same per-instance controller. Mode methods return promises after model conversio
 and the matching UI commit. Explicit `inputFormat` survives file import, and URL
 startup imports complete before the one-time `onInit` callback.
 
+Revision r5 guards the `zoom`, `zoom-in` and `zoom-out` actions, which replay
+`editor.lastEvent` to the active tool after zooming. NexPoly's DOM ownership checks
+deliver only pointer events over the editor's own canvas, so a user who loads a
+structure from the SMILES box and opens the toolbar zoom menu has produced none.
+The select tool then read `altKey` of `undefined`: the action threw after zooming
+and the toolbar's zoom state never updated, so Zoom in/out appeared to do nothing.
+The replay now runs only when such an event exists. `src/structure/ketcherZoomActions.test.ts`
+runs both module formats' action tables; the structure browser gate uses the menu
+before touching the canvas.
+
 Readable patch fragments live in `../sdk/core-fragment.js`,
 `../sdk/editor-fragment.js`, `../sdk/macro-controller.mjs` and
 `../sdk/indigo-transport.mjs`. Their exact transformed content is verified in both

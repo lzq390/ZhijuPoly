@@ -139,6 +139,25 @@ try {
   result.readyMs = Date.now() - start;
   result.engine = await page.locator('[data-structure-editor]').getAttribute('data-editor-engine');
   result.sdk = result.engine === 'react' ? '3.8.0' : '3.7.0';
+  {
+    // The toolbar zoom menu must step the zoom before the pointer has crossed
+    // the canvas: the native editor receives only pointer events over it.
+    const ui = result.engine === "iframe" ? page.frameLocator("[data-structure-editor] iframe") : page;
+    // The 3.7 iframe also renders its hidden macromolecule toolbar.
+    const control = id => ui.getByTestId(id).filter({ visible: true });
+    const label = control("zoom-input");
+    const choose = async (item, expected) => {
+      await control("zoom-selector").click();
+      await control(item).click();
+      await label.filter({ hasText: new RegExp(`^${expected}$`) }).waitFor({ timeout: 5000 });
+      await page.keyboard.press("Escape");
+      await control(item).waitFor({ state: "hidden" });
+    };
+    assert.equal(await label.textContent(), "100%");
+    await choose("zoom-in", "110%");
+    await choose("zoom-out", "100%");
+    result.menuZoom = true;
+  }
   if (result.engine === 'react') result.nativeSettingsMenu = await verifyKetcherNativeMenu(page);
   const input = () => page.getByRole("textbox", { name: "SMILES 输入，自动同步到画板" });
   await input().fill("CCO");

@@ -1,5 +1,5 @@
 {
-  "revision": "nexpoly-3.8.0-r4-iframe-paste-r1",
+  "revision": "nexpoly-3.8.0-r5-iframe-paste-r1",
   "versions": {
     "ketcher-core": "3.8.0",
     "ketcher-macromolecules": "3.8.0",
@@ -28,7 +28,7 @@
     },
     "node_modules/ketcher-react/dist/cjs/index.js": {
       "upstream": "4f98d1a1b4a512587fd06195f70d56a72ae213e8e80d4ed8afe4f3cb1639d0e1",
-      "patched": "3588551d185b5d93574da31d602c2699c58e044cb4f3b1a800535171cb31ea97"
+      "patched": "32f91a6d2714a579629c5c089b2cc923bb6c5dab74cd009446bed80d08e103c0"
     },
     "node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js": {
       "upstream": "8d421018f398295071ed3f7073c805d5c4ee6ec699fe63c28f1579a5051caef7",
@@ -36,7 +36,7 @@
     },
     "node_modules/ketcher-react/dist/index.js": {
       "upstream": "d7d9d79208482f5a90ceaa8ac27bb9c7c821c536c14080b00dfff69d4b712abf",
-      "patched": "d49873d380f992d704cbde6234ca52f845eb6c036380c937ef5b906c8d9a13d6"
+      "patched": "37660bcd2e2f61a3326ebab1ca3a44888e37c5d0950d4d567ae7b41c00a615b2"
     },
     "node_modules/ketcher-react/dist/index.modern-c0bcdf82.js": {
       "upstream": "459ef3a39acb318006269f3eef46089eb1d596f641e29c524bc76220f4cdd570",
@@ -82,7 +82,7 @@
   "patches": {
     "patches/ketcher-core+3.8.0.patch": "05a4c5ec13da19387a7af993bf052f0f9575ee05a93693883f7747153a8d9422",
     "patches/ketcher-macromolecules+3.8.0.patch": "fcbfee92356b265141715f1b3fb8cddf0d7c71b48a5356c49511e30ab86fcc57",
-    "patches/ketcher-react+3.8.0.patch": "ff696ff6810efbcf8ea532a88012b174f58a85727df56220a6d9f431debfed01",
+    "patches/ketcher-react+3.8.0.patch": "18139364cc0f19a2eaf244567b61f4e61097f75117b64afd3272cc87da3ee078",
     "patches/ketcher-standalone+3.8.0.patch": "47863a6bb960ae42fae8610d0660eff4ce41291f08ab4f9d161051b5adebda1d"
   },
   "fragments": {
