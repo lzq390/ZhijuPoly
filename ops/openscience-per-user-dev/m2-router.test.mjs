@@ -60,6 +60,7 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
   let startupPause
   let diskAdmission, nativeOwner, forwardedCount = 0
   const checkedOwners = []
+  const cleanupCalls = []
   let repairs = 0, writes = 0, fileDeletes = 0
   let forwarded
   for (const [idx,owner] of ["test-user-a","test-user-b"].entries()) {
@@ -89,6 +90,11 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
   }
   const supervisor = await listen(net.createServer(socket => socket.once("data", async raw => {
     const r = JSON.parse(raw)
+    if (r.operation === "cleanup") {
+      cleanupCalls.push(r)
+      socket.end(JSON.stringify({ok:true,result:{entries:[],next:null}})+"\n")
+      return
+    }
     if (r.operation === "check-write") {
       checkedOwners.push(r.user_id)
       assert.deepEqual(Object.keys(r).sort(), ["environment","operation","user_id"])
@@ -173,6 +179,37 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
     assert.equal(accepted.status, 200)
     assert.deepEqual(await accepted.json(), {owner:"test-user-b"})
     assert.equal(fileDeletes, 1)
+
+    await t.test("only a current low-water handoff can browse its own cold volume", async () => {
+      const list = (session, changes={}) => fetch(quotaOrigin+"/api/workspace-cleanup/list", {
+        method:"POST", headers:{Origin:quotaOrigin, Cookie:session.cookie, "X-Nexpoly-Page":session.page,...changes},
+        body:JSON.stringify({path:"",after:""}),
+      })
+      assert.equal((await list(grant)).status,403)
+      capacityRefusal = "global_disk (workspace_disk_monitor_unavailable)"
+      const unhealthy = await exchange("no-sample","test-user-b","browser_monitor_down",18,18,30,quotaOrigin)
+      assert.equal(unhealthy.page, undefined)
+      capacityRefusal = "global_disk (workspace_disk_low_watermark)"
+      let cold
+      try {
+        cold = await exchange("cold-login","test-user-b","browser_cold_only",19,19,30,quotaOrigin)
+      } finally { capacityRefusal = undefined }
+      assert.match(cold.html, /"type":"nexpoly:openscience:cleanup"/)
+      assert.equal((await list(cold,{Cookie:other.cookie})).status,401)
+      assert.equal((await list(cold,{Origin:parent})).status,403)
+      const restricted = {Cookie:cold.cookie,"X-Nexpoly-Page":cold.page}
+      for (const path of ["/openscience-api/session","/openscience-api/global/event","/knowledge-api/documents"]) {
+        assert.equal((await fetch(quotaOrigin+path,{headers:restricted})).status,403)
+      }
+      assert.equal(cleanupCalls.length,0)
+      assert.equal((await list(cold)).status,200)
+      assert.deepEqual(cleanupCalls.map(r=>[r.environment,r.user_id,r.action,r.data]),
+        [["dev-m1","test-user-b","list",{path:"",after:""}]])
+      cold.data.revoked = true
+      await new Promise(done=>setTimeout(done,2100))
+      assert.equal((await list(cold)).status,401)
+      assert.equal(cleanupCalls.length,1)
+    })
 
     await t.test("shared disk admission covers growing routes, preserves reads and deletion, and fails closed", async () => {
       async function request(method, path) {

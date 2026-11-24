@@ -69,12 +69,19 @@ function rpc(socketPath, data, timeoutMs = 35000) {
     client.on("error", reject)
     client.on("data", chunk => {
       result += chunk
-      if (result.length > 16384) client.destroy(new Error("invalid_supervisor_reply"))
+      if (result.length > (data.operation === "cleanup" ? 65536 : 16384)) return client.destroy(new Error("invalid_supervisor_reply"))
       if (!result.includes("\n")) return
       client.end()
       try {
         const r = JSON.parse(result)
         if (!r.ok) {
+          if (data.operation === "ensure" && r.error === "workspace_capacity: global_disk (workspace_disk_low_watermark)")
+            throw new Refusal(507, "workspace_disk_low_watermark")
+          if (data.operation === "cleanup") {
+            const status = {cleanup_invalid:400, cleanup_not_found:404, cleanup_changed:409,
+              cleanup_unavailable:409, cleanup_expired:409, cleanup_busy:503}
+            if (Object.hasOwn(status,r.error)) throw new Refusal(status[r.error],r.error)
+          }
           if (data.operation === "check-write" && r.error === "workspace_disk_low_watermark")
             throw new Refusal(507, "workspace_disk_low_watermark")
           throw new Refusal(503, r.error?.includes("workspace_capacity") ? "workspace_capacity" : "workspace_unavailable")
@@ -272,7 +279,13 @@ export async function startRouter(c, loadUi = pinnedUi) {
       }
       // No page or cookie exists while waiting. A shared ensure can finish even
       // when one login expires. Recheck each waiting login on its own deadline.
-      const startup = workspace(r.workspace_user_id)
+      const startup = workspace(r.workspace_user_id).catch(error => {
+        if (error instanceof Refusal && error.message === "workspace_disk_low_watermark") {
+          if (c.quota_files === true) return {cleanupOnly:true}
+          throw new Refusal(503,"workspace_capacity")
+        }
+        throw error
+      })
       let grant = r, route
       while (!route) {
         let timer
@@ -293,7 +306,8 @@ export async function startRouter(c, loadUi = pinnedUi) {
       })
       res.setHeader("Set-Cookie", [...expired.map(name => name + "=; Max-Age=0" + cookieAttributes),
         cookieName(key) + "=" + cookie + "; Max-Age=" + Math.max(1, Math.floor(current.expires_at-Date.now()/1000)) + cookieAttributes])
-      shell(res,parent,{type:"nexpoly:openscience:ready",handoff_id:handoff,page_context:key},true)
+      shell(res,parent,{type:route.cleanupOnly ? "nexpoly:openscience:cleanup" : "nexpoly:openscience:ready",
+        handoff_id:handoff,page_context:key},true)
     } catch (e) { shell(res,parent,{type:"nexpoly:openscience:error",handoff_id:handoff,reason:e instanceof Refusal ? e.message : "workspace_unavailable"}) }
   }
   let tools, formAdapter, m4
@@ -419,8 +433,36 @@ export async function startRouter(c, loadUi = pinnedUi) {
       gate(page)
       return reply(res,200,{authorized:true,valid_until_ms:page.until})
     }
+    if (c.quota_files === true && path === "/_nexpoly/cleanup.js" && req.method === "GET")
+      return reply(res,200,await readFile(resolve(HERE,"cold-cleanup.js")),MIME[".js"])
+    if (c.quota_files === true && path === "/_nexpoly/cleanup" && req.method === "GET") {
+      const page = scope(req,url)
+      await validate(page)
+      if (!page.route.cleanupOnly) throw new Refusal(403,"route_disabled")
+      res.setHeader("Content-Security-Policy","default-src 'none'; frame-ancestors " + parents.join(" ") +
+        "; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
+      return reply(res,200,await readFile(resolve(HERE,"cold-cleanup.html")),MIME[".html"])
+    }
     if (path.startsWith("/openscience-api/") || path.startsWith("/api/") || path.startsWith("/knowledge-api/")) {
       const page = scope(req,url)
+      if (page.route.cleanupOnly) {
+        const action = /^\/api\/workspace-cleanup\/(list|read|delete)$/.exec(path)?.[1]
+        if (!action || req.method !== "POST") throw new Refusal(403,"route_disabled")
+        if (req.headers.origin !== c.public_origin || req.headers["x-nexpoly-page"] !== page.key)
+          throw new Refusal(403,"write_origin_denied")
+        let data
+        const payload = await body(req, 4096)
+        try { data = JSON.parse(payload) } catch { throw new Refusal(400,"cleanup_invalid") }
+        await validate(page)
+        gate(page)
+        if (page.clientClosed) throw new Refusal(401,"session_expired")
+        const result = await rpc(c.supervisor_socket, {operation:"cleanup",environment:c.environment,
+          user_id:page.owner,action,data,until_ms:Math.floor(page.until)})
+        await validate(page)
+        gate(page)
+        if (page.clientClosed) throw new Refusal(401,"session_expired")
+        return reply(res,200,result)
+      }
       if (m4 && (path.startsWith("/knowledge-api/") || path === "/openscience-api/m4/model/usage"))
         return m4.browser(req, res, url, page, body, c.public_origin)
       if (path.startsWith("/knowledge-api/")) throw new Refusal(403,"knowledge_disabled")

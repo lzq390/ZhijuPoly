@@ -1,18 +1,35 @@
-"""Read or release a cold workspace's project file, running as its unprivileged UID."""
+"""Access project files on a cold workspace as its unprivileged owner."""
 
-from contextlib import ExitStack
+import base64
+from contextlib import contextmanager, ExitStack
 import hashlib
+import heapq
 import json
 import os
 import stat
+import time
+
+PAGE_SIZE = 32
+READ_BYTES = 16 * 1024
 
 
-def project_file(root, path, owner, confirmation, output, max_output_bytes=None):
-    # Path is relative to files/projects and includes the project directory.
+def components(path, directory=False):
+    if path == "" and directory:
+        return []
     parts = path.split("/")
-    if len(parts) < 2 or any(not part or part.startswith(".") for part in parts):
-        raise ValueError("Expected a non-hidden project and relative project file")
-    uid = owner["uid"]
+    if (len(parts) < (1 if directory else 2) or len(path.encode()) > 2048
+            or any(not visible_name(part) for part in parts)):
+        raise ValueError("Expected a non-hidden relative project path")
+    return parts
+
+
+def visible_name(name):
+    return (bool(name) and not name.startswith(".") and "/" not in name
+            and len(os.fsencode(name)) <= 255 and all(c.isprintable() for c in name))
+
+
+@contextmanager
+def project_directory(root, parts, uid):
     if (os.getuid(), os.getgid()) != (uid, uid):
         raise ValueError("Offline file helper is not running as the workspace owner")
     flags = os.O_DIRECTORY | os.O_NOFOLLOW | os.O_RDONLY
@@ -20,39 +37,127 @@ def project_file(root, path, owner, confirmation, output, max_output_bytes=None)
         parent = os.open(root, flags)
         stack.callback(os.close, parent)
         device = os.fstat(parent).st_dev
-        for part in ["files", "projects", *parts[:-1]]:
+        for part in ["files", "projects", *parts]:
             parent = os.open(part, flags, dir_fd=parent)
             stack.callback(os.close, parent)
             info = os.fstat(parent)
             if (info.st_dev, info.st_uid, info.st_gid) != (device, uid, uid):
                 raise ValueError("Unexpected project directory owner or filesystem")
+        yield parent, device
+
+
+def regular(info, device, uid):
+    return (stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+            and (info.st_dev, info.st_uid, info.st_gid) == (device, uid, uid))
+
+
+def file_version(info):
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
+
+
+def token_for(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def project_file(root, path, owner, confirmation, output, max_output_bytes=None):
+    parts = path.split("/")
+    if len(parts) < 2 or any(not part or part.startswith(".") for part in parts):
+        raise ValueError("Expected a non-hidden project and relative project file")
+    uid = owner["uid"]
+    with project_directory(root, parts[:-1], uid) as (parent, device):
         name = parts[-1]
         fd = os.open(name, os.O_NOFOLLOW | os.O_RDONLY | os.O_NONBLOCK, dir_fd=parent)
-        source = stack.enter_context(os.fdopen(fd, "rb"))
-        before = os.fstat(fd)
-        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
-                or (before.st_dev, before.st_uid, before.st_gid) != (device, uid, uid)):
-            raise ValueError("Expected a single-link regular file owned by this workspace")
-        if output is not None and before.st_size > max_output_bytes:
-            raise ValueError("Operator destination lacks space for the complete file and its reserve")
-        digest = hashlib.sha256()
-        while block := source.read(1024 * 1024):
-            digest.update(block)
-            if output is not None:
-                output.write(block)
-        # NFS can retain an open unlinked inode under a .nfs name. The host
-        # holds the lifecycle lock and has verified the absence of clients.
-        source.close()
+        with os.fdopen(fd, "rb") as source:
+            before = os.fstat(fd)
+            if not regular(before, device, uid):
+                raise ValueError("Expected a single-link regular file owned by this workspace")
+            if output is not None and before.st_size > max_output_bytes:
+                raise ValueError("Operator destination lacks space for the complete file and its reserve")
+            digest = hashlib.sha256()
+            while block := source.read(1024 * 1024):
+                digest.update(block)
+                if output is not None:
+                    output.write(block)
+        # Close the NFS read handle before unlink so the allocation can be reclaimed.
         current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns", "st_nlink")
-        if any(getattr(current, key) != getattr(before, key) for key in fields):
+        if file_version(current) != file_version(before):
             raise ValueError("The project file changed during offline recovery")
         receipt = {**owner, "path": path, "size": before.st_size, "sha256": digest.hexdigest(),
                    "inode": before.st_ino, "ctime_ns": before.st_ctime_ns}
-        token = hashlib.sha256(json.dumps(receipt, sort_keys=True).encode()).hexdigest()
+        token = token_for(receipt)
         if confirmation:
             if token != confirmation:
                 raise ValueError("Read confirmation differs from this owner, path or file version")
             os.unlink(name, dir_fd=parent)
             os.fsync(parent)
         return {**receipt, "confirmation": token, "deleted": bool(confirmation)}
+
+
+def list_directory(parent, device, uid, at_root, after, until_ms):
+    def entries():
+        with os.scandir(parent) as listing:
+            for entry in listing:
+                check_deadline(until_ms)
+                if entry.name <= after or not visible_name(entry.name):
+                    continue
+                info = entry.stat(follow_symlinks=False)
+                if (info.st_dev, info.st_uid, info.st_gid) != (device, uid, uid):
+                    continue
+                if stat.S_ISDIR(info.st_mode):
+                    yield entry.name, "directory", None
+                elif not at_root and regular(info, device, uid):
+                    yield entry.name, "file", info.st_size
+    page = heapq.nsmallest(PAGE_SIZE + 1, entries())
+    return {"entries": [{"name": n, "kind": k, "size": s} for n, k, s in page[:PAGE_SIZE]],
+            "next": page[PAGE_SIZE - 1][0] if len(page) > PAGE_SIZE else None}
+
+
+def check_deadline(until_ms):
+    if time.time() * 1000 >= until_ms:
+        raise TimeoutError("cleanup_expired")
+
+
+def browse_file(root, owner, action, data, until_ms):
+    check_deadline(until_ms)
+    uid, path = owner["uid"], data["path"]
+    listing = action == "list"
+    parts = components(path, directory=listing)
+    with project_directory(root, parts if listing else parts[:-1], uid) as (parent, device):
+        if listing:
+            return list_directory(parent, device, uid, not parts, data["after"], until_ms)
+        name = parts[-1]
+        fd = os.open(name, os.O_NOFOLLOW | os.O_RDONLY | os.O_NONBLOCK, dir_fd=parent)
+        with os.fdopen(fd, "rb") as source:
+            before = os.fstat(fd)
+            if not regular(before, device, uid):
+                raise FileNotFoundError()
+            # NFS may allocate a new client device number on the next mount.
+            # The owner already includes the attested persistent filesystem UUID.
+            version = token_for([owner, path, file_version(before)[1:]])
+            if data.get("version", version) != version:
+                raise FileExistsError("cleanup_changed")
+            if action == "read":
+                offset = data["offset"]
+                source.seek(offset)
+                content = source.read(READ_BYTES)
+                if file_version(os.fstat(fd)) != file_version(before):
+                    raise FileExistsError("cleanup_changed")
+                if offset + len(content) < before.st_size:
+                    # Keep UTF-8 text intact at page boundaries. Binary data is
+                    # still returned byte for byte and can be displayed as hex.
+                    try:
+                        content.decode("utf-8")
+                    except UnicodeDecodeError as error:
+                        if error.reason == "unexpected end of data":
+                            content = content[:error.start]
+                end = offset + len(content)
+                return {"content": base64.b64encode(content).decode("ascii"), "size": before.st_size,
+                        "version": version, "next": end if end < before.st_size else None}
+        if action != "delete" or data.get("version") != version:
+            raise ValueError("Expected a confirmed deletion")
+        if file_version(os.stat(name, dir_fd=parent, follow_symlinks=False)) != file_version(before):
+            raise FileExistsError("cleanup_changed")
+        check_deadline(until_ms)
+        os.unlink(name, dir_fd=parent)
+        os.fsync(parent)
+        return {"deleted": True}

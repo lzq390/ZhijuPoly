@@ -1,11 +1,13 @@
 """Cold recovery must retain the exact owner and reviewed version of a file."""
 
+import base64
 import hashlib
 import io
 import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -29,6 +31,51 @@ class OfflineFileTest(unittest.TestCase):
         self.file = self.folder / "release.txt"
         self.file.write_bytes(b"user content\x00\n")
         self.owner = {"uid": os.getuid(), "user_id": "test-user-a", "filesystem_uuid": "disk-a"}
+
+    def browse(self, action, **data):
+        return client.browse_file(self.root, self.owner, action, data, time.time() * 1000 + 20_000)
+
+    def test_paged_directory_hides_links_and_internal_files(self):
+        self.assertEqual(self.browse("list", path="", after="")["entries"],
+                         [{"name": "same-project", "kind": "directory", "size": None}])
+        (self.folder / ".state").touch()
+        (self.folder / "shortcut").symlink_to(self.file)
+        (self.folder / "subfolder").mkdir()
+        for i in range(40):
+            (self.folder / f"item{i:02d}").touch()
+        first = self.browse("list", path="same-project", after="")
+        second = self.browse("list", path="same-project", after=first["next"])
+        names = [row["name"] for row in first["entries"] + second["entries"]]
+        self.assertEqual(names, sorted([f"item{i:02d}" for i in range(40)] + ["release.txt", "subfolder"]))
+        self.assertIsNone(second["next"])
+
+    def test_paged_read_and_delete_are_bound_to_file_version_owner_and_deadline(self):
+        content = b"a" * (client.READ_BYTES - 1) + "中文".encode()
+        self.file.write_bytes(content)
+        first = self.browse("read", path=self.path, offset=0)
+        second = self.browse("read", path=self.path, offset=first["next"], version=first["version"])
+        self.assertEqual(base64.b64decode(second["content"]).decode(), "中文")
+        self.assertEqual(base64.b64decode(first["content"]) + base64.b64decode(second["content"]), content)
+        self.assertIsNone(second["next"])
+        data = {"path": self.path, "version": first["version"]}
+        with self.assertRaises(FileExistsError):
+            client.browse_file(self.root, {**self.owner, "user_id": "test-user-b"}, "delete", data, time.time()*1000+2000)
+        with self.assertRaises(TimeoutError):
+            client.browse_file(self.root, self.owner, "delete", data, 0)
+        self.file.write_bytes(b"replacement")
+        with self.assertRaises(FileExistsError):
+            self.browse("delete", **data)
+        self.assertEqual(self.file.read_bytes(), b"replacement")
+        self.assertEqual(self.browse("delete", path=self.path, version=self.browse("read", path=self.path, offset=0)["version"]),
+                         {"deleted": True})
+        with self.assertRaises(FileNotFoundError):
+            self.browse("delete", **data)
+
+    def test_public_contract_has_no_owner_selector(self):
+        for action, data in [("list", {"path": "", "after": "", "user_id": "test-user-b"}),
+                             ("delete", {"path": self.path}), ("read", {"path": self.path, "offset": -1})]:
+            with self.subTest(action=action), self.assertRaisesRegex(ValueError, "cleanup_invalid"):
+                recovery.web_cleanup(self.root, "test-user-a", action, data, int(time.time()*1000)+2000)
 
     def test_export_verify_copy_and_delete_only_the_version_read_by_this_owner(self):
         output = io.BytesIO()

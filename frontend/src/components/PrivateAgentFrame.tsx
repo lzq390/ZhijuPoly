@@ -29,6 +29,7 @@ export function PrivateAgentFrame({ url, iframeRef, onLoad, onVerified, onUnavai
   const [name] = useState(() => "nexpoly-agent-" + randomId());
   const [destination, setDestination] = useState("");
   const [error, setError] = useState("");
+  const [cleanupUrl, setCleanupUrl] = useState("");
   const [attempt, setAttempt] = useState(0);
   const unavailable = useRef(onUnavailable);
   unavailable.current = onUnavailable;
@@ -43,12 +44,14 @@ export function PrivateAgentFrame({ url, iframeRef, onLoad, onVerified, onUnavai
     let released = false;
     let visibilityNonce = "";
     let active = true;
+    let cleanupOnly = false;
     const fail = (message: string) => {
       if (!active) return;
       active = false;
       controller.abort();
       clearTimeout(timeout);
       setError(message);
+      setCleanupUrl("");
       unavailable.current?.();
     };
     const timedOut = () => fail("工作区启动超时，请重试。");
@@ -60,13 +63,23 @@ export function PrivateAgentFrame({ url, iframeRef, onLoad, onVerified, onUnavai
       if (context && data.type === "nexpoly:openscience:verified" && data.page_context === context &&
           visibilityNonce && data.nonce === visibilityNonce && !document.hidden) {
         visibilityNonce = "";
-        verified.current?.();
+        if (!cleanupOnly) verified.current?.();
         return;
       }
       if (context && data.type === "nexpoly:openscience:expired" && data.page_context === context) {
         fail("工作区授权已失效，请重新验证。");
       }
       if (context || !handoff || handoff !== data.handoff_id) return;
+      if (data.type === "nexpoly:openscience:cleanup" && typeof data.page_context === "string" && data.page_context) {
+        context = data.page_context;
+        cleanupOnly = true;
+        clearTimeout(timeout);
+        const target = new URL("/_nexpoly/cleanup", origin);
+        target.searchParams.set("np_page", context);
+        setCleanupUrl(target.href);
+        unavailable.current?.();
+        return;
+      }
       if (data.type === "nexpoly:openscience:error") {
         if (data.reason === "workspace_capacity") fail("工作区容量已满，请稍后重试。");
         else if (data.reason === "workspace_timeout") timedOut();
@@ -151,16 +164,21 @@ export function PrivateAgentFrame({ url, iframeRef, onLoad, onVerified, onUnavai
     };
   }, [attempt, name, url]);
   return <>
-    {error ? <div role="alert">{error} <button onClick={() => {
-      setError(""); setDestination(""); setAttempt(value => value + 1);
-    }}>重试</button></div> : <>
-      {!destination && <div role="status">正在启动个人工作区…</div>}
+    {(error || cleanupUrl) && <div role="alert">{error || "工作区容量已满，请稍后重试。"}
+      {cleanupUrl && !destination && <button onClick={() => setDestination(cleanupUrl)}>清理我的项目文件</button>}
+      {" "}<button onClick={() => {
+        setError(""); setDestination(""); setCleanupUrl(""); setAttempt(value => value + 1);
+      }}>重试</button></div>}
+    {!error && <>
+      {!destination && !cleanupUrl && <div role="status">正在启动个人工作区…</div>}
       <iframe name={name} ref={element => {
         frame.current = element;
         if (typeof iframeRef === "function") iframeRef(element);
         else if (iframeRef) iframeRef.current = element;
-      }} title="智聚万物智能体工作台" hidden={!destination} referrerPolicy="origin"
-        src={destination || "about:blank"} onLoad={() => { if (destination) { verifyLoadedFrame.current(); onLoad?.(); } }}
+      }} title={cleanupUrl ? "我的项目文件" : "智聚万物智能体工作台"} hidden={!destination} referrerPolicy="origin"
+        src={destination || "about:blank"} onLoad={() => {
+          if (destination) { verifyLoadedFrame.current(); if (!cleanupUrl) onLoad?.(); }
+        }}
         className="np-member-conversation__workspace block w-full border-0 bg-white" />
     </>}
   </>;

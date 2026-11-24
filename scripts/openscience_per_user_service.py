@@ -12,16 +12,18 @@ import subprocess
 import sys
 import threading
 from openscience_per_user_dev import DEFAULT_READY_SECONDS, Registry
+from openscience_m5_offline_file import web_cleanup
 
 
 MANAGER = Path(__file__).with_name("openscience_per_user_dev.py")
 WORKSPACE_KEYS = {"operation", "environment", "user_id"}
 OPERATIONS = {"ensure", "status", "stop", "touch", "begin", "end", "check-write"}
-MAX_REQUEST = 2048
+MAX_REQUEST = 8192
 # Life-cycle work is serialized in the registry; disk samples are serialized in
 # the guest. Queue peers before forking, with a separate worker for each.
 LIFECYCLE_WORKER = threading.Lock()
 WRITE_CHECK_WORKER = threading.Lock()
+CLEANUP_WORKERS = threading.BoundedSemaphore(2)
 
 
 def ensure_timeout_seconds(root):
@@ -49,6 +51,15 @@ def manager(root, *args):
 
 
 def dispatch(root, request):
+    if isinstance(request, dict) and request.get("operation") == "cleanup":
+        if request.keys() != WORKSPACE_KEYS | {"action", "data", "until_ms"} or request["environment"] != "dev-m1":
+            raise ValueError("cleanup_invalid")
+        if not CLEANUP_WORKERS.acquire(blocking=False):
+            raise ValueError("cleanup_busy")
+        try:
+            return web_cleanup(root, request["user_id"], request["action"], request["data"], request["until_ms"])
+        finally:
+            CLEANUP_WORKERS.release()
     if not isinstance(request, dict) or not all(isinstance(value, str) for value in request.values()):
         raise ValueError("Expected named string arguments")
     op = request.get("operation")

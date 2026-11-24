@@ -100,3 +100,22 @@ it("preserves a cached tab and releases its own page on unload once", async () =
       new URLSearchParams({page_context: "tab-a"}));
   } finally { vi.unstubAllGlobals(); }
 });
+
+it("opens the scoped cleanup document on request and clears it on expiry", async () => {
+  issue.mockResolvedValue(ticket());
+  const submitted = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+  const verified = vi.fn();
+  render(<PrivateAgentFrame url={origin} onVerified={verified} />);
+  const frame = screen.getByTitle("智聚万物智能体工作台") as HTMLIFrameElement;
+  await waitFor(() => expect(submitted).toHaveBeenCalledOnce());
+  fireEvent(window, new MessageEvent("message", {origin, source:frame.contentWindow,
+    data:{type:"nexpoly:openscience:cleanup", handoff_id:"current", page_context:"cold-page"}}));
+  expect(frame.hidden).toBe(true);
+  fireEvent.click(screen.getByRole("button", {name:"清理我的项目文件"}));
+  expect(frame.src).toBe(origin + "/_nexpoly/cleanup?np_page=cold-page");
+  fireEvent(window, new MessageEvent("message", {origin, source:frame.contentWindow,
+    data:{type:"nexpoly:openscience:expired", page_context:"cold-page"}}));
+  expect(screen.queryByTitle("我的项目文件")).toBeNull();
+  expect(screen.queryByRole("button",{name:"清理我的项目文件"})).toBeNull();
+  expect(verified).not.toHaveBeenCalled();
+});
