@@ -183,9 +183,11 @@ async function fixtureTurn(user, conversation, request) {
       assert.equal(current.status, 200);
       const state = current.value[conversation]?.type ?? "idle";
       timing.last_native_session_state = state;
-      if (state === "idle") {
+      const completedAt = terminal.info.time.completed;
+      if (state === "idle" && Number.isFinite(completedAt) && completedAt > 0) {
+        assert.equal(terminal.info.finish, "stop", "The deterministic adapter turn must finish normally");
         timing.finish = terminal.info.finish;
-        timing.completion_timestamp_present = Boolean(terminal.info.time.completed);
+        timing.completion_timestamp_present = true;
         timing.completed_read_ms = Date.now() - started;
         console.log(user.tag, request.tool, JSON.stringify(timing));
         return parts;

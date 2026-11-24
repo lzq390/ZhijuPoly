@@ -1,0 +1,560 @@
+{
+  "status": "passed_dev_m1_two_owners",
+  "local_date": "2026-11-24",
+  "scope": "Dedicated dev-m1 quota clones and isolated web stack, November images differ by build label only",
+  "images": {
+    "candidate": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+    "rollback": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+    "gateway": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+    "adapters": {
+      "polytao": "sha256:72eca12668d3ee9d03969d2711c750067431c26c31f95811eb9ec5c3ec7d862d",
+      "retrosynthesis": "sha256:afc71c6ba92bb8595d177f04c33fb01dcf26ad9d40f9f6c19dc67c536e0fa5ed"
+    },
+    "both_running_candidates_inspected": true,
+    "uninstrumented_prompt_overlay_sha256": "5178764602a1d895a0feee98360a2f24c6f6e51e97b985dec2157aecbccc6a16"
+  },
+  "storage": {
+    "default_slots_attribute_invalidation_both_adapter_history_reads_reached_150s_deadline": true,
+    "default_slots_attribute_invalidation_longest_traced_read_or_list_ms": {
+      "a": 158689,
+      "b": 170547
+    },
+    "original_first_listing_after_rename": [
+      "keep.txt",
+      "old.txt"
+    ],
+    "attribute_invalidation_with_dir_chunks_first_listing_after_unlink": {
+      "plain": "ESTALE",
+      "dirents": "ENOENT"
+    },
+    "nfs_minor_version": 1,
+    "slot_table_size": 1,
+    "dir_chunk": 0,
+    "attr_expiration_time": 0,
+    "cold_mounts": {
+      "dir": {
+        "cold_mounts": 4,
+        "correct_names_and_bytes": 4
+      },
+      "unlink": {
+        "cold_mounts": 4,
+        "correct_names_and_bytes": 4
+      }
+    },
+    "six_readers_same_owner_notebook_sha256": {
+      "earlier_profile": {
+        "status": "passed",
+        "reads": 96,
+        "elapsed_ms": 781,
+        "slowest_ms": 178
+      },
+      "final_profile": {
+        "status": "passed",
+        "reads": 96,
+        "elapsed_ms": 1079,
+        "slowest_ms": 270
+      }
+    },
+    "retained_upgrade": {
+      "initial_dev_driver_sha256": "821bebc34f3746533fab68454ec99236af4a2af7833585234b0880babbcaeade",
+      "equivalent_checked_in_driver_sha256": "33be08374d79a495c90efdf8cccb9db9c208e5ca08f5336700ff348fa12ad9cf",
+      "observed_old_config_sha256": "0bcd53b47d3453d4f058bf15dd6b218d6de742a33748d626fbfcd6712e846f45",
+      "verified_new_driver_sha256": "744329b9c4cf2d9869c3eac09ece7ddad9953341862874b8f4eb0e9c74a9a7fb",
+      "verified_new_config_sha256": "7186029b31d09aa66f6973a666a0a7658459616b2873c8bc7dfe8815c9e41283",
+      "repeat_start_same_process_and_relay": true
+    }
+  },
+  "adapters": {
+    "polytao": {
+      "status": "passed",
+      "private_drafts": {
+        "a": {
+          "foreign_form_status": 403,
+          "foreign_edit_status": 403,
+          "foreign_confirm_status": 403,
+          "foreign_tool": "DRAFT_NOT_FOUND"
+        },
+        "b": {
+          "foreign_form_status": 403,
+          "foreign_edit_status": 403,
+          "foreign_confirm_status": 403,
+          "foreign_tool": "DRAFT_NOT_FOUND"
+        }
+      },
+      "wrong_login_confirmation": 403,
+      "model_only_confirmation_created_job": false,
+      "limits": {
+        "a_second_login": 429,
+        "b_accepted": true,
+        "a_still_limited_after_b": 429,
+        "elapsed_ms": 44798,
+        "a_extra_job": null
+      },
+      "post_accept_wrong_login": 403,
+      "owners": {
+        "a": {
+          "confirmation": {
+            "lost_reply_http": 503,
+            "replayed": true,
+            "receipts": 1,
+            "clicked_card": true
+          },
+          "continuation": {
+            "recovery_continuation": "started",
+            "repeated_continuation": "existing",
+            "continued_by_user": false
+          },
+          "result": {
+            "native_owner": 200,
+            "native_other": 404,
+            "foreign_tool": "JOB_NOT_FOUND",
+            "result_status": "completed",
+            "candidates": 1,
+            "result_sha256": "d0131c81d477d1878a6942d3518dcfd37cb0bd5146822f9d50b9391eb890dcc7",
+            "own_usage_records": 1,
+            "own_usage_attempts": 1,
+            "foreign_usage_records": 0
+          },
+          "ledger": {
+            "original_login_confirmed": true,
+            "native_result_matches": true,
+            "native_submissions": 1,
+            "successful_receipt_lookups": 1,
+            "authorized_starts": 1,
+            "settled_charges": 1,
+            "completed_usage_attempts": 1,
+            "accepted_journal_receipts": 1
+          }
+        },
+        "b": {
+          "confirmation": {
+            "lost_reply_http": 503,
+            "replayed": true,
+            "receipts": 1,
+            "clicked_card": true
+          },
+          "continuation": {
+            "recovery_continuation": "started",
+            "repeated_continuation": "existing",
+            "continued_by_user": false
+          },
+          "result": {
+            "native_owner": 200,
+            "native_other": 404,
+            "foreign_tool": "JOB_NOT_FOUND",
+            "result_status": "completed",
+            "candidates": 1,
+            "result_sha256": "d0b68fcb201557cb4213d215443d4d757eef7d5acf5c275cfd39462f6262647e",
+            "own_usage_records": 1,
+            "own_usage_attempts": 1,
+            "foreign_usage_records": 0
+          },
+          "ledger": {
+            "original_login_confirmed": true,
+            "native_result_matches": true,
+            "native_submissions": 1,
+            "successful_receipt_lookups": 1,
+            "authorized_starts": 1,
+            "settled_charges": 1,
+            "completed_usage_attempts": 1,
+            "accepted_journal_receipts": 1
+          }
+        }
+      }
+    },
+    "retrosynthesis": {
+      "status": "passed",
+      "private_drafts": {
+        "a": {
+          "foreign_form_status": 403,
+          "foreign_edit_status": 403,
+          "foreign_confirm_status": 403,
+          "foreign_tool": "DRAFT_NOT_FOUND"
+        },
+        "b": {
+          "foreign_form_status": 403,
+          "foreign_edit_status": 403,
+          "foreign_confirm_status": 403,
+          "foreign_tool": "DRAFT_NOT_FOUND"
+        }
+      },
+      "wrong_login_confirmation": 403,
+      "model_only_confirmation_created_job": false,
+      "limits": {
+        "a_second_login": 429,
+        "b_accepted": true,
+        "a_still_limited_after_b": 429,
+        "elapsed_ms": 48342,
+        "a_extra_job": null
+      },
+      "post_accept_wrong_login": 403,
+      "owners": {
+        "a": {
+          "confirmation": {
+            "lost_reply_http": 503,
+            "replayed": true,
+            "receipts": 1,
+            "clicked_card": true
+          },
+          "continuation": {
+            "recovery_continuation": "started",
+            "repeated_continuation": "existing",
+            "continued_by_user": false
+          },
+          "result": {
+            "native_owner": 200,
+            "native_other": 404,
+            "foreign_tool": "JOB_NOT_FOUND",
+            "result_status": "completed",
+            "candidates": 1,
+            "result_sha256": "145bad8b6d301d6f1e9c6af5ec64fb6f6d6f28144dda7c69e182a0650bf32871",
+            "own_usage_records": 1,
+            "own_usage_attempts": 1,
+            "foreign_usage_records": 0
+          },
+          "ledger": {
+            "original_login_confirmed": true,
+            "native_result_matches": true,
+            "native_submissions": 1,
+            "successful_receipt_lookups": 1,
+            "authorized_starts": 1,
+            "settled_charges": 1,
+            "completed_usage_attempts": 1,
+            "accepted_journal_receipts": 1
+          }
+        },
+        "b": {
+          "confirmation": {
+            "lost_reply_http": 503,
+            "replayed": true,
+            "receipts": 1,
+            "clicked_card": true
+          },
+          "continuation": {
+            "recovery_continuation": "started",
+            "repeated_continuation": "existing",
+            "continued_by_user": false
+          },
+          "result": {
+            "native_owner": 200,
+            "native_other": 404,
+            "foreign_tool": "JOB_NOT_FOUND",
+            "result_status": "completed",
+            "candidates": 1,
+            "result_sha256": "4fdd1098833c3111f666efccd502018ea87c8987aca4d46e1e23a91925d79831",
+            "own_usage_records": 1,
+            "own_usage_attempts": 1,
+            "foreign_usage_records": 0
+          },
+          "ledger": {
+            "original_login_confirmed": true,
+            "native_result_matches": true,
+            "native_submissions": 1,
+            "successful_receipt_lookups": 1,
+            "authorized_starts": 1,
+            "settled_charges": 1,
+            "completed_usage_attempts": 1,
+            "accepted_journal_receipts": 1
+          }
+        }
+      }
+    }
+  },
+  "native_tool_turns": {
+    "owners": {
+      "a": {
+        "turns": 12,
+        "completed_and_idle": 12,
+        "turns_with_tool_result": 10,
+        "first_tool_result_read_ms_max": 41972,
+        "completed_read_ms_max": 54941
+      },
+      "b": {
+        "turns": 8,
+        "completed_and_idle": 8,
+        "turns_with_tool_result": 8,
+        "first_tool_result_read_ms_max": 42630,
+        "completed_read_ms_max": 55376
+      }
+    },
+    "by_tool": {
+      "prepare_polytao_generation": 3,
+      "get_polytao_draft": 2,
+      "confirm_polytao_generation": 1,
+      "get_polytao_job": 4,
+      "prepare_monomer_retrosynthesis": 3,
+      "get_retrosynthesis_draft": 2,
+      "confirm_monomer_retrosynthesis": 1,
+      "get_retrosynthesis_job": 4
+    },
+    "total": 20,
+    "new_native_operations": 4,
+    "other_owners_delta": {
+      "logins": 0,
+      "dft_jobs": 0,
+      "quota_events": 0,
+      "usage_events": 0,
+      "usage_attempts": 0,
+      "tool_operations": 0,
+      "quota_operations": 0,
+      "request_observations": 0
+    }
+  },
+  "same_candidate_gateway_model_and_knowledge": {
+    "a": {
+      "dft": {
+        "own_job_listed": true,
+        "foreign_job_listed": false,
+        "foreign_status": 404,
+        "foreign_result": 404,
+        "result_file_other_http": [
+          404,
+          404,
+          404
+        ],
+        "bundle_other_http": 404,
+        "ledger": {
+          "dft_authorized_attempts": 1,
+          "dft_completed_usage_attempts": 1,
+          "available_artifacts": 3,
+          "qualified_native_operations": {
+            "predict": 1,
+            "polymerization": 1,
+            "monomer_dft": 1
+          }
+        }
+      },
+      "model": {
+        "model": "qwen2.5-7b",
+        "protocol": "chat.completions",
+        "foreign_usage": 0,
+        "actual_input_tokens": 9343,
+        "actual_output_tokens": 12,
+        "matching_provider_receipts": 1
+      },
+      "knowledge": {
+        "foreign_marker_web_hits": 0,
+        "foreign_marker_mcp_hits": 0,
+        "own_download_matches": true,
+        "web_mcp_citation_matches": true,
+        "visible_search_panel": {
+          "common_term_visible_hits": 1,
+          "source_opened": true,
+          "source_text_matches": true,
+          "other_term_visible_hits": 0
+        },
+        "other_login_http": {
+          "list_documents": 404,
+          "document": 404,
+          "download": 404,
+          "citation": 404
+        }
+      }
+    },
+    "b": {
+      "dft": {
+        "own_job_listed": true,
+        "foreign_job_listed": false,
+        "foreign_status": 404,
+        "foreign_result": 404,
+        "result_file_other_http": [
+          404,
+          404,
+          404
+        ],
+        "bundle_other_http": 404,
+        "ledger": {
+          "dft_authorized_attempts": 1,
+          "dft_completed_usage_attempts": 1,
+          "available_artifacts": 3,
+          "qualified_native_operations": {
+            "predict": 1,
+            "polymerization": 1,
+            "monomer_dft": 1
+          }
+        }
+      },
+      "model": {
+        "model": "qwen2.5-7b",
+        "protocol": "responses",
+        "foreign_usage": 0,
+        "actual_input_tokens": 9353,
+        "actual_output_tokens": 12,
+        "matching_provider_receipts": 1
+      },
+      "knowledge": {
+        "foreign_marker_web_hits": 0,
+        "foreign_marker_mcp_hits": 0,
+        "own_download_matches": true,
+        "web_mcp_citation_matches": true,
+        "visible_search_panel": {
+          "common_term_visible_hits": 1,
+          "source_opened": true,
+          "source_text_matches": true,
+          "other_term_visible_hits": 0
+        },
+        "other_login_http": {
+          "list_documents": 404,
+          "document": 404,
+          "download": 404,
+          "citation": 404
+        }
+      }
+    }
+  },
+  "rollback": {
+    "browser": "153.0.8010.12",
+    "concurrent_login_to_frame_ms": {
+      "test-user-a": 25988,
+      "test-user-b": 44787
+    },
+    "files_panel": {
+      "test-user-a": {
+        "cold_listing": 200,
+        "created_listing": 200,
+        "created_sha256": "b2c55caf22b58bfb9026543153d555dc18b2895b74104b3a6a0c42f72643c36b",
+        "delete_button_status": 200,
+        "deleted_listing": 200,
+        "notebook_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5"
+      },
+      "test-user-b": {
+        "cold_listing": 200,
+        "created_listing": 200,
+        "created_sha256": "bce6ffc94155c04363b160be91a0c6fa37d1bf435c0804e0a395f6429e84eceb",
+        "delete_button_status": 200,
+        "deleted_listing": 200,
+        "listing_after_other_owner_delete": 200,
+        "notebook_sha256": "703ebd319d006315255fb22029f434e34e1bd580ab0ec0a285b2bb9a9fbc5c8a",
+        "sha256_after_other_owner_delete": "bce6ffc94155c04363b160be91a0c6fa37d1bf435c0804e0a395f6429e84eceb"
+      }
+    },
+    "retained_candidate_turns": {
+      "a": {
+        "completed_tool_history": true,
+        "foreign_sessions": 0,
+        "model_answer_sha256": "1a43faca80444a9bccf76e3f30c106be0ab3c0f613292e03d3f34f67eb6c7676",
+        "own_sessions": 2
+      },
+      "b": {
+        "completed_tool_history": true,
+        "foreign_sessions": 0,
+        "model_answer_sha256": "7674ea81da5b4da3095229916cc6080c9ad7ee1fcf0fd85c528642b78c17cffd",
+        "own_sessions": 2
+      }
+    },
+    "quota": {
+      "a_full": {
+        "code": "workspace_quota_exceeded",
+        "original_read_after_failed_save": true,
+        "save_status": 507
+      },
+      "b_while_a_full": {
+        "save_status": 200,
+        "a_still_full_status": 507
+      },
+      "a_recovered": {
+        "delete_status": 200,
+        "repeat_delete_status": 404,
+        "same_save_retried": true,
+        "save_status": 200
+      },
+      "a_kernel_used_bytes": 1999998976
+    },
+    "retained_original_private_volumes_verified": true,
+    "repeat": {
+      "concurrent_login_to_frame_ms": {
+        "test-user-a": 25960,
+        "test-user-b": 44695
+      },
+      "files_panel": {
+        "test-user-a": {
+          "cold_listing": 200,
+          "created_listing": 200,
+          "created_sha256": "62d539aea979de39ee7e64ae184c5028122ccd1c691630f500e3642d90d13c91",
+          "delete_button_status": 200,
+          "deleted_listing": 200,
+          "notebook_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5"
+        },
+        "test-user-b": {
+          "cold_listing": 200,
+          "created_listing": 200,
+          "created_sha256": "56e63f72798b1b7bfb01d4d077588899f6e61f561bdb26f8b0e96ec348ecaaa1",
+          "delete_button_status": 200,
+          "deleted_listing": 200,
+          "listing_after_other_owner_delete": 200,
+          "notebook_sha256": "703ebd319d006315255fb22029f434e34e1bd580ab0ec0a285b2bb9a9fbc5c8a",
+          "sha256_after_other_owner_delete": "56e63f72798b1b7bfb01d4d077588899f6e61f561bdb26f8b0e96ec348ecaaa1"
+        }
+      },
+      "a_full_http": 507,
+      "b_while_a_full_http": 200,
+      "a_after_delete_http": 200,
+      "retained_candidate_conversations_and_model_hashes_match_first_run": true,
+      "per_owner_ledger_fingerprint_matches_candidate": true,
+      "fixtures_removed": true
+    }
+  },
+  "final": {
+    "status": "parked",
+    "pool_normal_before_shutdown": true,
+    "last_alert_sequence": 14,
+    "raw_disk_sha256": {
+      "m5-a": "d2dce03cd2200971ad461729d1ebceae5bdf87df97dc8c74387ab85046418255",
+      "m5-b": "b34014728e2deb8722b017ae15640eaddcce96ef9b8aa57bef6411868d74e8c5",
+      "m5-backup": "6014640442a913f65006e9cbfbe43aaeabcee06f41e39845298993bebd948f7f",
+      "m5-restore-a": "d0dbe48e97dee470b19ff2197825d273f4d93e83bb16ffabcf46bd9a30f03eb4",
+      "m5-restore-b": "68c30b602c88b03293eb861b62141cf1cf0ed2539d83e2c169862249ece50806"
+    },
+    "original_m1_registry_sha256": "83274cac893edfc08a000af90e1410bb2e4190b4413f5c4a5774d36cc44f4fff",
+    "retained_volume_holders": {
+      "dst-a": [],
+      "dst-b": [],
+      "src-a": [],
+      "src-b": []
+    },
+    "guest_stopped": true,
+    "relay_closed": true,
+    "ssh_closed": true,
+    "workspace_states": {
+      "test-user-a": {
+        "state": "recycled",
+        "uid": 58161656,
+        "hard_bytes": 2000000000,
+        "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86"
+      },
+      "test-user-b": {
+        "state": "recycled",
+        "uid": 43620582,
+        "hard_bytes": 2000000000,
+        "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190"
+      }
+    },
+    "export_driver_sha256": "744329b9c4cf2d9869c3eac09ece7ddad9953341862874b8f4eb0e9c74a9a7fb",
+    "export_config_sha256": "7186029b31d09aa66f6973a666a0a7658459616b2873c8bc7dfe8815c9e41283",
+    "repeat_start_same_process_and_relay": true,
+    "ledger_snapshots_equal": true
+  },
+  "local_regression": {
+    "python": 184,
+    "node_routing_and_adapter_reporting": 12,
+    "adapter_cards": 22,
+    "frontend": 25,
+    "total": 243
+  },
+  "report_sha256": {
+    "adapters": "b5c891e56076d83297e2e89c93dd489cd621cf066a3dee7d1005bb614e50c37a",
+    "m3": "9a1eebbb3c2b9a6e3772b9e1491ff23a541c6ee07b889c2502629e88f8f1035e",
+    "m4": "363e403c9eb35ac98e719a01827a6dc5203f65477f18a29d9863830f1ae9ed10",
+    "rollback": "04e6ecc716974a2814f43cae4c035ecdec2276e141aa0581764efac005589394",
+    "candidate_owner_ledgers": "64408220ad430d5a7ae2b7ab31ed6c64d4cb362cbd1cd2e88fa82a4d3c36ddfe",
+    "rollback_owner_ledgers": "64408220ad430d5a7ae2b7ab31ed6c64d4cb362cbd1cd2e88fa82a4d3c36ddfe",
+    "second_cold_rollback": "022ead3c998e5ef2ef9fffca6fbb94d2ab47ef335859c7217e4ed3c6ea830c1b"
+  },
+  "remaining_gates": [
+    "target deployment storage and alert delivery",
+    "cross-host restore",
+    "cold-owner web cleanup",
+    "capacity and cold-start P95 for the proposed concurrency",
+    "new executable or data format requires release-specific rollback proof"
+  ]
+}

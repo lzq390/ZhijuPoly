@@ -167,7 +167,7 @@ async function removeFile(frame, release, nextFile = notebook) {
   assert.equal(deleted.status(), 200);
   // The editor consumes the authenticated receipt before dismissing its
   // dialog. Verify the persisted effect from a new, visible file listing.
-  stage("A checks the deletion receipt and refreshed project file list");
+  stage("Check the deletion receipt and refreshed project file list");
   await dialog.waitFor({state: "detached"});
   const files = await projectFileList(frame);
   await refreshProjectFileList(frame, files);
@@ -200,6 +200,61 @@ async function rollbackRead(frame, expected, filename = notebook) {
   assert.equal(r.status, 200);
   assert.equal(r.body.content, expected, "Rollback file must match its owner's retained bytes");
   delete report.last_file_check;
+}
+
+async function verifyRollbackPanels(people) {
+  const name = "m5-rb-" + runId + "-panel.txt";
+  const content = user => "Private Files panel " + runId + " " + user + "\n";
+  const observed = Object.fromEntries(users.map(user => [user, {}]));
+  report.stages.files_panels = observed;
+  async function refresh(index, present, step) {
+    const frame = people[index].f;
+    await frame.page().bringToFront();
+    const panel = await projectFileList(frame);
+    const pathBar = panel.locator('input[placeholder="/absolute/path"]');
+    if (await pathBar.inputValue() !== project) {
+      await pathBar.fill(project);
+      await pathBar.press("Enter");
+    }
+    const response = await refreshProjectFileList(frame, panel);
+    const rows = await response.json();
+    const hasFile = target => rows.some(row => row.name === target && row.absolute === project + "/" + target);
+    assert.ok(hasFile(notebook), "Refresh lost the retained notebook");
+    assert.ok(hasFile("m5-rb-" + runId + "-edit.txt"), "Refresh lost the ext4 file created while this owner was offline");
+    assert.equal(hasFile(name), present, "The listing must reflect this owner's last write or deletion");
+    await fileRow(panel, name).waitFor({state: present ? "visible" : "detached"});
+    observed[users[index]][step] = response.status();
+  }
+  async function clickAndRead(index, target, value, step) {
+    const frame = people[index].f;
+    await selectProjectFile(frame, await projectFileList(frame), target);
+    await readVisible(frame, value, target);
+    observed[users[index]][step] = sha(value);
+  }
+  for (const [i, {f}] of people.entries()) {
+    stage("Refresh the cold project Files panel for " + users[i]);
+    activePage = f.page();
+    await refresh(i, false, "cold_listing");
+    await clickAndRead(i, notebook, updated(users[i]), "notebook_sha256");
+    stage("Create and open the private same-name file for " + users[i]);
+    const result = await rollbackFile(f, "PUT", name, content(users[i]));
+    assert.equal(result.status, 200);
+    await refresh(i, true, "created_listing");
+    await clickAndRead(i, name, content(users[i]), "created_sha256");
+  }
+  for (const [i, {f}] of people.entries()) {
+    stage("Refresh after deletion and verify the other owner's file for " + users[i]);
+    activePage = f.page();
+    await activePage.bringToFront();
+    if (i === 1) {
+      await refresh(i, true, "listing_after_other_owner_delete");
+      await clickAndRead(i, name, content(users[i]), "sha256_after_other_owner_delete");
+    }
+    const deleted = await removeFile(f, name, notebook);
+    assert.deepEqual(await deleted.json(), {deleted: true});
+    observed[users[i]].delete_button_status = deleted.status();
+    await refresh(i, false, "deleted_listing");
+  }
 }
 
 async function verifyRetainedTurns(people) {
@@ -419,6 +474,7 @@ try {
     for (const {user, page} of pages) {
       people.push({f: await openNotebook(page, user, updated(user))});
     }
+    await verifyRollbackPanels(people);
   } else {
     for (const user of users) {
       const page = await signIn(user);

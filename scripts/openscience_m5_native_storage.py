@@ -7,7 +7,9 @@ import io
 import json
 import os
 from pathlib import Path
+import runpy
 import secrets
+import shlex
 import signal
 import socket
 import subprocess
@@ -130,7 +132,7 @@ def prepare(vm, package_dir):
         rows = json.loads(
             guest(
                 vm,
-                f"systemctl start m5-native-nfs.service && python3 -IB {GUEST}/guest.py status",
+                f"python3 -IB {GUEST}/guest.py status",
             )
         )
     else:
@@ -208,6 +210,45 @@ def volumes(config):
             or data["Labels"] != labels
         ):
             raise ValueError("Volume identity differs: " + name)
+
+
+def refresh_exports(vm, config):
+    expected = config["workspaces"]
+    if set(expected) != {"src-a", "src-b", "dst-a", "dst-b"}:
+        raise ValueError("Expected the four retained workspace exports")
+    manager.local_engine()
+    rows = {}
+    # Reserve the loopback port through the service restart so a concurrent
+    # relay cannot admit a mount after the holder check.
+    with socket.socket() as reservation:
+        reservation.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            reservation.bind(("127.0.0.1", config["port"]))
+        except OSError as error:
+            raise ValueError("Stop the retained native storage relay before refreshing exports") from error
+        reservation.listen(1)
+        for slot, row in expected.items():
+            name = "nexpoly-m5-" + config["run_id"] + "-" + slot
+            if row["volume"] != name:
+                raise ValueError("Unexpected registered test volume name")
+            marker = "label=org.nexpoly.m5.filesystem-uuid=" + row["filesystem_uuid"]
+            aliases = manager.docker("volume", "ls", "-q", "--filter", marker).splitlines()
+            if any(manager.docker("ps", "-aq", "--filter", "volume=" + volume) for volume in {name, *aliases}):
+                raise ValueError("Stop all consumers of the registered test volumes first")
+            rows[slot] = {k: v for k, v in row.items() if k != "volume"}
+        digest = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+        runner = """import json, runpy, sys, tempfile
+from pathlib import Path
+with tempfile.TemporaryDirectory(dir="/opt/nexpoly-m5-nfs") as stage:
+    driver = Path(stage) / "guest.py"
+    driver.write_bytes(sys.stdin.buffer.read())
+    refresh = runpy.run_path(str(driver))["refresh"]
+    print(json.dumps(refresh(sys.argv[1])))
+"""
+        result = guest(vm, "python3 -IB -c " + shlex.quote(runner) + " " + digest,
+                       (OPS / "guest-nfs-exports.py").read_bytes())
+        if json.loads(result) != rows:
+            raise ValueError("Export refresh returned different workspace bindings")
 
 
 def socket_dir(config):
@@ -314,6 +355,16 @@ async def relay(vm, config):
 
 
 def start(vm, data):
+    # A retained VM can outlive this checkout. Check both files so a restart
+    # after an interrupted upgrade also gets the reviewed server configuration.
+    driver = OPS / "guest-nfs-exports.py"
+    config = runpy.run_path(str(driver))["export_config"](data["workspaces"])
+    expected = [hashlib.sha256(driver.read_bytes()).hexdigest(), hashlib.sha256(config.encode()).hexdigest()]
+    measured = guest(vm, f"sha256sum {GUEST}/guest.py {GUEST}/ganesha.conf").decode().splitlines()
+    if [line.split()[0] for line in measured] != expected:
+        refresh_exports(vm, data)
+    else:
+        guest(vm, f"python3 -IB {GUEST}/guest.py start")
     try:
         control(data, "ping")
         return
@@ -347,7 +398,7 @@ def main():
         help="Previously downloaded pinned Ubuntu .deb files",
     )
     parser.add_argument(
-        "action", choices=("prepare", "volumes", "start", "stop", "relay")
+        "action", choices=("prepare", "volumes", "start", "stop", "relay", "refresh-exports")
     )
     args = parser.parse_args()
     os.umask(0o077)
@@ -358,6 +409,8 @@ def main():
     config = read(vm)
     if args.action in ("prepare", "start"):
         start(vm, config)
+    elif args.action == "refresh-exports":
+        refresh_exports(vm, config)
     elif args.action == "relay":
         asyncio.run(relay(vm, config))
         return

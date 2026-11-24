@@ -24,7 +24,7 @@ def main(action, token, expected):
         general = workspace / "files/general"
         require(all(p.resolve(strict=True) == p for p in (workspace, general, project)), "Unexpected test path")
         return (workspace, project / (prefix + "-edit.txt"), project / (prefix + "-release.txt"),
-                general / ("." + prefix))
+                general / ("." + prefix), project / (prefix + "-panel.txt"))
 
     def facts(role):
         user = users[role]
@@ -41,7 +41,7 @@ def main(action, token, expected):
         return {"kernel": kernel, "notebook": note}
 
     def seed(role):
-        _, editor, release, scratch = paths(role)
+        _, editor, release, scratch, _ = paths(role)
         scratch.mkdir(mode=0o700)
         if role == "a":
             (scratch / "files/general").mkdir(parents=True, mode=0o700)
@@ -52,8 +52,8 @@ def main(action, token, expected):
             os.fsync(stream.fileno())
 
     def cleanup(role):
-        _, editor, release, scratch = paths(role)
-        files = [editor]
+        _, editor, release, scratch, panel = paths(role)
+        files = [editor, panel]
         dirs = [scratch]
         if role == "a":
             files.extend((release, scratch / guest["FILLER"]))
@@ -84,7 +84,7 @@ def main(action, token, expected):
                 guest["run_as"](user, cleanup, role)
             raise
     elif action == "fill":
-        workspace, editor, release, scratch = paths("a")
+        workspace, editor, release, scratch, _ = paths("a")
         require(release.stat().st_blocks * 512 >= 2 * 1024**2 and editor.is_file()
                 and scratch.resolve(strict=True) == scratch, "A's release or reservation fixture changed")
         allocated = guest["run_as"](users["a"], guest["reserve_to_limit"], scratch,
