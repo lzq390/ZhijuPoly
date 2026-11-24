@@ -538,6 +538,11 @@
     linear-gradient(var(--m), var(--m)) right bottom / 1.5px 14px no-repeat;
 }
 
+/* Ketcher's menus sit in the editor layer, under the marks; the marks step aside while one is open. */
+.np-structure-workbench.np-homopolymer-prediction .np-sw-canvas-stage:has(.MuiPopover-root)::after {
+  opacity: 0;
+}
+
 .np-structure-workbench.np-homopolymer-prediction .np-sw-editor,
 .np-structure-workbench.np-homopolymer-prediction .np-sw-editor iframe,
 .np-structure-workbench.np-homopolymer-prediction .np-structure-editor,
@@ -630,6 +635,205 @@
 
 .np-structure-workbench.np-homopolymer-prediction .Ketcher-root [class*="ActionButton-module_button"]:hover:not([class*="ActionButton-module_selected"]) {
   color: var(--np-hp-blue-ink);
+}
+
+/* Ketcher's own dropdowns (zoom, Molecules mode) take the page's trigger and popover menu.
+   Ketcher renders the zoom menu inside its root but portals the mode menu to <body>, so that
+   menu is scoped by "this page holds the editor" (the app mounts one editor at a time) and uses
+   literal values of the page tokens, which it cannot inherit there. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="zoom-selector"], [data-testid="polymer-toggler"]) {
+  width: auto;
+  min-width: 0;
+  height: 28px;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: var(--np-hp-radius-control);
+  color: var(--np-hp-ink2);
+  background: transparent;
+  box-shadow: none;
+  /* Ketcher's toolbar keeps its size at 2K, so these follow it rather than the page's type scale. */
+  font: 500 13px / 1 var(--font-body);
+  letter-spacing: 0;
+  text-transform: none;
+  transition: background-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="zoom-selector"], [data-testid="polymer-toggler"]):hover {
+  color: var(--np-hp-ink);
+  background: var(--np-hp-sunken);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="zoom-selector"], [data-testid="polymer-toggler"]):focus-visible {
+  outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
+  outline-offset: 1px;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="zoom-input"], [data-testid="polymer-toggler"] > span) {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [data-testid="zoom-input"] {
+  font-variant-numeric: tabular-nums;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [data-testid="polymer-toggler"] > svg:first-child {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+/* Narrow toolbars: Ketcher hides the label and chevron and keeps a corner mark; the icon stays
+   18px and the button stays a small square. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root div:has(> [data-testid="polymer-toggler"]) {
+  width: auto;
+  min-width: 0;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [data-testid="polymer-toggler"] {
+  flex: none;
+  min-width: 28px;
+  justify-content: center;
+  padding: 0 7px;
+}
+
+/* Chevrons: the page's 14px muted chevron, turned over while the menu is open. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="zoom-selector"] > svg, [data-testid="polymer-toggler"] > svg[width="48"]) {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--np-hp-muted);
+  transition: transform 140ms ease;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="zoom-selector"] > svg, [data-testid="polymer-toggler"] > svg[width="48"]) path {
+  fill: currentColor;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root:has(> .MuiPopover-root [data-testid="zoom-value"]) [data-testid="zoom-selector"],
+body:has(> .MuiPopover-root [data-testid="molecules_mode"]) .np-structure-workbench.np-homopolymer-prediction .Ketcher-root [data-testid="polymer-toggler"] {
+  color: var(--np-hp-ink);
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.5), 0 0 0 4px rgba(37, 99, 235, 0.12);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root:has(> .MuiPopover-root [data-testid="zoom-value"]) [data-testid="zoom-selector"] > svg,
+body:has(> .MuiPopover-root [data-testid="molecules_mode"]) .np-structure-workbench.np-homopolymer-prediction .Ketcher-root [data-testid="polymer-toggler"] > svg[width="48"] {
+  transform: rotate(180deg);
+}
+
+/* Menu surface: the same white card as 示例, 导出 and 对比. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root > .MuiPopover-root .MuiPaper-root:has([data-testid="zoom-value"]),
+body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root .MuiPaper-root:has([data-testid="molecules_mode"]) {
+  min-width: 200px;
+  margin-top: 6px;
+  padding: 6px;
+  border-radius: 12px;
+  color: #3a4760;
+  background: #fff;
+  box-shadow: 0 0 0 1px #e4e8ef, 0 18px 40px -16px rgba(16, 26, 46, 0.3);
+  font-family: var(--font-body);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root > .MuiPopover-root .MuiPaper-root:has([data-testid="zoom-value"]) > div,
+body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root .MuiPaper-root:has([data-testid="molecules_mode"]) > div {
+  display: grid;
+  width: auto;
+  gap: 2px;
+  padding: 0;
+  background: transparent;
+}
+
+/* Zoom value: the page's sunken field, white with a blue ring while typing. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [data-testid="zoom-value"] {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  margin: 0 0 4px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  outline: none;
+  color: #101a2e;
+  background: #f1f4f8;
+  box-shadow: inset 0 0 0 1px #e4e8ef;
+  font: 500 13px / 1 "IBM Plex Mono", var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [data-testid="zoom-value"]:focus {
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.45), 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+/* Items: the shared menu row; zoom steps show their shortcut as a key cap on the right. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="zoom-out"], [data-testid="zoom-in"], [data-testid="zoom-default"]),
+body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-testid="molecules_mode"], [data-testid="macromolecules_mode"]) {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: #101a2e;
+  background: transparent;
+  font: 500 13px / 1.3 var(--font-body);
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="zoom-out"], [data-testid="zoom-in"], [data-testid="zoom-default"]) {
+  justify-content: space-between;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="zoom-out"], [data-testid="zoom-in"], [data-testid="zoom-default"]):is(:hover, :focus-visible),
+body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-testid="molecules_mode"], [data-testid="macromolecules_mode"]):hover {
+  background: #f1f4f8;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="zoom-out"], [data-testid="zoom-in"], [data-testid="zoom-default"]):focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.5);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="zoom-out"], [data-testid="zoom-in"], [data-testid="zoom-default"]) > span:nth-of-type(2) {
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: #5f6b80;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px #d3dae4, inset 0 -1px 0 #d3dae4;
+  font: 500 11px / 1.2 "IBM Plex Mono", var(--font-mono);
+}
+
+/* Mode items: icon, label and, on the current mode, the blue check on a light blue row. */
+body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-testid="molecules_mode"], [data-testid="macromolecules_mode"]) > svg:first-child {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-testid="molecules_mode"], [data-testid="macromolecules_mode"]) > span {
+  flex: 1 1 auto;
+  width: auto;
+  font-size: 13px;
+}
+
+body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-testid="molecules_mode"], [data-testid="macromolecules_mode"]):has(> span + svg) {
+  background: #edf2ff;
+}
+
+body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-testid="molecules_mode"], [data-testid="macromolecules_mode"]) > span + svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: #2563eb;
+}
+
+body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-testid="molecules_mode"], [data-testid="macromolecules_mode"]) > span + svg path {
+  fill: currentColor;
 }
 
 /* SMILES field: a sunken code field with a tag, the sync lamp and copy on the right. */

@@ -11,12 +11,13 @@ import {
   LoaderCircle,
   RefreshCcw
 } from "lucide-react";
-import { type ReactNode, type RefObject } from "react";
+import { useRef, type ReactNode, type RefObject } from "react";
 import type { useTgStructureCanvas } from "../../hooks/useTgStructureCanvas";
 import { usePopoverMenu } from "../../hooks/usePopoverMenu";
 import type { StructureWorkspaceContext } from "../../types";
 import { StructurePreview3D } from "../StructurePreview3D";
 import { StructureEditor } from "./StructureEditor";
+import { useKetcherPopoverPlacement } from "./useKetcherPopoverPlacement";
 
 export type StructureCanvasController = ReturnType<typeof useTgStructureCanvas>;
 export type StructureUtilityPanel = "modules" | "assistant" | null;
@@ -208,6 +209,8 @@ export function StructureCanvasSurface({
   viewSwitch = "toggle",
   examples
 }: StructureCanvasSurfaceProps) {
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  useKetcherPopoverPlacement(stageRef);
   const mutate = (action: () => void | Promise<unknown>, writesEditor = true) =>
     runCanvasMutation(structure, canvas, action, writesEditor);
   const showEmptyState = Boolean(emptyState) && canvas.isEditorReady && !canvas.isFlipped &&
@@ -346,7 +349,7 @@ export function StructureCanvasSurface({
         </div>
       </header>
 
-      <div className="np-sw-canvas-stage">
+      <div ref={stageRef} className="np-sw-canvas-stage">
         <div ref={canvas.flipMotion?.ref} className={`np-sw-editor${canvas.isFlipped ? " is-flipped" : ""}`}>
           <div
             className={`np-sw-editor__layer np-sw-editor__layer--2d${canvas.isFlipped ? " is-hidden" : " is-visible"}`}
