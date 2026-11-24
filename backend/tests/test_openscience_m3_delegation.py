@@ -328,6 +328,54 @@ def test_real_login_delegation_scope_replay_expiration_and_logout(monkeypatch, t
             assert (await exchange(full_req)).status_code == 200
             await asyncio.sleep(max(0, full.json()["valid_until"] - time.time()) + 0.1)
             assert (await exchange(full_req)).status_code == 401
+            if os.getenv("OPENSCIENCE_M6_DISPOSABLE_GATE_TEST") == "1":
+                # This opt-in fixture has its own temporary PostgreSQL cluster. Check
+                # credentials issued while both members were eligible, before their TTL.
+                import psycopg
+
+                token_a, headers_a, _ = await sign("a", a)
+
+                async def pending(token, generation):
+                    request = {
+                        **first,
+                        "agent_session": token,
+                        "workspace_generation": generation * 64,
+                        "operation_id": str(uuid4()),
+                        "turn_expires_ms": int(time.time() * 1000) + 60000,
+                    }
+                    operation = await issue(request)
+                    assert operation.status_code == 200
+                    scope = {**req, "operation_token": operation.json()["operation_token"]}
+                    credential = await exchange(scope)
+                    assert credential.status_code == 200
+                    return request, scope, credential.json()
+
+                pending_a = await pending(token_a, "b")
+                pending_b = await pending(token_b, "a")
+                monkeypatch.setenv("OPENSCIENCE_M6_OPERATOR_ID", user_a["user"]["id"])
+                transport = httpx.ASGITransport(app=create_app(), client=("127.0.0.1", 1250))
+                async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as limited:
+                    async def verify_denied(pending_grants, status):
+                        request, scope, credential = pending_grants
+                        assert (await limited.post(ISSUE, headers=router, json=request)).status_code == status
+                        assert (await limited.post(EXCHANGE, headers=gateway, json=scope)).status_code == status
+                        native_headers = {**gateway, "X-OpenScience-Delegation": credential["access_token"]}
+                        result = await limited.post(path, headers=native_headers, content=payload)
+                        assert result.status_code == status
+                        assert time.time() < credential["valid_until"]
+
+                    await verify_denied(pending_b, 403)
+                    assert (await limited.post(EXCHANGE, headers=gateway, json=pending_a[1])).status_code == 200
+                    with psycopg.connect(os.environ["OPENSCIENCE_M2_ADMIN_DSN"], autocommit=True) as admin:
+                        assert admin.info.dbname == "nexpoly_m2_dev" and admin.info.host.startswith("/")
+                        toggle = "UPDATE openscience_m2.environments SET enabled=%s WHERE environment='dev-m1' AND enabled<>%s"
+                        assert admin.execute(toggle, (False, False)).rowcount == 1
+                        try:
+                            await verify_denied(pending_a, 401)
+                        finally:
+                            assert admin.execute(toggle, (True, True)).rowcount == 1
+                        await verify_denied(pending_a, 401)
+                assert (await a.post("/api/v1/auth/logout", headers=headers_a)).status_code == 204
             assert (await b.post("/api/v1/auth/logout", headers=private_b)).status_code == 204
 
     asyncio.run(check())

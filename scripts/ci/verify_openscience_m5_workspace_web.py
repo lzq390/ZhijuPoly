@@ -63,7 +63,7 @@ def wait_file(path, process, timeout):
 
 
 @contextmanager
-def web_stack(phase, args, combined_gateway=None, *, verify_retries=False):
+def web_stack(phase, args, combined_gateway=None, *, verify_retries=False, operator_id=None):
     info = args.state / "running.json"
     if info.exists():
         raise ValueError("The retained M2 site already has a running stack")
@@ -77,6 +77,7 @@ def web_stack(phase, args, combined_gateway=None, *, verify_retries=False):
                 "--registry",
                 str(args.registry_root / phase),
                 "--m5-quota-files",
+                *(["--m6-operator-id", operator_id] if operator_id is not None else []),
                 *(["--m3-gateway-image", combined_gateway, "--m3-adapters", "--m4"]
                   if combined_gateway else []),
                 *(["--verify-retries"] if verify_retries else []),
@@ -96,6 +97,8 @@ def web_stack(phase, args, combined_gateway=None, *, verify_retries=False):
             if combined_gateway and (running.get("gateway_image") != combined_gateway
                                      or not running.get("adapter_images") or running.get("m4") is not True):
                 raise RuntimeError("Browser stack is missing requested gateway, adapters or M4 services")
+            if running.get("m6_operator_id") != operator_id:
+                raise RuntimeError("Operator scope differs from the requested development candidate")
             yield running
         finally:
             if process.poll() is None:

@@ -1,4 +1,4 @@
-import { loadEnv, mergeConfig } from "vite";
+import { loadEnv, mergeConfig, type Plugin } from "vite";
 import { configDefaults, defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { ketcherCompatibility } from "./build/ketcher-compat.ts";
@@ -44,9 +44,20 @@ export default defineConfig(({ mode, command, isPreview }) => {
       process.env.DEV_MCP_PROXY_ALLOWED_HOSTS ?? mcpEnv.DEV_MCP_PROXY_ALLOWED_HOSTS
     )
     : undefined;
+  const candidateFonts: Plugin | undefined = command === "serve" && mode === "m2" && process.env.OPENSCIENCE_M6_LOCAL_FONTS === "1"
+    ? {
+        name: "openscience-operator-local-fonts",
+        enforce: "pre",
+        transform(css, id) {
+          if (id.endsWith("/src/index.css")) {
+            return css.replace(/^@import url\("https:\/\/fonts\.googleapis\.com\/[^"]+"\);$/gm, "");
+          }
+        }
+      }
+    : undefined;
 
   return mergeConfig(ketcherCompatibility(), {
-    plugins: [mcpProxy, react(), ketcherRuntimePlugin(editor.engine), editor.metadata, developmentCompression(), developmentEntryPreload(editor.engine), retryableImports()],
+    plugins: [candidateFonts, mcpProxy, react(), ketcherRuntimePlugin(editor.engine), editor.metadata, developmentCompression(), developmentEntryPreload(editor.engine), retryableImports()],
     resolve: { alias: {
       "@structure-editor-engine": editor.implementation,
       "@structure-editor-preload": editor.preload

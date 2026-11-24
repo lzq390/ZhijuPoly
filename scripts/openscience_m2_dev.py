@@ -440,6 +440,8 @@ def run_stack(args, stack):
         "OPENSCIENCE_M2_AGENT_ORIGIN": AGENT,
         "OPENSCIENCE_M2_STARTUP_SECONDS": str(startup_seconds),
     }
+    if args.m6_operator_id is not None:
+        env["OPENSCIENCE_M6_OPERATOR_ID"] = str(args.m6_operator_id)
     common = [
         "--label",
         label + "=" + deploy,
@@ -840,6 +842,7 @@ def run_stack(args, stack):
         cwd=frontend,
         env={
             **os.environ,
+            "OPENSCIENCE_M6_LOCAL_FONTS": "1" if args.m6_operator_id is not None else "0",
             "VITE_OPENSCIENCE_PER_USER": "true",
             "VITE_SERVER_MONITORING_ENABLED": "false",
             "VITE_OPENSCIENCE_ROUTER_URL": AGENT + "/",
@@ -848,6 +851,12 @@ def run_stack(args, stack):
         },
     )
     conf = transport / "nginx.conf"
+    candidate_headers = ""
+    if args.m6_operator_id is not None:
+        # The parent normally imports a remote font stylesheet. Keep resources,
+        # workspace frames and ticket submissions inside the candidate during the drill.
+        policy = f"style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'self' {AGENT}; form-action 'self' {AGENT}"
+        candidate_headers = f'add_header Content-Security-Policy "{policy}" always;'
     file(
         conf,
         f"""daemon off;
@@ -870,6 +879,7 @@ http {{
     server_name app.m2.test;
     ssl_certificate {cert};
     ssl_certificate_key {key};
+    {candidate_headers}
     location /api/ {{ proxy_pass http://unix:{api_socket}/auth.sock:; proxy_set_header Host $http_host; }}
     location /internal/ {{ return 404; }}
     location / {{ proxy_pass http://127.0.0.1:18763; proxy_set_header Host 127.0.0.1; }}
@@ -905,6 +915,8 @@ http {{
     }
     if args.m5_quota_files:
         ready["quota_files"] = True
+    if args.m6_operator_id is not None:
+        ready["m6_operator_id"] = str(args.m6_operator_id)
     if args.m3_gateway_image:
         ready.update(gateway=gateway, gateway_image=args.m3_gateway_image)
         if args.m3_adapters:
@@ -974,6 +986,8 @@ def main():
     parser.add_argument("--registry", type=Path, default=REGISTRY)
     parser.add_argument("--m5-quota-files", action="store_true",
                         help="Enable quota-aware files on verified dev-m1 NFS volumes, with the selected M3/M4 services")
+    parser.add_argument("--m6-operator-id", type=UUID,
+                        help="Restrict this development candidate to one already-eligible operator account UUID")
     parser.add_argument("--verify-retries", action="store_true",
                         help="Enable the private M3 tool-selection fixture and lost-receipt injectors during an acceptance drill")
     parser.add_argument(

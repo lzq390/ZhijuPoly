@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
+import { holdTicket, losses, monitor, submitExchange, within } from "./openscience_browser_revocation.mjs";
 import { developmentBrowser } from "./openscience_dev_browser.mjs";
 import { resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -123,100 +124,6 @@ async function ownership(f, owner, foreign) {
   });
   return { observed, ids, pageContext };
 }
-async function monitor(c, pageContext, markers = []) {
-  // This browser document stays loaded after the UI disappears. EOF therefore measures
-  // server-side stream termination independently of the tab unloading its EventSource.
-  const probe = await c.newPage();
-  await probe.goto(agent + "/_nexpoly/expired");
-  let ended;
-  const end = new Promise((resolve) => {
-    ended = resolve;
-  });
-  await probe.exposeFunction("recordStreamEnd", () => ended(performance.now()));
-  await probe.evaluate(
-    async ({ key, markers }) => {
-      const r = await fetch("/openscience-api/global/event", {
-        headers: { "X-Nexpoly-Page": key },
-        cache: "no-store",
-      });
-      if (r.status !== 200 || !r.headers.get("Content-Type")?.includes("text/event-stream"))
-        throw Error("Authorized SSE did not open");
-      const reader = r.body.getReader();
-      if ((await reader.read()).done) throw Error("SSE ended before revocation");
-      const decoder = new TextDecoder();
-      window.seenMarkers = markers.map(() => false);
-      void (async () => {
-        let tail = "";
-        try {
-          for (;;) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            tail += decoder.decode(value, { stream: true });
-            markers.forEach((m, i) => {
-              if (tail.includes(m)) window.seenMarkers[i] = true;
-            });
-            tail = tail.slice(-160);
-          }
-        } catch {
-        } finally {
-          await window.recordStreamEnd();
-        }
-      })();
-    },
-    { key: pageContext, markers },
-  );
-  const status = () =>
-    probe.evaluate(
-      async (key) =>
-        (await fetch("/_nexpoly/status", { headers: { "X-Nexpoly-Page": key }, cache: "no-store" })).status,
-      pageContext,
-    );
-  const reconnect = () =>
-    probe.evaluate(async (key) => {
-      const r = await fetch("/openscience-api/global/event", {
-        headers: { "X-Nexpoly-Page": key },
-        signal: AbortSignal.timeout(5000),
-      });
-      await r.body?.cancel();
-      return r.status;
-    }, pageContext);
-  return { probe, end, status, reconnect };
-}
-async function within(fn, description) {
-  const deadline = performance.now() + 30000;
-  while (performance.now() < deadline) {
-    if (await fn()) return performance.now();
-    await sleep(100);
-  }
-  throw Error(description + " exceeded 30 seconds");
-}
-async function losses(start, m, old, denial = [401, 403]) {
-  const elapsed = (t) => Math.ceil(t - start);
-  const [stream, denied, tab, sidebar] = await Promise.all([
-    Promise.race([
-      m.end,
-      sleep(30000, undefined, { ref: false }).then(() => {
-        throw Error("SSE remained open");
-      }),
-    ]),
-    within(async () => denial.includes(await m.status()), "Old context"),
-    within(async () => old.isDetached() || old.url().includes("/_nexpoly/expired"), "Old tab"),
-    within(async () => {
-      const text = await old.page().locator(".np-sidebar-desktop").innerText();
-      return !text.includes("M1 synthetic ") && !text.includes("same-project");
-    }, "Private sidebar"),
-  ]);
-  const result = {
-    server_closed_sse_ms: elapsed(stream),
-    private_page_denied_ms: elapsed(denied),
-    old_document_invalid_ms: elapsed(tab),
-    private_sidebar_cleared_ms: elapsed(sidebar),
-  };
-  assert.ok(Object.values(result).every((v) => v >= 0 && v <= 30000));
-  result.stream_reconnect_status = await m.reconnect();
-  assert.ok(denial.includes(result.stream_reconnect_status));
-  return result;
-}
 async function eventMarkers(fA, fB, watchA, watchB, markers) {
   const created = [];
   try {
@@ -258,65 +165,6 @@ async function eventMarkers(fA, fB, watchA, watchB, markers) {
     }
   }
 }
-async function submitExchange(page, fields) {
-  // A second real form submission uses the browser's original Origin and TLS policy.
-  return page.evaluate(
-    ({ action, fields }) =>
-      new Promise((resolve) => {
-        const target = document.createElement("iframe");
-        target.name = "m2-replay";
-        target.hidden = true;
-        document.body.append(target);
-        const timeout = setTimeout(() => {
-          window.removeEventListener("message", receive);
-          target.remove();
-          resolve("timed_out");
-        }, 10000);
-        function receive(e) {
-          if (e.origin !== new URL(action).origin || e.source !== target.contentWindow) return;
-          clearTimeout(timeout);
-          window.removeEventListener("message", receive);
-          target.remove();
-          resolve(e.data?.type);
-        }
-        window.addEventListener("message", receive);
-        const form = document.createElement("form");
-        form.method = "POST";
-        form.target = target.name;
-        form.action = action;
-        for (const [name, value] of new URLSearchParams(fields)) {
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = name;
-          input.value = value;
-          form.append(input);
-        }
-        document.body.append(form);
-        form.submit();
-        form.remove();
-      }),
-    { action: agent + "/_nexpoly/auth/exchange", fields },
-  );
-}
-async function holdTicket(page) {
-  return page.evaluate(async () => {
-    const session = await (await fetch("/api/v1/auth/session")).json();
-    const r = await fetch("/api/v1/openscience/workspace-ticket", {
-      method: "POST",
-      headers: { "X-Session-Context": session.session_id, "X-CSRF-Token": session.csrf_token },
-    });
-    if (!r.ok) throw Error("Expected a valid, unused workspace ticket");
-    const data = await r.json();
-    return {
-      ttl: data.expires_in,
-      fields: new URLSearchParams({
-        ticket: data.ticket,
-        handoff_id: data.handoff_id,
-        browser_id: localStorage.getItem("nexpoly.auth.browser-id"),
-      }).toString(),
-    };
-  });
-}
 async function probeForeign(f, id) {
   return f.evaluate(
     async ({ id, project }) =>
@@ -349,7 +197,7 @@ try {
   );
   assert.ok(!cookies.some((c) => c.domain === ".m2.test"));
   assert.ok(captured);
-  const replay = await submitExchange(a1, captured);
+  const replay = await submitExchange(agent, a1, captured);
   captured = null;
   assert.equal(replay, "nexpoly:openscience:error");
   report.stages.initial = {
@@ -386,7 +234,7 @@ try {
   const f2 = await workbench(a2),
     r2 = await ownership(f2, A, B);
   assert.deepEqual(r1.ids, r2.ids);
-  const m1 = await monitor(device1, oldData.pageContext);
+  const m1 = await monitor(agent, device1, oldData.pageContext);
   const start = performance.now();
   await logout(a1, A);
   const logoutLoss = await losses(start, m1, old);
@@ -429,8 +277,8 @@ try {
     fOld = await workbench(oldTab),
     old2 = await ownership(fOld, A, B);
   const markers = [A, B].map((u) => "M2 event " + u + " " + randomUUID());
-  const m2 = await monitor(device2, old2.pageContext, markers);
-  const mB = await monitor(device1, afterRefresh.pageContext, markers);
+  const m2 = await monitor(agent, device2, old2.pageContext, markers);
+  const mB = await monitor(agent, device1, afterRefresh.pageContext, markers);
   await eventMarkers(fOld, refreshedB, m2, mB, markers);
   report.stages.event_visibility = {
     a_received_own: true,
@@ -461,9 +309,9 @@ try {
   pausedAuthority = false;
   report.stages.authority_unavailable = outage;
   await sleep(Math.max(0, 61000 - (performance.now() - heldSince)));
-  assert.equal(await submitExchange(a1, held.fields), "nexpoly:openscience:error");
+  assert.equal(await submitExchange(agent, a1, held.fields), "nexpoly:openscience:error");
   const fresh = await holdTicket(a1);
-  assert.equal(await submitExchange(a1, fresh.fields), "nexpoly:openscience:ready");
+  assert.equal(await submitExchange(agent, a1, fresh.fields), "nexpoly:openscience:ready");
   report.stages.ticket_expiration = {
     ttl_seconds: 60,
     unused_expired_ticket_refused: true,

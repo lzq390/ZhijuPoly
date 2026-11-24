@@ -94,6 +94,10 @@ def checked_origin(name, default):
 
 
 def create_app():
+    # This ceiling is fixed before the candidate listens. The operator still
+    # needs the ordinary environment, workspace, membership and login grants.
+    operator = os.environ.get("OPENSCIENCE_M6_OPERATOR_ID")
+    operator_id = UUID(operator) if operator is not None else None
     parent = checked_origin("OPENSCIENCE_M2_PARENT_ORIGIN", "https://app.m2.test:18760")
     agent = checked_origin("OPENSCIENCE_M2_AGENT_ORIGIN", "https://agent.m2.test:18761")
     startup_seconds = int(os.environ.get("OPENSCIENCE_M2_STARTUP_SECONDS", "35"))
@@ -162,7 +166,7 @@ def create_app():
         workspace = conn.execute(
             "SELECT openscience_m2.lock_workspace(%s,%s) AS binding", (ENVIRONMENT, owner)
         ).fetchone()["binding"]
-        if workspace is None:
+        if workspace is None or (operator_id is not None and UUID(str(owner)) != operator_id):
             raise HTTPException(403, "Workspace pilot access is disabled")
         # Use the real billing/entitlement resolver and the API role's owner RLS.
         # Internal calls start in service_context, so explicitly restore the real owner.
