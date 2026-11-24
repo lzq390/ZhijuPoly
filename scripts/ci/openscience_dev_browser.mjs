@@ -6,13 +6,14 @@ import { resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 const require = createRequire(new URL("../../frontend/package.json", import.meta.url));
 const { chromium } = require("playwright");
+const profiles = JSON.parse(await readFile(new URL("../../backend/app/auth/openscience_candidates.json", import.meta.url)));
 
 export function retainedBindings(stack, registry) {
   const users = ["test-user-a", "test-user-b"];
   assert.deepEqual(Object.keys(stack.user_volumes).sort(), users);
   const bindings = {};
   for (const user of users) {
-    const owner = "dev-m1/" + user;
+    const owner = (stack.environment ?? "dev-m1") + "/" + user;
     const row = registry.workspaces[owner], volume = stack.user_volumes[user];
     assert.ok(row.initialized && row.uid > 0);
     if (stack.quota_files) {
@@ -32,21 +33,25 @@ export function retainedBindings(stack, registry) {
   return bindings;
 }
 
-export async function developmentBrowser(state, stack) {
-  const A = "test-user-a";
-  const authorizedContexts = [];
-  const { parent, agent } = stack;
-  assert.equal(parent, "https://app.m2.test:18760");
-  assert.equal(agent, "https://agent.m2.test:18761");
-  const cert = new X509Certificate(await readFile(resolve(state, "tls.crt")));
-  const pin = createHash("sha256")
-    .update(cert.publicKey.export({ type: "spki", format: "der" }))
-    .digest("base64");
+export async function developmentBrowser(state, stack, additional = []) {
+  const candidates = [{ state, stack }, ...additional];
+  const origins = [], pins = [];
+  for (const site of candidates) {
+    const profile = profiles[site.stack.environment ?? "dev-m1"];
+    assert.ok(profile && site.stack.parent === profile.parent && site.stack.agent === profile.agent);
+    origins.push(profile.parent, profile.agent);
+    const cert = new X509Certificate(await readFile(resolve(site.state, "tls.crt")));
+    for (const origin of [profile.parent, profile.agent]) assert.ok(cert.checkHost(new URL(origin).hostname));
+    pins.push(createHash("sha256").update(cert.publicKey.export({ type: "spki", format: "der" })).digest("base64"));
+  }
+  assert.equal(new Set(origins).size, origins.length);
+  assert.equal(new Set(pins).size, pins.length);
+  const hosts = origins.map(origin => new URL(origin).hostname);
   const browser = await chromium.launch({
     args: [
       "--no-proxy-server",
-      "--host-resolver-rules=MAP app.m2.test 127.0.0.1, MAP agent.m2.test 127.0.0.1, MAP * ~NOTFOUND",
-      "--ignore-certificate-errors-spki-list=" + pin,
+      "--host-resolver-rules=" + [...hosts.map(h => "MAP " + h + " 127.0.0.1"), "MAP * ~NOTFOUND"].join(", "),
+      "--ignore-certificate-errors-spki-list=" + pins.join(","),
     ],
   });
   async function device() {
@@ -54,13 +59,20 @@ export async function developmentBrowser(state, stack) {
       viewport: { width: 1550, height: 1000 },
       serviceWorkers: "block",
       locale: "zh-CN",
-      proxy: { server: "http://127.0.0.1:1", bypass: "app.m2.test,agent.m2.test" },
+      proxy: { server: "http://127.0.0.1:1", bypass: hosts.join(",") },
     });
-    await c.route(/^https?:\/\//, (route) =>
-      [parent, agent].includes(new URL(route.request().url()).origin) ? route.continue() : route.abort(),
-    );
+    await c.route(/^https?:\/\//, route => origins.includes(new URL(route.request().url()).origin)
+      ? route.continue() : route.abort());
     return c;
   }
+  const sites = candidates.map(site => siteControls(site.state, site.stack));
+  return { browser, device, sites, ...sites[0] };
+}
+
+function siteControls(state, stack) {
+  const A = "test-user-a";
+  const authorizedContexts = [];
+  const { parent, agent } = stack;
   async function app(c) {
     const p = await c.newPage();
     await p.goto(parent + "/", { waitUntil: "domcontentloaded" });
@@ -121,5 +133,5 @@ export async function developmentBrowser(state, stack) {
     }
     throw Error("Authenticated November workspace did not render");
   }
-  return { browser, device, app, login, logout, workbench, authorizedContexts };
+  return { app, login, logout, workbench, authorizedContexts };
 }

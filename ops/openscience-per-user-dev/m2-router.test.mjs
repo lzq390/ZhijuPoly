@@ -23,6 +23,16 @@ async function stop(server) {
   await closed
 }
 
+test("the second candidate rejects a mixed authority, parent or workspace profile before listening", async () => {
+  const site = {environment:"dev-m6",listen_port:18781,public_origin:"https://agent.m6.test:18781",
+    parent_origins:["https://app.m6.test:18780"],authority_url:"http://127.0.0.1:18782"}
+  for (const change of [{parent_origins:["https://app.m2.test:18760"]}, {authority_url:"http://127.0.0.1:18762"},
+      {public_origin:"https://agent.m2.test:18761",listen_port:18761}, {m3:{}}, {quota_files:true}]) {
+    await assert.rejects(startRouter({...site,...change}), /Wrong origins, services or authority/)
+  }
+  await assert.rejects(startRouter({...site,environment:"unknown"}), /Invalid isolated router environment/)
+})
+
 test("scoped reads, late handoffs, two logins and live revocation", {timeout:20000}, async t => {
   const root = await mkdtemp(join(os.tmpdir(),"np-m2-router-"))
   t.after(() => rm(root,{recursive:true,force:true}))

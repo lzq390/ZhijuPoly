@@ -7,6 +7,28 @@ from pathlib import Path
 import pytest
 
 
+def test_candidates_cannot_use_each_others_browser_origins(monkeypatch, tmp_path):
+    for key in ("APP_POSTGRES_DSN", "AUTH_POSTGRES_DSN", "APP_SERVICE_POSTGRES_DSN"):
+        monkeypatch.setenv(key, "dbname=nexpoly_m2_dev")
+    credential = tmp_path / "router"
+    credential.write_text("x" * 40)
+    monkeypatch.setenv("OPENSCIENCE_M2_ROUTER_TOKEN_FILE", str(credential))
+    for key in ("OPENSCIENCE_M2_PARENT_ORIGIN", "OPENSCIENCE_M2_AGENT_ORIGIN", "OPENSCIENCE_M3_GATEWAY_TOKEN_FILE",
+                "OPENSCIENCE_M4_ENABLED", "OPENSCIENCE_M2_ENVIRONMENT"):
+        monkeypatch.delenv(key, raising=False)
+    from app.auth.openscience_candidate import PROFILES
+    from app.auth.openscience_dev import create_app
+
+    for env, other in (("dev-m1", "dev-m6"), ("dev-m6", "dev-m1")):
+        monkeypatch.setenv("OPENSCIENCE_M2_ENVIRONMENT", env)
+        create_app()
+        for key, origin in (("OPENSCIENCE_M2_PARENT_ORIGIN", "parent"), ("OPENSCIENCE_M2_AGENT_ORIGIN", "agent")):
+            monkeypatch.setenv(key, PROFILES[other][origin])
+            with pytest.raises(ValueError, match="different authority"):
+                create_app()
+            monkeypatch.delenv(key)
+
+
 @pytest.mark.skipif(
     os.getenv("OPENSCIENCE_M2_INTEGRATION") != "1",
     reason="requires the provisioned local M2 development database",

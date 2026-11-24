@@ -121,9 +121,17 @@ export async function startRouter(c, loadUi = pinnedUi) {
     throw Error("Invalid supervisor startup deadline")
   const origin = new URL(c.public_origin)
   const parents = c.parent_origins
-  if (c.environment !== "dev-m1" || origin.origin !== c.public_origin || origin.port !== String(c.listen_port) ||
+  if (origin.origin !== c.public_origin || origin.port !== String(c.listen_port) ||
       !Array.isArray(parents) || !parents.length || parents.some(p => new URL(p).origin !== p || p === origin.origin) ||
       !["127.0.0.1","localhost","[::1]"].includes(new URL(c.authority_url).hostname)) throw Error("Invalid isolated router configuration")
+  if (c.environment !== "dev-m1") {
+    const candidates = JSON.parse(await readFile(new URL("../../backend/app/auth/openscience_candidates.json", import.meta.url), "utf8"))
+    if (!Object.hasOwn(candidates, c.environment)) throw Error("Invalid isolated router environment")
+    const site = candidates[c.environment]
+    if (c.public_origin !== site.agent || parents.length !== 1 || parents[0] !== site.parent ||
+        c.authority_url !== "http://127.0.0.1:" + site.authority_port || c.m3 || c.m4 || c.quota_files)
+      throw Error("Wrong origins, services or authority for the second candidate")
+  }
   if (new URL(c.authority_url).port === "9011" || Number(c.listen_port) === 9011) throw Error("Reserved production port")
   const authorityKey = (await readFile(c.service_token_file, "utf8")).trim()
   if (authorityKey.length < 32) throw Error("Missing trusted authority identity")

@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.auth.context import Identity, user_context
+from app.auth.openscience_candidate import PROFILES, authority_environment
 from app.auth import openscience_delegation_dev as m3
 from app.auth.middleware import AuthenticationMiddleware
 from app.auth.policy import capabilities
@@ -26,7 +27,6 @@ from app.postgres_database import postgres_connection
 from app.services.entitlement_repository import EntitlementRepository
 from task_usage.entitlement_access import resolve_access_tier
 
-ENVIRONMENT = "dev-m1"
 TOKEN = Field(min_length=43, max_length=43, pattern=r"^[a-zA-Z0-9_-]{43}$")
 INTERNAL_ROUTES = {"/internal/openscience/tickets/redeem", "/internal/openscience/sessions/validate"}
 
@@ -98,8 +98,20 @@ def create_app():
     # needs the ordinary environment, workspace, membership and login grants.
     operator = os.environ.get("OPENSCIENCE_M6_OPERATOR_ID")
     operator_id = UUID(operator) if operator is not None else None
-    parent = checked_origin("OPENSCIENCE_M2_PARENT_ORIGIN", "https://app.m2.test:18760")
-    agent = checked_origin("OPENSCIENCE_M2_AGENT_ORIGIN", "https://agent.m2.test:18761")
+    environment = authority_environment()
+    profile = PROFILES[environment]
+    parent = checked_origin("OPENSCIENCE_M2_PARENT_ORIGIN", profile["parent"])
+    agent = checked_origin("OPENSCIENCE_M2_AGENT_ORIGIN", profile["agent"])
+    other_origins = {
+        site[key] for name, site in PROFILES.items() if name != environment for key in ("parent", "agent")
+    }
+    if parent in other_origins or agent in other_origins:
+        raise ValueError("Candidate origins belong to a different authority")
+    if environment != "dev-m1" and (
+        parent != profile["parent"] or agent != profile["agent"]
+        or os.environ.get("OPENSCIENCE_M3_GATEWAY_TOKEN_FILE") or os.environ.get("OPENSCIENCE_M4_ENABLED") == "1"
+    ):
+        raise ValueError("The AC-22 authority requires its own browser origins and workspace-only profile")
     startup_seconds = int(os.environ.get("OPENSCIENCE_M2_STARTUP_SECONDS", "35"))
     if not 1 <= startup_seconds <= 605:
         raise ValueError("Invalid development workspace startup deadline")
@@ -164,7 +176,7 @@ def create_app():
         if row is None:
             raise HTTPException(401, "Login is no longer active")
         workspace = conn.execute(
-            "SELECT openscience_m2.lock_workspace(%s,%s) AS binding", (ENVIRONMENT, owner)
+            "SELECT openscience_m2.lock_workspace(%s,%s) AS binding", (environment, owner)
         ).fetchone()["binding"]
         if workspace is None or (operator_id is not None and UUID(str(owner)) != operator_id):
             raise HTTPException(403, "Workspace pilot access is disabled")
@@ -196,7 +208,7 @@ def create_app():
         return {
             "user_id": str(owner),
             "session_id": str(login_id),
-            "environment": ENVIRONMENT,
+            "environment": environment,
             "workspace_user_id": workspace,
             "login_issued_at": row["login_issued_at"].timestamp(),
             "valid_until": deadline,
@@ -229,7 +241,7 @@ def create_app():
                 (
                     handoff,
                     digest(ticket),
-                    ENVIRONMENT,
+                    environment,
                     login["user_id"],
                     grant["workspace_user_id"],
                     login["session_id"],
@@ -265,7 +277,7 @@ def create_app():
                    AND environment=%s AND parent_origin=%s AND agent_origin=%s AND redeemed_at IS NULL
                    AND ticket_expires_at>clock_timestamp()
             """,
-                (body.handoff_id, digest(body.ticket), ENVIRONMENT, parent, agent),
+                (body.handoff_id, digest(body.ticket), environment, parent, agent),
             ).fetchone()
             grant = inspect_handoff(conn, row)
             redeemed = conn.execute(
@@ -290,7 +302,7 @@ def create_app():
                 SELECT * FROM openscience_m2.handoffs WHERE agent_hash=%s AND environment=%s
                    AND agent_origin=%s AND parent_origin=%s AND redeemed_at IS NOT NULL
             """,
-                (digest(body.agent_session), ENVIRONMENT, agent, parent),
+                (digest(body.agent_session), environment, agent, parent),
             ).fetchone()
             grant = inspect_handoff(conn, row)
             # The pilot/user/login can have been revoked and re-enabled between

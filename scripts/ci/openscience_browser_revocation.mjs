@@ -69,7 +69,7 @@ export async function within(fn, description) {
   }
   throw Error(description + " exceeded 30 seconds");
 }
-export async function losses(start, m, old, denial = [401, 403]) {
+export async function losses(start, m, old, denial = [401, 403], sidebarMarkers = ["M1 synthetic ", "same-project"]) {
   const elapsed = (t) => Math.ceil(t - start);
   const [stream, denied, tab, sidebar] = await Promise.all([
     Promise.race([
@@ -82,7 +82,7 @@ export async function losses(start, m, old, denial = [401, 403]) {
     within(async () => old.isDetached() || old.url().includes("/_nexpoly/expired"), "Old tab"),
     within(async () => {
       const text = await old.page().locator(".np-sidebar-desktop").innerText();
-      return !text.includes("M1 synthetic ") && !text.includes("same-project");
+      return sidebarMarkers.every(marker => !text.includes(marker));
     }, "Private sidebar"),
   ]);
   const result = {
@@ -96,10 +96,10 @@ export async function losses(start, m, old, denial = [401, 403]) {
   assert.ok(denial.includes(result.stream_reconnect_status));
   return result;
 }
-export async function submitExchange(agent, page, fields) {
+export async function submitExchange(agent, page, fields, details = false) {
   // A second real form submission uses the browser's original Origin and TLS policy.
   return page.evaluate(
-    ({ action, fields }) =>
+    ({ action, fields, details }) =>
       new Promise((resolve) => {
         const target = document.createElement("iframe");
         target.name = "m2-replay";
@@ -111,11 +111,12 @@ export async function submitExchange(agent, page, fields) {
           resolve("timed_out");
         }, 10000);
         function receive(e) {
-          if (e.origin !== new URL(action).origin || e.source !== target.contentWindow) return;
+          if (e.origin !== new URL(action).origin || e.source !== target.contentWindow ||
+              e.data?.handoff_id !== new URLSearchParams(fields).get("handoff_id")) return;
           clearTimeout(timeout);
           window.removeEventListener("message", receive);
           target.remove();
-          resolve(e.data?.type);
+          resolve(details ? {type:e.data.type, reason:e.data.reason ?? null} : e.data.type);
         }
         window.addEventListener("message", receive);
         const form = document.createElement("form");
@@ -133,7 +134,7 @@ export async function submitExchange(agent, page, fields) {
         form.submit();
         form.remove();
       }),
-    { action: agent + "/_nexpoly/auth/exchange", fields },
+    { action: agent + "/_nexpoly/auth/exchange", fields, details },
   );
 }
 export async function holdTicket(page) {

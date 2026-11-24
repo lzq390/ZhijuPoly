@@ -1,0 +1,14 @@
+{
+  "dev-m1": {
+    "parent": "https://app.m2.test:18760",
+    "agent": "https://agent.m2.test:18761",
+    "authority_port": 18762,
+    "frontend_port": 18763
+  },
+  "dev-m6": {
+    "parent": "https://app.m6.test:18780",
+    "agent": "https://agent.m6.test:18781",
+    "authority_port": 18782,
+    "frontend_port": 18783
+  }
+}

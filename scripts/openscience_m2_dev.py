@@ -1,4 +1,4 @@
-"""Run the private dev-m1 browser stack on loopback; Ctrl-C stops it and preserves its data."""
+"""Run a private OpenScience browser candidate on loopback. Stopping it retains its data."""
 
 import argparse
 from contextlib import ExitStack
@@ -18,9 +18,10 @@ import sys
 import tempfile
 import time
 import urllib.request
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-from openscience_per_user_dev import local_engine
+from openscience_per_user_dev import local_engine, write_atomic
 from openscience_per_user_service import ensure_timeout_seconds
 
 
@@ -28,8 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OPS = ROOT / "ops/openscience-per-user-dev"
 DEFAULT = Path.home() / ".local/state"
 REGISTRY = DEFAULT / "nexpoly-openscience-m1-dev"
-PARENT = "https://app.m2.test:18760"
-AGENT = "https://agent.m2.test:18761"
+PROFILES = json.loads((ROOT / "backend/app/auth/openscience_candidates.json").read_bytes())
+SECOND_ROOT = DEFAULT / "nexpoly-m6-ac22"
 API_IMAGE = "sha256:886fc49f0ad7a4a4922e9f820886a9b0f7e76829f6dfbc84a41b02fbd9a68961"
 PG_IMAGE = "sha256:eb4759788a2182f08257135e61a34f2cfc3c2914079f3465d64ee62350f4d081"
 UI_IMAGE = "sha256:fea8a3c294bb324a98041f8f8354448e6ca5c6502dedc565c4b884994c567bb0"
@@ -264,9 +265,20 @@ def require_quota_workspaces(rows):
 
 
 def run_stack(args, stack):
-    if args.m5_quota_files:
-        args.registry = args.registry.resolve()
+    environment = args.environment
+    profile = PROFILES[environment]
+    parent, agent = profile["parent"], profile["agent"]
+    parent_url, agent_url = urlsplit(parent), urlsplit(agent)
+    frontend_port, authority_port = profile["frontend_port"], profile["authority_port"]
+    authority_url = f"http://127.0.0.1:{authority_port}"
+    args.registry = args.registry.resolve(strict=True)
     local_engine()
+    if environment != "dev-m1" and (args.m5_quota_files or args.m3_gateway_image or args.m4 or args.verify):
+        raise ValueError("The second AC-22 site supports the independent workspace browser profile")
+    registry = json.loads((args.registry / "registry.json").read_bytes())
+    required = {f"{environment}/test-user-{role}" for role in "ab"}
+    if not required.issubset(registry["workspaces"]) or (environment != "dev-m1" and set(registry["workspaces"]) != required):
+        raise ValueError("Both workspace bindings must belong to the selected candidate environment")
     if args.m3_adapters and not args.m3_gateway_image:
         raise ValueError("--m3-adapters requires the reviewed --m3-gateway-image")
     if args.verify_retries and not args.m3_gateway_image:
@@ -282,13 +294,26 @@ def run_stack(args, stack):
     lock = stack.enter_context((state / "stack.lock").open("a"))
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     identifier = state / "deployment"
-    if not identifier.exists():
-        if set(state.iterdir()) != {state / "stack.lock"}:
+    identity_file = state / "candidate.json"
+    expected_identity = {"environment": environment}
+    if environment != "dev-m1":
+        expected_identity["registry_deployment"] = UUID(registry["deployment"]).hex
+    if identity_file.exists():
+        if json.loads(identity_file.read_bytes()) != expected_identity:
+            raise ValueError("This state directory belongs to a different candidate")
+    else:
+        if identifier.exists() and environment != "dev-m1":
+            raise ValueError("Existing unmarked browser deployments belong to dev-m1")
+        if not identifier.exists() and set(state.iterdir()) != {state / "stack.lock"}:
             raise ValueError("A new deployment requires an empty M2 state directory")
-        file(identifier, uuid4().hex)
+        write_atomic(identity_file, json.dumps(expected_identity).encode(), 0o600)
+    if not identifier.exists():
+        if set(state.iterdir()) != {state / "stack.lock", identity_file}:
+            raise ValueError("Incomplete candidate deployment identity")
+        write_atomic(identifier, uuid4().hex.encode(), 0o600)
     deploy = UUID(identifier.read_text()).hex
     # Refuse port collisions before starting dependencies or claiming workspace lifecycles.
-    for port in (18760, 18761, 18762, 18763):
+    for port in (parent_url.port, agent_url.port, authority_port, frontend_port):
         with socket.socket() as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind(("127.0.0.1", port))
@@ -327,7 +352,7 @@ def run_stack(args, stack):
                 "-subj",
                 "/CN=OpenScience M2 development",
                 "-addext",
-                "subjectAltName=DNS:app.m2.test,DNS:agent.m2.test",
+                f"subjectAltName=DNS:{parent_url.hostname},DNS:{agent_url.hostname}",
                 "-keyout",
                 key,
                 "-out",
@@ -436,8 +461,9 @@ def run_stack(args, stack):
         "PYTHONPATH": "/app/backend:/app",
         "PYTHONDONTWRITEBYTECODE": "1",
         "OPENSCIENCE_M2_ROUTER_TOKEN_FILE": "/m2key",
-        "OPENSCIENCE_M2_PARENT_ORIGIN": PARENT,
-        "OPENSCIENCE_M2_AGENT_ORIGIN": AGENT,
+        "OPENSCIENCE_M2_PARENT_ORIGIN": parent,
+        "OPENSCIENCE_M2_ENVIRONMENT": environment,
+        "OPENSCIENCE_M2_AGENT_ORIGIN": agent,
         "OPENSCIENCE_M2_STARTUP_SECONDS": str(startup_seconds),
     }
     if args.m6_operator_id is not None:
@@ -695,7 +721,7 @@ def run_stack(args, stack):
             "-e",
             "OPENSCIENCE_M3_GATEWAY_KEY_FILE=/gw",
             "-e",
-            "OPENSCIENCE_M3_PARENT_ORIGIN=" + PARENT,
+            "OPENSCIENCE_M3_PARENT_ORIGIN=" + parent,
             args.m3_gateway_image,
         )
         wait(lambda: (peer_dir / "gateway.sock").is_socket(), "isolated capability gateway")
@@ -749,10 +775,10 @@ def run_stack(args, stack):
     retained = {
         b["user_id"]: b
         for b in before
-        if b["environment"] == "dev-m1" and b["user_id"] in ("test-user-a", "test-user-b")
+        if b["environment"] == environment and b["user_id"] in ("test-user-a", "test-user-b")
     }
     if len(retained) != 2:
-        raise RuntimeError("Both retained dev-m1 bindings are required")
+        raise RuntimeError(f"Both {environment} workspace bindings are required")
 
     scoped = bool(args.m3_gateway_image or args.m4)
     if not all(attachment_matches(row, overlay if scoped else None) for row in retained.values()):
@@ -782,7 +808,7 @@ def run_stack(args, stack):
 
     def attempt_recycle(user):
         return json.loads(run(sys.executable, str(MANAGER), "--state-dir", str(args.registry),
-                              "recycle", "--environment", "dev-m1", "--user-id", user, env=manager_env))
+                              "recycle", "--environment", environment, "--user-id", user, env=manager_env))
 
     stack.callback(recycle_workspaces, targets, attempt_recycle)
     supervisor_socket = args.registry / "supervisor.sock"
@@ -801,15 +827,15 @@ def run_stack(args, stack):
         )
         wait(supervisor_socket.is_socket, "M1 supervisor")
     config = {
-        "listen_port": 18761,
-        "public_origin": AGENT,
-        "parent_origins": [PARENT],
-        "authority_url": "http://127.0.0.1:18762",
+        "listen_port": agent_url.port,
+        "public_origin": agent,
+        "parent_origins": [parent],
+        "authority_url": authority_url,
         "service_token_file": str(cred / "router"),
         "supervisor_socket": str(supervisor_socket),
         "startup_timeout_seconds": startup_seconds,
         "ui_root": str(web),
-        "environment": "dev-m1",
+        "environment": environment,
         "tls_key_file": str(key),
         "tls_cert_file": str(cert),
     }
@@ -834,7 +860,7 @@ def run_stack(args, stack):
             "--host",
             "127.0.0.1",
             "--port",
-            "18763",
+            str(frontend_port),
             "--strictPort",
             "--mode",
             "m2",
@@ -842,21 +868,19 @@ def run_stack(args, stack):
         cwd=frontend,
         env={
             **os.environ,
-            "OPENSCIENCE_M6_LOCAL_FONTS": "1" if args.m6_operator_id is not None else "0",
+            "OPENSCIENCE_M6_LOCAL_FONTS": "1" if args.candidate_browser else "0",
+            "OPENSCIENCE_M2_VITE_CACHE": str(state / "vite-cache"),
             "VITE_OPENSCIENCE_PER_USER": "true",
             "VITE_SERVER_MONITORING_ENABLED": "false",
-            "VITE_OPENSCIENCE_ROUTER_URL": AGENT + "/",
-            "DEV_PROXY_TARGET": "http://127.0.0.1:18762",
+            "VITE_OPENSCIENCE_ROUTER_URL": agent + "/",
+            "DEV_PROXY_TARGET": authority_url,
             "VITE_API_BASE_URL": "/api/v1",
         },
     )
     conf = transport / "nginx.conf"
-    candidate_headers = ""
-    if args.m6_operator_id is not None:
-        # The parent normally imports a remote font stylesheet. Keep resources,
-        # workspace frames and ticket submissions inside the candidate during the drill.
-        policy = f"style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'self' {AGENT}; form-action 'self' {AGENT}"
-        candidate_headers = f'add_header Content-Security-Policy "{policy}" always;'
+    policy = (f"style-src 'self' 'unsafe-inline'; font-src 'self' data:; "
+              f"frame-src 'self' {agent}; form-action 'self' {agent}")
+    candidate_headers = f'add_header Content-Security-Policy "{policy}" always;' if args.candidate_browser else ""
     file(
         conf,
         f"""daemon off;
@@ -871,18 +895,18 @@ http {{
   uwsgi_temp_path {transport}/uwsgi;
   scgi_temp_path {transport}/scgi;
   server {{
-    listen 127.0.0.1:18762;
+    listen 127.0.0.1:{authority_port};
     location / {{ proxy_pass http://unix:{api_socket}/auth.sock:; }}
   }}
   server {{
-    listen 127.0.0.1:18760 ssl;
-    server_name app.m2.test;
+    listen 127.0.0.1:{parent_url.port} ssl;
+    server_name {parent_url.hostname};
     ssl_certificate {cert};
     ssl_certificate_key {key};
     {candidate_headers}
     location /api/ {{ proxy_pass http://unix:{api_socket}/auth.sock:; proxy_set_header Host $http_host; }}
     location /internal/ {{ return 404; }}
-    location / {{ proxy_pass http://127.0.0.1:18763; proxy_set_header Host 127.0.0.1; }}
+    location / {{ proxy_pass http://127.0.0.1:{frontend_port}; proxy_set_header Host 127.0.0.1; }}
   }}
 }}
 """,
@@ -890,15 +914,15 @@ http {{
     launch(stack, logs, "nginx", ["nginx", "-p", str(transport), "-c", str(conf)])
     loopback_http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     wait(
-        lambda: loopback_http.open("http://127.0.0.1:18762/api/v1/auth/session", timeout=2).status == 200,
+        lambda: loopback_http.open(authority_url + "/api/v1/auth/session", timeout=2).status == 200,
         "login API via Unix socket",
     )
     wait(
-        lambda: loopback_http.open("http://127.0.0.1:18763", timeout=2).status == 200, "NexPoly frontend"
+        lambda: loopback_http.open(f"http://127.0.0.1:{frontend_port}", timeout=2).status == 200, "NexPoly frontend"
     )
 
     def listening():
-        with socket.create_connection(("127.0.0.1", 18761), timeout=1):
+        with socket.create_connection(("127.0.0.1", agent_url.port), timeout=1):
             return True
 
     wait(listening, "HTTPS agent router")
@@ -908,8 +932,9 @@ http {{
         "pg": pg,
         "api": api,
         "deployment": deploy,
-        "parent": PARENT,
-        "agent": AGENT,
+        "environment": environment,
+        "parent": parent,
+        "agent": agent,
         "user_volumes": {k: v["volume"] for k, v in retained.items()},
         "startup_timeout_seconds": startup_seconds,
     }
@@ -950,7 +975,7 @@ http {{
     file(info, json.dumps(ready))
     stack.callback(info.unlink, missing_ok=True)
     phase = "M4" if args.m4 else "M3" if args.m3_gateway_image else "M2"
-    print(f"{phase} ready. Browser origins:", PARENT, AGENT, flush=True)
+    print(f"{phase} ready. Browser origins:", parent, agent, flush=True)
     if args.verify:
         subprocess.run(
             [
@@ -982,8 +1007,9 @@ http {{
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--state-dir", type=Path, default=DEFAULT / "nexpoly-openscience-m2-dev")
-    parser.add_argument("--registry", type=Path, default=REGISTRY)
+    parser.add_argument("--environment", choices=PROFILES, help="Use the named candidate and its local-only browser profile")
+    parser.add_argument("--state-dir", type=Path)
+    parser.add_argument("--registry", type=Path)
     parser.add_argument("--m5-quota-files", action="store_true",
                         help="Enable quota-aware files on verified dev-m1 NFS volumes, with the selected M3/M4 services")
     parser.add_argument("--m6-operator-id", type=UUID,
@@ -1021,6 +1047,11 @@ def main():
         help="Local immutable Qwen2.5-7B release verified by the development worker",
     )
     args = parser.parse_args()
+    args.candidate_browser = args.environment is not None or args.m6_operator_id is not None
+    args.environment = args.environment or "dev-m1"
+    second = args.environment != "dev-m1"
+    args.state_dir = args.state_dir or (SECOND_ROOT / "site" if second else DEFAULT / "nexpoly-openscience-m2-dev")
+    args.registry = args.registry or (SECOND_ROOT / "ws" if second else REGISTRY)
     os.umask(0o077)
 
     def stop(*_):

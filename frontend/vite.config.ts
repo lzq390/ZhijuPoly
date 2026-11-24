@@ -57,6 +57,7 @@ export default defineConfig(({ mode, command, isPreview }) => {
     : undefined;
 
   return mergeConfig(ketcherCompatibility(), {
+    ...(mode === "m2" && process.env.OPENSCIENCE_M2_VITE_CACHE ? { cacheDir: process.env.OPENSCIENCE_M2_VITE_CACHE } : {}),
     plugins: [candidateFonts, mcpProxy, react(), ketcherRuntimePlugin(editor.engine), editor.metadata, developmentCompression(), developmentEntryPreload(editor.engine), retryableImports()],
     resolve: { alias: {
       "@structure-editor-engine": editor.implementation,
