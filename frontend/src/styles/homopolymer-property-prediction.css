@@ -26,6 +26,11 @@
   --np-hp-thermal: #c65a24;
   --np-hp-mechanical: #0e8073;
   --np-hp-permeability: #6a4fd0;
+  /* Direction of change against a compared run (≥ 4.5:1 on white and on the hover tint). */
+  --np-hp-up: #157038;
+  --np-hp-up-soft: #e8f5ec;
+  --np-hp-down: #c22a2a;
+  --np-hp-down-soft: #fdeceb;
   --np-hp-mono: "IBM Plex Mono", var(--font-mono);
   --np-hp-radius-control: 8px;
   --np-hp-radius-card: 12px;
@@ -36,7 +41,9 @@
   --np-hp-panel-max: 480px;
   /* Fill the work area on common screens; only ultrawide windows hit this cap and centre. */
   --np-hp-frame-max: 1680px;
-  --np-hp-gutter: 24px;
+  /* Matches the platform title inset (20px, 36px at 2K), so the surface edges line up with the
+     title on the left and the header tools on the right. */
+  --np-hp-gutter: 20px;
   --np-hp-pad: 18px;
   /* The platform's surface radius; cards (12) and controls (8) step down from it. */
   --np-hp-radius: 14px;
@@ -67,7 +74,7 @@
 
 /* ---------- page frame ---------- */
 .np-structure-workbench.np-homopolymer-prediction .np-hp-page {
-  padding: 0 var(--np-hp-gutter) calc(var(--np-hp-gutter) - 4px);
+  padding: 0 var(--np-hp-gutter) var(--np-hp-gutter);
 }
 
 .np-structure-workbench.np-homopolymer-prediction .np-hp-workbench {
@@ -277,56 +284,139 @@
   outline-offset: 1px;
 }
 
-/* Examples menu: a floating card of starting structures. */
+/* ---------- popover menus: 示例, 导出 and 对比 share one trigger behaviour, surface and item ---------- */
 .np-structure-workbench.np-homopolymer-prediction .np-sw-menu {
   position: relative;
 }
 
-.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__chevron {
+.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__chevron,
+.np-homopolymer-prediction .np-hp-trigger__chevron {
   width: 14px !important;
   height: 14px !important;
-  margin-left: -2px;
+  flex: none;
+  color: var(--np-hp-muted);
   transition: transform 140ms ease;
 }
 
-.np-structure-workbench.np-homopolymer-prediction .np-sw-tool[aria-expanded="true"] .np-sw-menu__chevron {
+.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__chevron {
+  margin-left: -2px;
+}
+
+.np-structure-workbench.np-homopolymer-prediction [aria-expanded="true"] > .np-sw-menu__chevron,
+.np-homopolymer-prediction [aria-expanded="true"] > .np-hp-trigger__chevron {
   transform: rotate(180deg);
 }
 
-.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list {
+/* An open trigger keeps a focus-coloured ring while its menu is showing. */
+.np-homopolymer-prediction .np-hp-trigger[aria-expanded="true"] {
+  border-color: rgba(37, 99, 235, 0.5);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.np-homopolymer-prediction .np-pop {
   position: absolute;
   z-index: 60;
   top: calc(100% + 6px);
-  left: 0;
   display: grid;
-  width: 280px;
+  min-width: 240px;
+  max-height: min(440px, var(--np-pop-room, 62vh));
   gap: 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px;
-  border-radius: 12px;
+  border-radius: var(--np-hp-radius-card);
+  color: var(--np-hp-ink2);
   background: #fff;
   box-shadow: 0 0 0 1px var(--np-hp-line), 0 18px 40px -16px rgba(16, 26, 46, 0.3);
+  font-size: var(--np-hp-fs-sm);
+  line-height: 1.4;
+  transform-origin: top center;
+  animation: np-hp-pop-in 120ms ease-out;
 }
 
-.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list button {
+.np-homopolymer-prediction .np-pop.is-start {
+  left: 0;
+}
+
+.np-homopolymer-prediction .np-pop.is-end {
+  right: 0;
+  width: 272px;
+}
+
+.np-homopolymer-prediction .np-pop.is-fill {
+  right: 0;
+  left: 0;
+}
+
+.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list {
+  width: 288px;
+}
+
+@keyframes np-hp-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .np-homopolymer-prediction .np-pop {
+    animation: none;
+  }
+}
+
+/* Item: leading mark (icon tile, thumbnail or run ring), title over a quiet line, then a trailing
+   value and the check of the chosen item. */
+.np-homopolymer-prediction .np-pop__item {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
+  min-height: 40px;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 12px;
-  padding: 6px;
+  gap: 10px;
+  padding: 6px 8px;
   border: 0;
-  border-radius: 8px;
-  color: var(--np-hp-ink2);
+  border-radius: var(--np-hp-radius-control);
+  color: inherit;
   background: transparent;
+  font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list button:is(:hover, :focus-visible) {
+.np-homopolymer-prediction .np-pop__item:is(:hover, :focus-visible) {
   background: var(--np-hp-sunken);
   outline: none;
 }
 
-.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list img {
+.np-homopolymer-prediction .np-pop__item:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.5);
+}
+
+.np-homopolymer-prediction .np-pop__item[aria-checked="true"] {
+  background: var(--np-hp-blue-soft);
+}
+
+.np-homopolymer-prediction .np-pop__item[aria-checked="true"]:is(:hover, :focus-visible) {
+  background: #e4ebff;
+}
+
+.np-homopolymer-prediction .np-pop__icon {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--np-hp-blue);
+  background: var(--np-hp-blue-soft);
+}
+
+.np-homopolymer-prediction .np-pop__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.np-homopolymer-prediction .np-pop__thumb {
   width: 64px;
   height: 40px;
   border-radius: 6px;
@@ -335,17 +425,86 @@
   object-fit: contain;
 }
 
-.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list b {
-  display: block;
+.np-homopolymer-prediction .np-pop__text {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.np-homopolymer-prediction .np-pop__text b {
+  overflow: hidden;
   color: var(--np-hp-ink);
   font-size: var(--np-hp-fs-sm);
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.np-structure-workbench.np-homopolymer-prediction .np-sw-menu__list small {
-  display: block;
+.np-homopolymer-prediction .np-pop__text small {
   color: var(--np-hp-muted);
   font-size: var(--np-hp-fs-xs);
+}
+
+.np-homopolymer-prediction .np-pop__text code {
+  overflow: hidden;
+  color: var(--np-hp-ink2);
+  font-family: var(--np-hp-mono);
+  font-size: var(--np-hp-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-homopolymer-prediction .np-pop__meta {
+  margin-left: 8px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.np-homopolymer-prediction .np-pop__trail {
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.np-homopolymer-prediction .np-pop__trail b {
+  color: var(--np-hp-ink);
+  font-weight: 600;
+}
+
+/* Run marks match the readout scale: a ring is a compared run; a dashed ring means none. */
+.np-homopolymer-prediction .np-pop__mark {
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  margin: 0 4px;
+  border: 1.5px solid var(--np-hp-ink2);
+  border-radius: 50%;
+}
+
+.np-homopolymer-prediction .np-pop__mark.is-none {
+  border-style: dashed;
+  border-color: var(--np-hp-muted);
+}
+
+.np-homopolymer-prediction .np-pop__check {
+  grid-column: 4;
+  width: 16px;
+  height: 16px;
+  color: var(--np-hp-blue);
+  visibility: hidden;
+}
+
+.np-homopolymer-prediction .np-pop__item[aria-checked="true"] > .np-pop__check {
+  visibility: visible;
+}
+
+.np-homopolymer-prediction .np-pop__sep {
+  height: 1px;
+  margin: 3px 8px;
+  background: var(--np-hp-line);
 }
 
 /* The drawing sheet sits inset in the surface, like a sample window in an instrument. */
@@ -861,6 +1020,57 @@
   }
 }
 
+/* 2K type is ~1.3× larger, so the same one-line rule starts at a wider zone (e.g. with the dock open). */
+@media (min-width: 2000px) and (min-height: 1120px) {
+  @container np-hp-structure (max-width: 1000px) {
+    .np-homopolymer-prediction .np-hp-facts__title {
+      display: none;
+    }
+
+    .np-structure-workbench.np-homopolymer-prediction .np-hp-facts {
+      gap: 4px;
+      padding-right: 6px;
+      padding-left: 10px;
+    }
+
+    .np-homopolymer-prediction .np-hp-facts__list {
+      gap: 0;
+    }
+
+    .np-homopolymer-prediction .np-hp-fact {
+      position: static;
+    }
+
+    .np-homopolymer-prediction .np-hp-fact > button {
+      gap: 4px;
+      padding: 0 4px;
+    }
+
+    .np-homopolymer-prediction .np-hp-fact + .np-hp-fact::before {
+      margin: 0;
+    }
+
+    .np-homopolymer-prediction .np-hp-fact__tip,
+    .np-homopolymer-prediction .np-hp-fact.is-start .np-hp-fact__tip,
+    .np-homopolymer-prediction .np-hp-fact.is-end .np-hp-fact__tip {
+      right: 10px;
+      left: 10px;
+      width: auto;
+      max-width: none;
+      transform: none;
+    }
+
+    .np-homopolymer-prediction .np-hp-facts__help > span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+}
+}
+
 /* Phones: a titled block with the facts in a four-column grid, label above value. */
 @container np-hp-structure (max-width: 560px) {
   .np-structure-workbench.np-homopolymer-prediction .np-hp-facts {
@@ -901,15 +1111,6 @@
     overflow: visible;
     clip: auto;
   }
-}
-
-.np-hp-help__facts dl {
-  margin: 8px 0;
-}
-
-.np-hp-help__facts dt > span {
-  color: #667085;
-  font-weight: 400;
 }
 
 /* Narrow structure zones keep every tool, but secondary labels collapse to icons. */
@@ -1178,6 +1379,12 @@
   white-space: nowrap;
 }
 
+.np-homopolymer-prediction .np-hp-runs__num {
+  margin-right: 6px;
+  color: var(--np-hp-ink2);
+  font-weight: 600;
+}
+
 .np-homopolymer-prediction .np-hp-runs__tg strong {
   color: var(--np-hp-ink);
   font-size: var(--np-hp-fs-sm);
@@ -1185,60 +1392,487 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- help (module dock) ---------- */
-.np-hp-help section + section {
-  margin-top: 18px;
+/* ---------- help (module dock): quick start, a sticky index, then one card per topic ---------- */
+.np-homopolymer-prediction .np-module-dock__body:has(> .np-hp-help) {
+  background: var(--np-hp-tint);
+}
+
+.np-hp-help {
+  display: grid;
+  gap: 12px;
+  color: var(--np-hp-ink2);
+  font-size: 1em;
+  line-height: 1.65;
+}
+
+.np-hp-help :is(p, ul, ol, dl, h3, h4) {
+  margin: 0;
+}
+
+.np-hp-help__lead {
+  color: var(--np-hp-ink2);
+}
+
+.np-hp-help__steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.np-hp-help__steps li {
+  display: grid;
+  align-content: start;
+  gap: 1px;
+  padding: 10px 10px 9px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
+}
+
+.np-hp-help__step {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  margin-bottom: 5px;
+  place-items: center;
+  border-radius: 6px;
+  color: #fff;
+  background: var(--np-hp-blue);
+  font: 600 0.85em / 1 var(--np-hp-mono);
+}
+
+.np-hp-help__steps b {
+  color: var(--np-hp-ink);
+  font-size: 0.96em;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.np-hp-help__steps small {
+  color: var(--np-hp-muted);
+  font-size: 0.89em;
+  line-height: 1.4;
+}
+
+/* The index sticks to the top of the dock while the sections scroll under it. */
+.np-hp-help__index {
+  position: sticky;
+  z-index: 1;
+  top: -16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 -18px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--np-hp-line);
+  background: rgba(247, 249, 251, 0.96);
+  backdrop-filter: blur(6px);
+}
+
+.np-hp-help__index button {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--np-hp-ink2);
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
+  font: 500 0.89em / 1 var(--font-body);
+  cursor: pointer;
+}
+
+.np-hp-help__index button:hover {
+  color: var(--np-hp-blue-ink);
+  background: var(--np-hp-blue-soft);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.2);
+}
+
+.np-hp-help__section {
+  scroll-margin-top: 56px;
+  padding: 14px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
+}
+
+.np-hp-help .np-hp-help__section > * + * {
+  margin-top: 10px;
+}
+
+.np-hp-help .np-hp-help__section > h3 + * {
+  margin-top: 12px;
 }
 
 .np-hp-help h3 {
-  margin: 0 0 6px;
-  color: #101828;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--np-hp-ink);
   font-family: var(--font-body);
-  font-size: 1em;
+  font-size: 1.04em;
   font-weight: 600;
+  line-height: 1.4;
 }
 
-.np-hp-help p + p {
-  margin-top: 6px;
+.np-hp-help__glyph {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--np-hp-blue);
+  background: var(--np-hp-blue-soft);
 }
 
-.np-hp-help p,
-.np-hp-help ul,
-.np-hp-help dl {
-  margin: 0;
-  color: #344054;
-}
-
-.np-hp-help ul {
-  padding-left: 1.2em;
-  list-style: disc;
-}
-
-.np-hp-help li + li {
-  margin-top: 4px;
-}
-
-.np-hp-help dl > div + div {
-  margin-top: 6px;
-}
-
-.np-hp-help dt {
-  color: #101828;
-  font-weight: 500;
-}
-
-.np-hp-help dd {
-  margin: 0;
+.np-hp-help__glyph svg {
+  width: 14px;
+  height: 14px;
 }
 
 .np-hp-help code,
 .np-hp-help kbd {
-  padding: 0 4px;
-  border: 1px solid #eaecf0;
-  border-radius: 4px;
-  background: #f9fafb;
-  font-family: var(--font-mono);
-  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  color: var(--np-hp-ink);
+  background: var(--np-hp-sunken);
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
+  font-family: var(--np-hp-mono);
+  font-size: 0.89em;
+  overflow-wrap: anywhere;
+}
+
+.np-hp-help kbd {
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--np-hp-line2), inset 0 -1px 0 var(--np-hp-line2);
+}
+
+/* Icon list: input ways and export formats. */
+.np-hp-help__ways {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.np-hp-help__ways li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  column-gap: 10px;
+}
+
+.np-hp-help__ways svg {
+  grid-row: span 2;
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+  color: var(--np-hp-blue);
+}
+
+.np-hp-help__ways b {
+  color: var(--np-hp-ink);
+  font-size: 0.96em;
+  font-weight: 600;
+}
+
+.np-hp-help__ways span {
+  color: var(--np-hp-ink2);
+  font-size: 0.93em;
+  line-height: 1.55;
+}
+
+.np-hp-help__tip {
+  padding: 9px 11px;
+  border-radius: 8px;
+  color: #24345c;
+  background: var(--np-hp-blue-soft);
+  font-size: 0.93em;
+}
+
+.np-hp-help__tip code {
+  background: #fff;
+}
+
+/* Structure facts as a two-column glossary. */
+.np-hp-help__terms {
+  display: grid;
+  border-top: 1px solid var(--np-hp-line);
+}
+
+.np-hp-help__terms > div {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.np-hp-help__terms dt {
+  color: var(--np-hp-ink);
+  font-size: 0.96em;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.np-hp-help__terms dt span {
+  display: block;
+  color: var(--np-hp-muted);
+  font-family: var(--np-hp-mono);
+  font-size: 0.85em;
+  font-weight: 400;
+}
+
+.np-hp-help__terms dd {
+  margin: 0;
+  color: var(--np-hp-ink2);
+  font-size: 0.93em;
+  line-height: 1.6;
+}
+
+.np-hp-help__aside {
+  color: var(--np-hp-muted);
+  font-size: 0.89em;
+}
+
+/* Property groups: a tint of the channel colour with its rule on the left. */
+.np-hp-help__group {
+  padding: 10px 12px 8px;
+  border-radius: 10px;
+  background: var(--np-hp-channel-soft);
+  box-shadow: inset 3px 0 0 var(--np-hp-channel);
+}
+
+.np-hp-help__group + .np-hp-help__group {
+  margin-top: 8px;
+}
+
+.np-hp-help__group h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--np-hp-ink);
+  font-family: var(--font-body);
+  font-size: 0.96em;
+  font-weight: 600;
+}
+
+.np-hp-help__group .np-hp-channel-badge {
+  --np-hp-badge: 20px;
+}
+
+.np-hp-help__group .np-hp-channel-badge svg {
+  width: 12px;
+  height: 12px;
+}
+
+.np-hp-help__group ul {
+  display: grid;
+  gap: 2px;
+  padding: 0;
+  list-style: none;
+}
+
+.np-hp-help__group li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.96em;
+}
+
+.np-hp-help__group li small {
+  flex: none;
+  color: var(--np-hp-muted);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Reading results: each mark shown the way the table draws it, with its meaning beside it. */
+.np-hp-help__legend {
+  display: grid;
+  gap: 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.np-hp-help__legend li {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.np-hp-help__legend li > span:last-child {
+  color: var(--np-hp-ink2);
+  font-size: 0.93em;
+  line-height: 1.6;
+}
+
+.np-hp-help__legend li > span:last-child b {
+  display: block;
+  color: var(--np-hp-ink);
+  font-size: 1.03em;
+  font-weight: 600;
+}
+
+.np-hp-help__sample {
+  display: flex;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-radius: 8px;
+  background: var(--np-hp-tint);
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
+  font-size: 0.93em;
+}
+
+.np-hp-help__sample.is-text {
+  color: var(--np-hp-muted);
+}
+
+.np-hp-help__rail {
+  position: relative;
+  width: 70px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--np-hp-line2);
+}
+
+.np-hp-help__rail i {
+  position: absolute;
+  top: 0;
+  height: 2px;
+  background: var(--np-hp-thermal);
+}
+
+.np-hp-help__rail b {
+  position: absolute;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: var(--np-hp-thermal);
+}
+
+.np-hp-help__rail b.is-ring {
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1.5px var(--np-hp-ink2);
+}
+
+.np-hp-help .np-hp-delta.is-large {
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.np-hp-help .np-hp-delta.is-large.is-up {
+  background: var(--np-hp-up-soft);
+}
+
+.np-hp-help__list {
+  display: grid;
+  gap: 6px;
+  padding-left: 1.1em;
+  list-style: disc;
+}
+
+.np-hp-help__list li::marker {
+  color: var(--np-hp-tick);
+}
+
+.np-hp-help__keys > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.np-hp-help__keys > div:last-child {
+  border-bottom: 0;
+}
+
+.np-hp-help__keys dt {
+  color: var(--np-hp-ink2);
+}
+
+.np-hp-help__keys dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: 0;
+  color: var(--np-hp-muted);
+  font-size: 0.89em;
+}
+
+.np-hp-help__keys dd small {
+  flex-basis: 100%;
+  font-size: 1em;
+  text-align: right;
+}
+
+.np-hp-help__note {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--np-theme-warning-text);
+  background: var(--np-theme-warning-soft);
+  font-size: 0.93em;
+}
+
+.np-hp-help__note svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-top: 3px;
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-hp-help__index {
+    top: -22px;
+    margin: 0 -24px;
+    padding: 12px 24px;
+  }
+
+  .np-hp-help__index button {
+    height: 34px;
+    padding: 0 14px;
+  }
+
+  .np-hp-help__step,
+  .np-hp-help__glyph {
+    width: 30px;
+    height: 30px;
+  }
+
+  .np-hp-help__glyph svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .np-hp-help__terms > div {
+    grid-template-columns: 110px minmax(0, 1fr);
+  }
+
+  .np-hp-help__legend li {
+    grid-template-columns: 124px minmax(0, 1fr);
+  }
+
+  .np-hp-help__sample {
+    height: 38px;
+  }
 }
 
 /* ---------- task panel: a tinted column holding two cards (input, output) and the relay strip ---------- */
@@ -1664,8 +2298,10 @@
   place-items: center;
   padding: 0 6px;
   border-radius: 6px;
-  color: rgba(255, 255, 255, 0.9);
-  background: rgba(255, 255, 255, 0.16);
+  /* A darker inset key keeps white text at ≥ 4.5:1 on the cobalt button. */
+  color: #fff;
+  background: rgba(10, 22, 60, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
   font: 500 11px / 1 var(--font-body);
   letter-spacing: 0.02em;
 }
@@ -1718,12 +2354,38 @@
 }
 
 /* ---------- results ---------- */
+/* A fixed head (title, export, comparison picker) over a scrolling body (notices, table, runs).
+   Menus opened from the head float over the body instead of being clipped by its scroll. */
 .np-homopolymer-prediction .np-hp-results {
+  --np-hp-results-pt: 16px;
+  --np-hp-results-pb: 14px;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.np-homopolymer-prediction .np-hp-results__head {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  padding: var(--np-hp-results-pt) var(--np-hp-pad) 6px;
+  border-radius: var(--np-hp-radius-card) var(--np-hp-radius-card) 0 0;
+  background: #fff;
+  transition: box-shadow 140ms ease;
+}
+
+.np-homopolymer-prediction .np-hp-results.is-scrolled > .np-hp-results__head {
+  box-shadow: 0 1px 0 var(--np-hp-line), 0 8px 16px -14px rgba(16, 26, 46, 0.35);
+}
+
+.np-homopolymer-prediction .np-hp-results__body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 16px var(--np-hp-pad) 14px;
+  padding: 2px var(--np-hp-pad) var(--np-hp-results-pb);
+  border-radius: 0 0 var(--np-hp-radius-card) var(--np-hp-radius-card);
 }
 
 .np-homopolymer-prediction .np-hp-results__header {
@@ -1733,6 +2395,10 @@
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 8px;
+}
+
+.np-homopolymer-prediction .np-hp-results__head > .np-hp-results__header:last-child {
+  margin-bottom: 2px;
 }
 
 .np-homopolymer-prediction .np-hp-results__header h2 {
@@ -1796,41 +2462,32 @@
   gap: 10px;
 }
 
-.np-homopolymer-prediction .np-hp-export__feedback {
-  color: var(--np-hp-muted);
+/* Export feedback: a small pill beside the trigger that fades after a moment. */
+.np-homopolymer-prediction .np-hp-toast {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 8px;
+  border-radius: 999px;
+  color: #166534;
+  background: #ecf8f0;
+  box-shadow: inset 0 0 0 1px rgba(22, 101, 52, 0.16);
   font-size: var(--np-hp-fs-xs);
+  font-weight: 500;
   white-space: nowrap;
+  animation: np-hp-pop-in 160ms ease-out;
 }
 
-.np-homopolymer-prediction .np-hp-export__menu {
-  position: absolute;
-  z-index: 10;
-  top: calc(100% + 4px);
-  right: 0;
-  min-width: 140px;
-  padding: 4px;
-  border: 1px solid var(--np-hp-line);
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 14px 32px -12px rgba(19, 32, 58, 0.22);
+.np-homopolymer-prediction .np-hp-toast.is-error {
+  color: var(--np-theme-danger-text);
+  background: var(--np-theme-danger-soft);
+  box-shadow: inset 0 0 0 1px var(--np-theme-danger-border);
 }
 
-.np-homopolymer-prediction .np-hp-export__menu button {
-  display: block;
-  width: 100%;
-  padding: 7px 10px;
-  border: 0;
-  border-radius: 6px;
-  color: var(--np-hp-ink2);
-  background: none;
-  font-size: var(--np-hp-fs-sm);
-  text-align: left;
-  cursor: pointer;
-}
-
-.np-homopolymer-prediction .np-hp-export__menu button:hover,
-.np-homopolymer-prediction .np-hp-export__menu button:focus-visible {
-  background: var(--np-hp-hover);
+.np-homopolymer-prediction .np-hp-toast svg {
+  width: 14px;
+  height: 14px;
 }
 
 .np-homopolymer-prediction .np-hp-status {
@@ -1933,35 +2590,38 @@
   margin: 0;
 }
 
-/* Comparison picker: a styled face showing the compared run (ring mark, time, SMILES, Tg) over a
-   transparent native select, which keeps keyboard and screen-reader behaviour. */
-.np-homopolymer-prediction .np-hp-select {
+/* Comparison picker: a field-like trigger showing the compared run (ring, run, time, SMILES, Tg);
+   its menu is the page's shared popover with one radio item per run. */
+.np-homopolymer-prediction .np-hp-picker {
   position: relative;
-  display: block;
   min-width: 0;
-  height: 38px;
   flex: 1 1 auto;
 }
 
-.np-homopolymer-prediction .np-hp-select__face {
-  position: absolute;
-  inset: 0;
+.np-homopolymer-prediction .np-hp-picker__face {
   display: flex;
+  width: 100%;
+  height: var(--np-hp-control);
   align-items: center;
   gap: 10px;
   padding: 0 10px 0 12px;
-  border-radius: 9px;
+  border: 1px solid var(--np-hp-line2);
+  border-radius: var(--np-hp-radius-control);
+  color: var(--np-hp-ink2);
   background: #fff;
-  box-shadow: inset 0 0 0 1px var(--np-hp-line2), var(--np-hp-raise);
-  pointer-events: none;
-  transition: box-shadow 120ms ease;
+  box-shadow: var(--np-hp-raise);
+  font: inherit;
+  font-size: var(--np-hp-fs-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
-.np-homopolymer-prediction .np-hp-select:hover .np-hp-select__face {
-  box-shadow: inset 0 0 0 1px var(--np-hp-tick), var(--np-hp-raise);
+.np-homopolymer-prediction .np-hp-picker__face:hover {
+  border-color: var(--np-hp-tick);
 }
 
-.np-homopolymer-prediction .np-hp-select:has(select:focus-visible) .np-hp-select__face {
+.np-homopolymer-prediction .np-hp-picker__face:focus-visible {
   outline: var(--np-theme-focus-width, 2px) solid var(--np-theme-focus, rgba(37, 99, 235, 0.55));
   outline-offset: 2px;
 }
@@ -1974,6 +2634,14 @@
   box-shadow: inset 0 0 0 1.5px var(--np-hp-ink2);
 }
 
+.np-homopolymer-prediction .np-hp-picker__run {
+  flex: none;
+  color: var(--np-hp-ink);
+  font-size: var(--np-hp-fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .np-homopolymer-prediction .np-hp-select__time {
   flex: none;
   color: var(--np-hp-muted);
@@ -1981,7 +2649,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.np-homopolymer-prediction .np-hp-select__face code {
+.np-homopolymer-prediction .np-hp-picker__face code {
   min-width: 0;
   overflow: hidden;
   color: var(--np-hp-ink2);
@@ -2010,26 +2678,12 @@
   font-size: var(--np-hp-fs-sm);
 }
 
-.np-homopolymer-prediction .np-hp-select__face > svg {
-  width: 15px;
-  height: 15px;
+.np-homopolymer-prediction .np-hp-picker__face > .np-hp-trigger__chevron {
   margin-left: auto;
-  flex: none;
-  color: var(--np-hp-muted);
 }
 
-.np-homopolymer-prediction .np-hp-select__tg + svg {
+.np-homopolymer-prediction .np-hp-select__tg + .np-hp-trigger__chevron {
   margin-left: 0;
-}
-
-.np-homopolymer-prediction .np-hp-select select {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
 }
 
 .np-homopolymer-prediction .np-hp-legend {
@@ -2128,17 +2782,6 @@
   height: 12px;
 }
 
-.np-hp-help dt .np-hp-channel-badge {
-  --np-hp-badge: 18px;
-  margin-right: 7px;
-  vertical-align: -4px;
-}
-
-.np-hp-help dt .np-hp-channel-badge svg {
-  width: 12px;
-  height: 12px;
-}
-
 .np-homopolymer-prediction .np-hp-table td strong {
   color: var(--np-hp-ink);
   font-size: var(--np-hp-fs-value);
@@ -2163,28 +2806,54 @@
   font-variant-numeric: tabular-nums;
 }
 
-.np-homopolymer-prediction .np-hp-table td.is-delta.is-large {
-  color: var(--np-hp-ink);
-  font-weight: 600;
+/* Change against the compared run: green when higher, red when lower, with the arrow kept so the
+   direction never depends on colour alone. Colour shows direction only, not better or worse. */
+.np-homopolymer-prediction .np-hp-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--np-hp-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-/* Direction as a small triangle; colour stays neutral because higher is not always better. */
-.np-homopolymer-prediction .np-hp-table td.is-delta:is(.is-up, .is-down)::before {
+.np-homopolymer-prediction .np-hp-delta.is-up {
+  color: var(--np-hp-up);
+}
+
+.np-homopolymer-prediction .np-hp-delta.is-down {
+  color: var(--np-hp-down);
+}
+
+.np-homopolymer-prediction .np-hp-delta:is(.is-up, .is-down)::before {
   content: "";
   display: inline-block;
-  margin: 0 5px 0 0;
   border-right: 3.5px solid transparent;
   border-left: 3.5px solid transparent;
-  opacity: 0.55;
-  vertical-align: 2px;
 }
 
-.np-homopolymer-prediction .np-hp-table td.is-delta.is-up::before {
+.np-homopolymer-prediction .np-hp-delta.is-up::before {
   border-bottom: 5px solid currentColor;
 }
 
-.np-homopolymer-prediction .np-hp-table td.is-delta.is-down::before {
+.np-homopolymer-prediction .np-hp-delta.is-down::before {
   border-top: 5px solid currentColor;
+}
+
+/* Changes over 20%: bold on a tint of the same colour. */
+.np-homopolymer-prediction .np-hp-table .np-hp-delta.is-large {
+  margin-right: -6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.np-homopolymer-prediction .np-hp-table .np-hp-delta.is-large.is-up {
+  background: var(--np-hp-up-soft);
+}
+
+.np-homopolymer-prediction .np-hp-table .np-hp-delta.is-large.is-down {
+  background: var(--np-hp-down-soft);
 }
 
 .np-homopolymer-prediction .np-hp-table__missing {
@@ -2336,6 +3005,15 @@
   font-size: var(--np-hp-fs-sm);
 }
 
+.np-homopolymer-prediction .np-hp-footnote__key {
+  display: block;
+}
+
+.np-homopolymer-prediction .np-hp-footnote__key .np-hp-delta {
+  margin-right: 10px;
+  font-weight: 500;
+}
+
 /* ---------- continue with this structure ---------- */
 .np-homopolymer-prediction .np-hp-next {
   display: flex;
@@ -2448,8 +3126,9 @@
     min-height: 44px;
   }
 
-  .np-homopolymer-prediction .np-hp-select {
-    height: 44px;
+  .np-homopolymer-prediction .np-hp-picker__face,
+  .np-homopolymer-prediction .np-pop__item {
+    min-height: 44px;
   }
 
   .np-homopolymer-prediction .np-hp-link {
@@ -2477,7 +3156,6 @@
   .np-structure-workbench.np-homopolymer-prediction {
     --np-hp-panel-min: 440px;
     --np-hp-panel-max: 600px;
-    --np-hp-gutter: 32px;
     --np-hp-pad: 20px;
   }
 }
@@ -2554,8 +3232,8 @@
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-hp-results {
-    padding-top: 12px;
-    padding-bottom: 8px;
+    --np-hp-results-pt: 12px;
+    --np-hp-results-pb: 8px;
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-hp-run {
@@ -2622,8 +3300,8 @@
     min-height: 52px;
   }
 
-  .np-homopolymer-prediction .np-hp-select {
-    height: 50px;
+  .np-homopolymer-prediction .np-hp-picker__face {
+    height: 42px;
   }
 
   .np-homopolymer-prediction .np-hp-primary__keys kbd {
@@ -2849,9 +3527,12 @@
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-hp-results {
+    --np-hp-results-pt: 18px;
     order: 2;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-results__body {
     overflow: visible;
-    padding-top: 18px;
   }
 
   .np-structure-workbench.np-homopolymer-prediction .np-hp-next {
@@ -2943,34 +3624,56 @@
   display: flex;
   flex: none;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
-  padding: 12px 16px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--np-hp-line);
+  background: var(--np-hp-tint);
+}
+
+.np-homopolymer-prediction .np-hp-assistant__context > small {
+  margin-right: 2px;
+  color: var(--np-hp-muted);
+  font-size: var(--np-hp-fs-xs);
 }
 
 .np-homopolymer-prediction .np-hp-assistant__context span {
   display: inline-flex;
   max-width: 100%;
   min-width: 0;
+  height: 24px;
   align-items: center;
   gap: 5px;
-  padding: 2px 10px;
+  padding: 0 9px 0 7px;
   border-radius: 999px;
-  color: var(--np-hp-muted);
-  background: var(--np-hp-hover);
+  color: var(--np-hp-ink2);
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
   font-size: var(--np-hp-fs-xs);
-  line-height: 1.6;
+  line-height: 1;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__context span svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--np-hp-muted);
 }
 
 .np-homopolymer-prediction .np-hp-assistant__context span.is-attached {
   color: var(--np-hp-blue-ink);
   background: var(--np-hp-blue-soft);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.22);
+}
+
+.np-homopolymer-prediction .np-hp-assistant__context span.is-attached svg {
+  color: var(--np-hp-blue);
 }
 
 .np-homopolymer-prediction .np-hp-assistant__context code {
   min-width: 0;
   overflow: hidden;
-  font-family: var(--font-mono);
+  font-family: var(--np-hp-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2984,13 +3687,24 @@
 }
 
 .np-homopolymer-prediction .np-hp-assistant__notice {
-  margin: 0 0 14px;
+  display: flex;
+  gap: 8px;
+  margin: 0 0 18px;
   padding: 8px 10px;
   border-radius: 8px;
   color: var(--np-hp-ink2);
-  background: #f9fafb;
+  background: var(--np-hp-tint);
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
   font-size: var(--np-hp-fs-xs);
   line-height: 1.55;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__notice svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-top: 2px;
+  color: var(--np-hp-muted);
 }
 
 .np-homopolymer-prediction .np-hp-assistant__welcome {
@@ -3030,6 +3744,14 @@
   line-height: 1.6;
 }
 
+.np-homopolymer-prediction .np-hp-assistant__label {
+  margin: 0 0 6px;
+  color: var(--np-hp-muted);
+  font-family: var(--font-body);
+  font-size: var(--np-hp-fs-xs);
+  font-weight: 500;
+}
+
 .np-homopolymer-prediction .np-hp-assistant__welcome ul {
   display: grid;
   gap: 6px;
@@ -3038,21 +3760,43 @@
   list-style: none;
 }
 
+/* Suggestions are rows of the same family as the popover menu items. */
 .np-homopolymer-prediction .np-hp-assistant__welcome li button {
+  display: flex;
   width: 100%;
-  padding: 9px 12px;
-  border: 1px solid var(--np-hp-line);
-  border-radius: 9px;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px 8px 12px;
+  border: 0;
+  border-radius: var(--np-hp-radius-control);
   color: var(--np-hp-ink2);
   background: #fff;
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
   font-size: var(--np-hp-fs-sm);
   text-align: left;
   cursor: pointer;
+  transition: background-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
+}
+
+.np-homopolymer-prediction .np-hp-assistant__welcome li button svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--np-hp-tick);
+  transition: color 120ms ease, transform 120ms ease;
 }
 
 .np-homopolymer-prediction .np-hp-assistant__welcome li button:hover {
-  border-color: var(--np-hp-line2);
-  background: #f9fafb;
+  color: var(--np-hp-blue-ink);
+  background: var(--np-hp-blue-soft);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.2);
+}
+
+.np-homopolymer-prediction .np-hp-assistant__welcome li button:hover svg {
+  color: var(--np-hp-blue);
+  transform: translate(1px, -1px);
 }
 
 .np-homopolymer-prediction .np-hp-assistant__messages {
@@ -3104,16 +3848,18 @@
   border-top: 1px solid var(--np-hp-line);
 }
 
+/* The composer is a sunken field like the SMILES box; it lifts to white while typing. */
 .np-homopolymer-prediction .np-hp-assistant__input {
   position: relative;
-  border: 1px solid var(--np-hp-line2);
   border-radius: 12px;
-  background: #fff;
+  background: var(--np-hp-sunken);
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
+  transition: background-color 140ms ease, box-shadow 140ms ease;
 }
 
 .np-homopolymer-prediction .np-hp-assistant__input:focus-within {
-  border-color: rgba(37, 99, 235, 0.5);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.45), 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
 .np-homopolymer-prediction .np-hp-assistant__input textarea {
@@ -3152,8 +3898,9 @@
 }
 
 .np-homopolymer-prediction .np-hp-assistant__send:disabled {
-  color: #98a2b3;
-  background: var(--np-hp-hover);
+  color: var(--np-hp-tick);
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--np-hp-line);
   cursor: not-allowed;
 }
 

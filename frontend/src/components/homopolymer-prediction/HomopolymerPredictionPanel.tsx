@@ -1,5 +1,6 @@
-import { Atom, Check, ChevronDown, CornerDownLeft, Database, Download, Gauge, History, ListChecks, LoaderCircle, Network, Play, TriangleAlert } from "lucide-react";
-import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from "react";
+import { Atom, Check, ChevronDown, ClipboardCopy, CornerDownLeft, Database, Download, FileSpreadsheet, Gauge, History, ListChecks, LoaderCircle, Network, Play, TriangleAlert } from "lucide-react";
+import { useEffect, useId, useState, type FormEvent, type RefObject } from "react";
+import { usePopoverMenu } from "../../hooks/usePopoverMenu";
 import {
   PREDICTABLE_PROPERTIES,
   PREDICT_PROPERTY_CATALOG,
@@ -107,31 +108,10 @@ function download(filename: string, content: string) {
 }
 
 function ExportMenu({ run, comparison }: { run: PredictionRun; comparison: PredictionRun | null }) {
-  const [open, setOpen] = useState(false);
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const menuId = useId();
-
-  useEffect(() => {
-    if (!open) return;
-    rootRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-    function handlePointer(event: PointerEvent) {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
-    }
-    function handleKey(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setOpen(false);
-      buttonRef.current?.focus();
-    }
-    document.addEventListener("pointerdown", handlePointer);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointer);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [open]);
+  const menu = usePopoverMenu();
+  const [feedback, setFeedback] = useState<{ text: string; ok: boolean } | null>(null);
+  const csvHintId = useId();
+  const copyHintId = useId();
 
   useEffect(() => {
     if (!feedback) return;
@@ -142,49 +122,149 @@ function ExportMenu({ run, comparison }: { run: PredictionRun; comparison: Predi
   const table = () => predictionTable(run, comparison);
 
   return (
-    <div ref={rootRef} className="np-hp-export">
-      {feedback ? <span className="np-hp-export__feedback" role="status">{feedback}</span> : null}
-      <button
-        ref={buttonRef}
-        type="button"
-        className="np-hp-button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={menuId}
-        onClick={() => setOpen((current) => !current)}
-      >
+    <div ref={menu.rootRef} className="np-hp-export">
+      {feedback ? (
+        <span className={`np-hp-toast${feedback.ok ? "" : " is-error"}`} role="status">
+          {feedback.ok ? <Check aria-hidden="true" /> : <TriangleAlert aria-hidden="true" />}
+          {feedback.text}
+        </span>
+      ) : null}
+      <button {...menu.triggerProps} type="button" className="np-hp-button np-hp-trigger">
         <Download aria-hidden="true" />
         <span>导出</span>
-        <ChevronDown aria-hidden="true" />
+        <ChevronDown className="np-hp-trigger__chevron" aria-hidden="true" />
       </button>
-      {open ? (
-        <div id={menuId} className="np-hp-export__menu" role="menu" aria-label="导出预测结果">
+      {menu.open ? (
+        <div {...menu.menuProps} className="np-hp-export__menu np-pop is-end" aria-label="导出预测结果">
           <button
             type="button"
             role="menuitem"
+            tabIndex={-1}
+            className="np-pop__item"
+            aria-label="下载 CSV"
+            aria-describedby={csvHintId}
             onClick={() => {
               download(`homopolymer-prediction-${run.id}.csv`, toCsv(table()));
-              setOpen(false);
-              setFeedback("已下载 CSV");
+              menu.close();
+              setFeedback({ text: "已下载 CSV", ok: true });
             }}
           >
-            下载 CSV
+            <span className="np-pop__icon" aria-hidden="true"><FileSpreadsheet /></span>
+            <span className="np-pop__text">
+              <b>下载 CSV</b>
+              <small id={csvHintId}>{comparison ? "模型原始数值，含对比列" : "模型输出的原始数值"}</small>
+            </span>
           </button>
           <button
             type="button"
             role="menuitem"
+            tabIndex={-1}
+            className="np-pop__item"
+            aria-label="复制表格"
+            aria-describedby={copyHintId}
             onClick={async () => {
-              setOpen(false);
+              menu.close();
               try {
                 await navigator.clipboard.writeText(toTsv(table()));
-                setFeedback("已复制，可粘贴到表格");
+                setFeedback({ text: "已复制，可粘贴到表格", ok: true });
               } catch {
-                setFeedback("复制失败，请改用下载 CSV");
+                setFeedback({ text: "复制失败，请改用下载 CSV", ok: false });
               }
             }}
           >
-            复制表格
+            <span className="np-pop__icon" aria-hidden="true"><ClipboardCopy /></span>
+            <span className="np-pop__text">
+              <b>复制表格</b>
+              <small id={copyHintId}>制表符分隔，可直接粘贴到 Excel</small>
+            </span>
           </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function runTg(run: PredictionRun) {
+  return formatPredictionValue(predictionValue(run, "Glass transition temperature"));
+}
+
+/** Picks the run to compare with; the same popover menu as 示例 and 导出, one radio item per run. */
+function ComparisonMenu({
+  comparison,
+  options,
+  onChange
+}: {
+  comparison: PredictionRun | null;
+  options: readonly PredictionRun[];
+  onChange: (runId: number | null) => void;
+}) {
+  const menu = usePopoverMenu();
+  const tg = comparison ? runTg(comparison) : null;
+  const label = comparison
+    ? `第 ${comparison.id} 次运行，${formatRunTime(comparison.finishedAt)}，${displaySmiles(comparison.smiles)}`
+    : "不对比";
+
+  function pick(runId: number | null) {
+    menu.close();
+    onChange(runId);
+  }
+
+  return (
+    <div ref={menu.rootRef} className="np-hp-picker">
+      <button {...menu.triggerProps} type="button" className="np-hp-picker__face np-hp-trigger" aria-label={`对比：${label}`}>
+        {comparison ? (
+          <>
+            <i className="np-hp-select__ring" aria-hidden="true" />
+            <span className="np-hp-picker__run">第 {comparison.id} 次</span>
+            <span className="np-hp-select__time">{formatRunTime(comparison.finishedAt)}</span>
+            <code>{displaySmiles(comparison.smiles)}</code>
+            {tg !== null ? <span className="np-hp-select__tg">Tg <b>{tg}</b> °C</span> : null}
+          </>
+        ) : (
+          <span className="np-hp-select__none">不对比</span>
+        )}
+        <ChevronDown className="np-hp-trigger__chevron" aria-hidden="true" />
+      </button>
+      {menu.open ? (
+        <div {...menu.menuProps} className="np-pop is-fill" aria-label="选择对比的运行">
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={comparison === null}
+            tabIndex={-1}
+            className="np-pop__item"
+            onClick={() => pick(null)}
+          >
+            <i className="np-pop__mark is-none" aria-hidden="true" />
+            <span className="np-pop__text">
+              <b>不对比</b>
+              <small>只看本次结果</small>
+            </span>
+            <Check className="np-pop__check" aria-hidden="true" />
+          </button>
+          <div role="separator" className="np-pop__sep" />
+          {options.map((run) => {
+            const optionTg = runTg(run);
+            return (
+              <button
+                key={run.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={comparison?.id === run.id}
+                tabIndex={-1}
+                className="np-pop__item"
+                onClick={() => pick(run.id)}
+              >
+                <i className="np-pop__mark" aria-hidden="true" />
+                <span className="np-pop__text">
+                  <b>第 {run.id} 次运行<span className="np-pop__meta">{formatRunTime(run.finishedAt)}</span></b>
+                  <code title={run.smiles}>{displaySmiles(run.smiles)}</code>
+                </span>
+                {optionTg !== null ? <span className="np-pop__trail">Tg <b>{optionTg}</b> °C</span> : null}
+                <Check className="np-pop__check" aria-hidden="true" />
+              </button>
+            );
+          })}
         </div>
       ) : null}
     </div>
@@ -248,7 +328,7 @@ function ResultTable({
           <th scope="col">性质</th>
           <th aria-hidden="true" className="np-hp-table__scale-head" />
           <th scope="col" className="is-num">本次</th>
-          {compare ? <th scope="col" className="is-num">上次</th> : null}
+          {compare ? <th scope="col" className="is-num">对比</th> : null}
           {compare ? <th scope="col" className="is-num">变化</th> : null}
         </tr>
       </thead>
@@ -268,6 +348,9 @@ function ResultTable({
             const formatted = formatPredictionValue(value);
             const previousFormatted = formatPredictionValue(previous);
             const direction = value !== null && previous !== null && value !== previous ? (value > previous ? " is-up" : " is-down") : "";
+            const percent = value !== null && previous !== null && previous !== 0 && value !== previous
+              ? `${value > previous ? "+" : "−"}${Math.abs(((value - previous) / previous) * 100).toFixed(1)}%`
+              : undefined;
             return (
               <tr key={property}>
                 <th scope="row">
@@ -290,8 +373,12 @@ function ResultTable({
                   </td>
                 ) : null}
                 {compare ? (
-                  <td className={`is-num is-delta${delta?.large ? " is-large" : ""}${direction}`}>
-                    {delta?.text ?? <span className="np-hp-table__missing">—</span>}
+                  <td className="is-num is-delta" title={percent ? `相对变化 ${percent}` : undefined}>
+                    {delta ? (
+                      <span className={`np-hp-delta${delta.large ? " is-large" : ""}${direction}`}>{delta.text}</span>
+                    ) : (
+                      <span className="np-hp-table__missing">—</span>
+                    )}
                   </td>
                 ) : null}
               </tr>
@@ -325,7 +412,7 @@ function SessionRuns({
       <ol>
         {[...runs].reverse().map((run) => {
           const isCurrent = run.id === current.id;
-          const tg = formatPredictionValue(predictionValue(run, "Glass transition temperature"));
+          const tg = runTg(run);
           const role = isCurrent ? "当前" : comparison?.id === run.id ? "对比中" : null;
           return (
             <li key={run.id}>
@@ -342,7 +429,10 @@ function SessionRuns({
                 />
                 <span className="np-hp-runs__main">
                   <code title={run.smiles}>{displaySmiles(run.smiles)}</code>
-                  <small>{formatRunTime(run.finishedAt)}，{run.properties.length} 项{role ? `，${role}` : ""}</small>
+                  <small>
+                    <span className="np-hp-runs__num">第 {run.id} 次</span>
+                    {formatRunTime(run.finishedAt)} · {run.properties.length} 项{role ? ` · ${role}` : ""}
+                  </small>
                 </span>
                 {tg !== null ? <span className="np-hp-runs__tg">Tg <strong>{tg}</strong> °C</span> : null}
               </button>
@@ -398,7 +488,6 @@ export function HomopolymerPredictionPanel({
   }
 
   const tableProperties = latestRun?.properties ?? PREDICTABLE_PROPERTIES.filter((property) => selected.has(property));
-  const comparisonTg = comparison ? formatPredictionValue(predictionValue(comparison, "Glass transition temperature")) : null;
 
   return (
     <aside className={`np-hp-panel${resultsScrolled ? " is-results-scrolled" : ""}`} aria-label="性质预测">
@@ -520,135 +609,120 @@ export function HomopolymerPredictionPanel({
       </form>
 
       <section
-        className="np-hp-results"
+        className={`np-hp-results${resultsScrolled ? " is-scrolled" : ""}`}
         aria-labelledby={resultsTitleId}
         aria-busy={loading}
-        onScroll={(event) => setResultsScrolled(event.currentTarget.scrollTop > 2)}
       >
-        <header className="np-hp-results__header">
-          <h2 id={resultsTitleId}>
-            <span className="np-hp-glyph" aria-hidden="true"><Gauge /></span>
-            预测结果
-            {latestRun && !loading ? (
-              <small className="np-hp-results__meta">
-                {runs.length > 1 ? <span className="np-hp-badge is-accent">第 {runNumber} 次运行</span> : null}
-                <span>{latestRun.queryTimeMs.toFixed(1)} ms</span>
-              </small>
-            ) : null}
-          </h2>
-          {latestRun && !loading && !error ? <ExportMenu run={latestRun} comparison={comparison} /> : null}
-        </header>
-
-        {loading ? (
-          <p className="np-hp-status" role="status">
-            <LoaderCircle className="np-sw-spin" aria-hidden="true" />
-            正在计算 {selectedProperties.length} 项性质…
-          </p>
-        ) : null}
-
-        {!loading && error ? (
-          <div className="np-hp-alert" role="alert">
-            <TriangleAlert aria-hidden="true" />
-            <div>
-              <strong>性质预测失败</strong>
-              {/[\u4e00-\u9fff]/.test(error) ? (
-                <p>{error}</p>
-              ) : (
-                <>
-                  <p>预测服务没有返回结果。可以稍后重试；如果刚修改过结构，先确认 SMILES 有效。</p>
-                  <p className="np-hp-alert__detail">服务信息：<code>{error}</code></p>
-                </>
-              )}
+        <div className="np-hp-results__head">
+          <header className="np-hp-results__header">
+            <h2 id={resultsTitleId}>
+              <span className="np-hp-glyph" aria-hidden="true"><Gauge /></span>
+              预测结果
+              {latestRun && !loading ? (
+                <small className="np-hp-results__meta">
+                  {runs.length > 1 ? <span className="np-hp-badge is-accent">第 {runNumber} 次运行</span> : null}
+                  <span>{latestRun.queryTimeMs.toFixed(1)} ms</span>
+                </small>
+              ) : null}
+            </h2>
+            {latestRun && !loading && !error ? <ExportMenu run={latestRun} comparison={comparison} /> : null}
+          </header>
+          {!loading && !error && latestRun && comparisonOptions.length > 0 ? (
+            <div className="np-hp-compare-row">
+              <div className="np-hp-compare">
+                <span aria-hidden="true">对比</span>
+                <ComparisonMenu comparison={comparison} options={comparisonOptions} onChange={onComparisonChange} />
+              </div>
+              {comparison ? (
+                <span className="np-hp-legend" aria-hidden="true">
+                  <span><i className="is-current" />本次</span>
+                  <span><i className="is-previous" />对比</span>
+                </span>
+              ) : null}
             </div>
-            <button type="button" className="np-hp-button" onClick={onRetry}>重试</button>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
 
-        {!loading && !error && latestRun ? (
-          <>
-            {stale ? (
-              <>
-                <p className="np-hp-notice" role="status">当前结构或性质选择已变化；下列结果对应上次提交参数。</p>
-                <p className="np-hp-submitted">
-                  <span>提交结构</span>
-                  <code title={latestRun.smiles}>{displaySmiles(latestRun.smiles)}</code>
-                </p>
-              </>
-            ) : null}
-            {comparisonOptions.length > 0 ? (
-              <div className="np-hp-compare-row">
-                <label className="np-hp-compare">
-                  <span>对比</span>
-                  <span className="np-hp-select">
-                    <span className="np-hp-select__face" aria-hidden="true">
-                      {comparison ? (
-                        <>
-                          <i className="np-hp-select__ring" />
-                          <span className="np-hp-select__time">{formatRunTime(comparison.finishedAt)}</span>
-                          <code>{displaySmiles(comparison.smiles)}</code>
-                          {comparisonTg !== null ? (
-                            <span className="np-hp-select__tg">Tg <b>{comparisonTg}</b> °C</span>
-                          ) : null}
-                        </>
-                      ) : (
-                        <span className="np-hp-select__none">不对比</span>
-                      )}
-                      <ChevronDown aria-hidden="true" />
-                    </span>
-                    <select
-                      value={comparison?.id ?? "none"}
-                      onChange={(event) => onComparisonChange(event.currentTarget.value === "none" ? null : Number(event.currentTarget.value))}
-                    >
-                      <option value="none">不对比</option>
-                      {comparisonOptions.map((run) => (
-                        <option key={run.id} value={run.id}>{`${formatRunTime(run.finishedAt)}  ${displaySmiles(run.smiles)}`}</option>
-                      ))}
-                    </select>
-                  </span>
-                </label>
+        <div className="np-hp-results__body" onScroll={(event) => setResultsScrolled(event.currentTarget.scrollTop > 2)}>
+          {loading ? (
+            <p className="np-hp-status" role="status">
+              <LoaderCircle className="np-sw-spin" aria-hidden="true" />
+              正在计算 {selectedProperties.length} 项性质…
+            </p>
+          ) : null}
+
+          {!loading && error ? (
+            <div className="np-hp-alert" role="alert">
+              <TriangleAlert aria-hidden="true" />
+              <div>
+                <strong>性质预测失败</strong>
+                {/[\u4e00-\u9fff]/.test(error) ? (
+                  <p>{error}</p>
+                ) : (
+                  <>
+                    <p>预测服务没有返回结果。可以稍后重试；如果刚修改过结构，先确认 SMILES 有效。</p>
+                    <p className="np-hp-alert__detail">服务信息：<code>{error}</code></p>
+                  </>
+                )}
+              </div>
+              <button type="button" className="np-hp-button" onClick={onRetry}>重试</button>
+            </div>
+          ) : null}
+
+          {!loading && !error && latestRun ? (
+            <>
+              {stale ? (
+                <>
+                  <p className="np-hp-notice" role="status">当前结构或性质选择已变化；下列结果对应上次提交参数。</p>
+                  <p className="np-hp-submitted">
+                    <span>提交结构</span>
+                    <code title={latestRun.smiles}>{displaySmiles(latestRun.smiles)}</code>
+                  </p>
+                </>
+              ) : null}
+              <div className="np-hp-table-wrap">
+                <ResultTable properties={latestRun.properties} run={latestRun} comparison={comparison} />
+              </div>
+              <p className="np-hp-footnote">
+                模型预测值，需结合实验验证。
                 {comparison ? (
-                  <span className="np-hp-legend" aria-hidden="true">
-                    <span><i className="is-current" />本次</span>
-                    <span><i className="is-previous" />对比</span>
+                  <span className="np-hp-footnote__key">
+                    <span className="np-hp-delta is-up">升高</span>
+                    <span className="np-hp-delta is-down">降低</span>
+                    颜色只表示升降，不代表好坏；加粗为变化超过 20%。
                   </span>
                 ) : null}
-              </div>
-            ) : null}
-            <div className="np-hp-table-wrap">
-              <ResultTable properties={latestRun.properties} run={latestRun} comparison={comparison} />
+              </p>
+              {runs.length > 1 ? (
+                <SessionRuns runs={runs} current={latestRun} comparison={comparison} onRestore={onRestoreRun} />
+              ) : null}
+            </>
+          ) : null}
+
+          {!loading && !error && !latestRun ? (
+            <>
+              <p className="np-hp-empty">
+                {hasAttempt ? "上次预测没有返回结果。" : "画好结构后点“运行预测”。结果会在这里按热学、力学、气体渗透分组列出。"}
+              </p>
+              {tableProperties.length ? (
+                <div className="np-hp-table-wrap">
+                  <ResultTable properties={tableProperties} run={null} comparison={null} placeholder />
+                </div>
+              ) : null}
+            </>
+          ) : null}
+
+          {loading && latestRun ? (
+            <div className="np-hp-table-wrap is-dimmed" aria-hidden="true">
+              <ResultTable properties={latestRun.properties} run={latestRun} comparison={null} />
             </div>
-            <p className="np-hp-footnote">
-              模型预测值，需结合实验验证{comparison ? "；加粗表示变化超过 20%" : ""}。
-            </p>
-            {runs.length > 1 ? (
-              <SessionRuns runs={runs} current={latestRun} comparison={comparison} onRestore={onRestoreRun} />
-            ) : null}
-          </>
-        ) : null}
-
-        {!loading && !error && !latestRun ? (
-          <>
-            <p className="np-hp-empty">
-              {hasAttempt ? "上次预测没有返回结果。" : "画好结构后点“运行预测”。结果会在这里按热学、力学、气体渗透分组列出。"}
-            </p>
-            {tableProperties.length ? (
-              <div className="np-hp-table-wrap">
-                <ResultTable properties={tableProperties} run={null} comparison={null} placeholder />
-              </div>
-            ) : null}
-          </>
-        ) : null}
-
-        {loading && latestRun ? (
-          <div className="np-hp-table-wrap is-dimmed" aria-hidden="true">
-            <ResultTable properties={latestRun.properties} run={latestRun} comparison={null} />
-          </div>
-        ) : null}
-        {loading && !latestRun && tableProperties.length ? (
-          <div className="np-hp-table-wrap" aria-hidden="true">
-            <ResultTable properties={tableProperties} run={null} comparison={null} placeholder />
-          </div>
-        ) : null}
+          ) : null}
+          {loading && !latestRun && tableProperties.length ? (
+            <div className="np-hp-table-wrap" aria-hidden="true">
+              <ResultTable properties={tableProperties} run={null} comparison={null} placeholder />
+            </div>
+          ) : null}
+        </div>
       </section>
 
       {onOpenModule && showRelay ? (

@@ -5,6 +5,8 @@ import "./module-frame.css";
 export type ModuleDockTab = {
   id: string;
   label: string;
+  /** Optional leading icon in the tab switcher. */
+  icon?: ReactNode;
   content: ReactNode;
   /** Content manages its own scrolling and padding, e.g. a chat with a pinned composer. */
   fill?: boolean;
@@ -111,6 +113,7 @@ export function ModuleDock({
                   data-dock-initial-focus={tab.id === active.id ? "" : undefined}
                   onClick={() => onTabChange(tab.id)}
                 >
+                  {tab.icon}
                   {tab.label}
                 </button>
               ))}

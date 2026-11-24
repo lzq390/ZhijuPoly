@@ -49,6 +49,42 @@
   letter-spacing: -0.02em;
 }
 
+/* Optional subline beside the title: a hairline, then one quiet sentence. It takes the free space
+   between title and actions and gives way first when the header gets tight. */
+.np-module-page > .np-module-page-header > .np-module-page-meta {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 14px;
+  margin: 0 auto 0 -2px;
+  overflow: hidden;
+  color: #5f6b80;
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.np-module-page > .np-module-page-header > .np-module-page-meta::before {
+  content: "";
+  width: 1px;
+  height: 16px;
+  flex: none;
+  background: #d3dae4;
+}
+
+.np-module-page-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 1199px) {
+  .np-module-page > .np-module-page-header > .np-module-page-meta {
+    display: none;
+  }
+}
+
 .np-module-page-body {
   min-width: 0;
   min-height: 0;
@@ -61,6 +97,18 @@
     --np-page-title-size: 28px;
     --np-page-title-line-height: 42px;
     --np-page-title-gap: 12px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-module-page > .np-module-page-header > .np-module-page-meta {
+    gap: 18px;
+    font-size: 17px;
+    line-height: 26px;
+  }
+
+  .np-module-page > .np-module-page-header > .np-module-page-meta::before {
+    height: 22px;
   }
 }
 

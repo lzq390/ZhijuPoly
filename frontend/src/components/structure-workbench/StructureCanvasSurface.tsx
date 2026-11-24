@@ -11,8 +11,9 @@ import {
   LoaderCircle,
   RefreshCcw
 } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
+import { type ReactNode, type RefObject } from "react";
 import type { useTgStructureCanvas } from "../../hooks/useTgStructureCanvas";
+import { usePopoverMenu } from "../../hooks/usePopoverMenu";
 import type { StructureWorkspaceContext } from "../../types";
 import { StructurePreview3D } from "../StructurePreview3D";
 import { StructureEditor } from "./StructureEditor";
@@ -60,7 +61,7 @@ type StructureCanvasSurfaceProps = {
 
 export type StructureExample = { id: string; label: string; description: string; smiles: string; image?: string };
 
-/** A small menu of starting structures; closes on Escape or outside click and returns focus. */
+/** A small menu of starting structures; shares the page's popover menu behaviour. */
 function ExampleMenu({
   examples,
   busy,
@@ -72,74 +73,40 @@ function ExampleMenu({
   disabled: boolean;
   onPick: (smiles: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const menuId = useId();
-
-  useEffect(() => {
-    if (!open) return;
-    rootRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-    function handlePointer(event: PointerEvent) {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
-    }
-    function handleKey(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setOpen(false);
-        buttonRef.current?.focus();
-        return;
-      }
-      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-      const items = [...(rootRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
-      const index = items.indexOf(document.activeElement as HTMLElement);
-      if (index < 0) return;
-      event.preventDefault();
-      items[(index + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
-    }
-    document.addEventListener("pointerdown", handlePointer);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointer);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [open]);
+  const menu = usePopoverMenu();
 
   return (
-    <div ref={rootRef} className="np-sw-menu">
+    <div ref={menu.rootRef} className="np-sw-menu">
       <button
-        ref={buttonRef}
+        {...menu.triggerProps}
         type="button"
         className="np-sw-tool"
         data-workbench-tool="load"
         aria-label="加载示例"
         title="加载示例"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
         disabled={disabled}
         aria-busy={busy || undefined}
-        onClick={() => setOpen((current) => !current)}
       >
         {busy ? <LoaderCircle className="np-sw-spin" aria-hidden="true" /> : <Atom aria-hidden="true" />}
         <span>示例</span>
         <ChevronDown className="np-sw-menu__chevron" aria-hidden="true" />
       </button>
-      {open ? (
-        <div id={menuId} className="np-sw-menu__list" role="menu" aria-label="示例结构">
+      {menu.open ? (
+        <div {...menu.menuProps} className="np-sw-menu__list np-pop is-start" aria-label="示例结构">
           {examples.map((example) => (
             <button
               key={example.id}
               type="button"
               role="menuitem"
+              tabIndex={-1}
+              className="np-pop__item"
               onClick={() => {
-                setOpen(false);
-                buttonRef.current?.focus();
+                menu.close();
                 onPick(example.smiles);
               }}
             >
-              {example.image ? <img src={example.image} alt="" /> : null}
-              <span>
+              {example.image ? <img className="np-pop__thumb" src={example.image} alt="" /> : null}
+              <span className="np-pop__text">
                 <b>{example.label}</b>
                 <small>{example.description}</small>
               </span>

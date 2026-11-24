@@ -248,6 +248,7 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
       data-module="homopolymer-property-prediction"
     >
       <ModulePageHeader
+        meta={<span>从重复单元结构预测热学、力学与气体渗透性质，共 9 项</span>}
         actions={
           <ModuleTools
             tools={[{
@@ -359,6 +360,7 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
               {
                 id: "assistant",
                 label: "AI 助手",
+                icon: <Sparkles aria-hidden="true" />,
                 fill: true,
                 content: (
                   <HomopolymerPredictionAssistant
@@ -371,7 +373,12 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
                   />
                 )
               },
-              { id: "help", label: "使用说明", content: <HomopolymerPredictionHelp structureFactsId={STRUCTURE_FACTS_HELP_ID} /> }
+              {
+                id: "help",
+                label: "使用说明",
+                icon: <BookOpen aria-hidden="true" />,
+                content: <HomopolymerPredictionHelp structureFactsId={STRUCTURE_FACTS_HELP_ID} />
+              }
             ]}
             activeTab={dockTab}
             onTabChange={(tab) => setDockTab(tab === "help" ? "help" : "assistant")}

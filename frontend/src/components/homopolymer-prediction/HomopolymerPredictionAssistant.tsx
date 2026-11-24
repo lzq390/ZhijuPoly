@@ -1,4 +1,4 @@
-import { ArrowUp, Sparkles } from "lucide-react";
+import { ArrowUp, ArrowUpRight, Gauge, GitCompareArrows, Hexagon, Info, Sparkles, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
 export type PredictionAssistantMessage = {
@@ -75,33 +75,44 @@ export function HomopolymerPredictionAssistant({
   }
 
   const chips = [
-    context.structure ? { label: "结构", value: context.structure, mono: true } : { label: "尚未添加结构", value: null, mono: false },
-    context.resultCount !== null ? { label: `${context.resultCount} 项预测结果`, value: null, mono: false } : null,
-    context.comparisonLabel ? { label: "对比", value: context.comparisonLabel, mono: true } : null
-  ].filter(Boolean) as { label: string; value: string | null; mono: boolean }[];
+    context.structure
+      ? { label: "结构", value: context.structure, Icon: Hexagon }
+      : { label: "尚未添加结构", value: null, Icon: Hexagon },
+    context.resultCount !== null ? { label: `${context.resultCount} 项预测结果`, value: null, Icon: Gauge } : null,
+    context.comparisonLabel ? { label: "对比", value: context.comparisonLabel, Icon: GitCompareArrows } : null
+  ].filter(Boolean) as { label: string; value: string | null; Icon: LucideIcon }[];
 
   return (
     <div className="np-hp-assistant">
       <div className="np-hp-assistant__context" aria-label="AI 可读取的页面内容">
-        {chips.map((chip) => (
-          <span key={chip.label} className={attachContext ? "is-attached" : undefined} title={chip.value ?? undefined}>
-            {chip.label}
-            {chip.value ? <code>{chip.value}</code> : null}
+        <small>{attachContext ? "将附带" : "可附带"}</small>
+        {chips.map(({ label, value, Icon }) => (
+          <span key={label} className={attachContext && value !== null ? "is-attached" : undefined} title={value ?? undefined}>
+            <Icon aria-hidden="true" />
+            {label}
+            {value ? <code>{value}</code> : null}
           </span>
         ))}
       </div>
 
       <div ref={logRef} className="np-hp-assistant__log" role="log" aria-live="polite" aria-label="对话">
-        <p className="np-hp-assistant__notice">界面预览：AI 助手尚未接入，问题只保留在本页面，不会发送到服务。</p>
+        <p className="np-hp-assistant__notice">
+          <Info aria-hidden="true" />
+          <span>界面预览：AI 助手尚未接入，问题只保留在本页面，不会发送到服务。</span>
+        </p>
         {messages.length === 0 ? (
           <div className="np-hp-assistant__welcome">
             <span className="np-hp-assistant__mark" aria-hidden="true"><Sparkles /></span>
             <strong>我可以帮你解读预测结果</strong>
             <p>结合当前结构和预测值，解释数值、比较两次运行，或给出结构调整的方向。</p>
+            <h3 className="np-hp-assistant__label" aria-hidden="true">可以这样问</h3>
             <ul aria-label="可以这样问">
               {suggestions.map((suggestion) => (
                 <li key={suggestion}>
-                  <button type="button" onClick={() => send(suggestion)}>{suggestion}</button>
+                  <button type="button" onClick={() => send(suggestion)}>
+                    <span>{suggestion}</span>
+                    <ArrowUpRight aria-hidden="true" />
+                  </button>
                 </li>
               ))}
             </ul>

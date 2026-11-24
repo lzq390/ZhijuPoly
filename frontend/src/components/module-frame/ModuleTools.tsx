@@ -46,7 +46,12 @@ export function ModuleTools({ tools = [], recording, help }: ModuleToolsProps) {
   return (
     <div className="np-module-tools" role="group" aria-label="模块工具">
       {tools.map((tool) => <ToolButton key={tool.id} tool={tool} />)}
-      {recording ? <span className="np-module-tools__recording">{recording}</span> : null}
+      {recording ? (
+        <>
+          {tools.length > 0 ? <span className="np-module-tools__separator" aria-hidden="true" /> : null}
+          <span className="np-module-tools__recording">{recording}</span>
+        </>
+      ) : null}
       {help ? (
         <>
           <span className="np-module-tools__separator" aria-hidden="true" />

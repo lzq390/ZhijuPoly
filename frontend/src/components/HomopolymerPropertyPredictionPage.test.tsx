@@ -268,7 +268,7 @@ describe("HomopolymerPropertyPredictionPage", () => {
 
     run();
     expect(await screen.findByText(/第 2 次运行/)).toBeTruthy();
-    expect(screen.getByRole("columnheader", { name: "上次" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "对比" })).toBeTruthy();
     const delta = within(resultsTable()).getByText("+50");
     expect(delta.classList.contains("is-large")).toBe(true);
     expect(delta.classList.contains("is-up")).toBe(true);
@@ -278,7 +278,18 @@ describe("HomopolymerPropertyPredictionPage", () => {
     expect((scale.querySelector(".np-hp-scale__mark:not(.is-previous)") as HTMLElement).style.left).toBe("50%");
     expect((scale.querySelector(".np-hp-scale__mark.is-previous") as HTMLElement).style.left).toBe("41.7%");
 
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "none" } });
+    const picker = screen.getByRole("button", { name: /^对比：第 1 次运行/ });
+    expect(picker.getAttribute("aria-haspopup")).toBe("menu");
+    fireEvent.click(picker);
+    const menu = screen.getByRole("menu", { name: "选择对比的运行" });
+    const choices = within(menu).getAllByRole("menuitemradio");
+    expect(choices.map((choice) => choice.getAttribute("aria-checked"))).toEqual(["false", "true"]);
+    expect(document.activeElement).toBe(choices[1]);
+    fireEvent.keyDown(choices[1], { key: "ArrowUp" });
+    expect(document.activeElement).toBe(choices[0]);
+    fireEvent.click(choices[0]);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("对比：不对比");
     expect(screen.queryByRole("columnheader", { name: "变化" })).toBeNull();
     expect(within(resultsTable()).getByText("150")).toBeTruthy();
   });
@@ -378,7 +389,9 @@ describe("HomopolymerPropertyPredictionPage", () => {
     expect(screen.getByText("第 11 次运行")).toBeTruthy();
     const runs = screen.getByRole("heading", { name: "本次会话的运行" }).closest("section")!;
     expect(within(runs).getAllByRole("button")).toHaveLength(10);
-    expect(within(screen.getByRole("combobox")).getAllByRole("option")).toHaveLength(10);
+    fireEvent.click(screen.getByRole("button", { name: /^对比：/ }));
+    // 不对比 plus the nine other runs kept in this session.
+    expect(within(screen.getByRole("menu", { name: "选择对比的运行" })).getAllByRole("menuitemradio")).toHaveLength(10);
   });
 
   it("使用说明在辅助栏打开，Escape 关闭并把焦点还给入口", async () => {
