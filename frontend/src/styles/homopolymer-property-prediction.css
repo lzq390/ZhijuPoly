@@ -883,6 +883,12 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
   transition: background-color 140ms ease, box-shadow 140ms ease;
 }
 
+/* Without the structure facts row (empty canvas) the SMILES field is the surface's last row:
+   keep the gap beside it below it too, instead of running into the surface edge. */
+.np-structure-workbench.np-homopolymer-prediction .np-sw-smiles:last-child {
+  margin-bottom: 12px;
+}
+
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles:focus-within {
   background: #fff;
   box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.45), 0 0 0 3px rgba(37, 99, 235, 0.12);
@@ -2162,6 +2168,12 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
   background: var(--np-hp-tint);
   font-size: var(--np-hp-fs);
   line-height: 1.55;
+}
+
+/* The bottom edge belongs to the "用这个结构继续" bar; until a run adds it, the last card keeps
+   the panel's gap below it instead of running into the edge. */
+.np-structure-workbench.np-homopolymer-prediction .np-hp-panel:not(:has(> .np-hp-next)) {
+  padding-bottom: 12px;
 }
 
 /* Cards: one radius, one ring, one raise. */
@@ -3560,6 +3572,14 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
   .np-structure-workbench.np-homopolymer-prediction .np-hp-panel {
     gap: 16px;
     padding: 16px 16px 0;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-hp-panel:not(:has(> .np-hp-next)) {
+    padding-bottom: 16px;
+  }
+
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles:last-child {
+    margin-bottom: 16px;
   }
 
   .np-homopolymer-prediction .np-hp-next {
