@@ -226,14 +226,9 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
     setHelpTarget(STRUCTURE_FACTS_HELP_ID);
   }
 
-  // Interface preview: the question stays on the page and gets a fixed, explicit reply.
+  // Not connected to a model yet: the question stays on the page and gets a fixed, explicit reply.
   function sendAssistantMessage(text: string) {
-    const attached = assistantAttachContext && assistantContext.structure
-      ? assistantContext.resultCount !== null
-        ? `当前结构和第 ${runNumber} 次运行的 ${assistantContext.resultCount} 项预测结果`
-        : "当前结构"
-      : null;
-    const reply = `（界面预览）AI 助手尚未接入，暂时无法回答。接入后，我会${attached ? `结合${attached}` : "根据你的问题"}来回答“${text}”。`;
+    const reply = "AI 助手暂未开放，还不能回答问题。";
     setAssistantMessages((current) => [
       ...current,
       { id: ++assistantMessageIdRef.current, role: "user", content: text },

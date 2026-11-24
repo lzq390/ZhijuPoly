@@ -98,7 +98,7 @@ export function HomopolymerPredictionAssistant({
       <div ref={logRef} className="np-hp-assistant__log" role="log" aria-live="polite" aria-label="对话">
         <p className="np-hp-assistant__notice">
           <Info aria-hidden="true" />
-          <span>界面预览：AI 助手尚未接入，问题只保留在本页面，不会发送到服务。</span>
+          <span>AI 助手暂未开放。在这里输入的问题只留在本页，不会发送出去。</span>
         </p>
         {messages.length === 0 ? (
           <div className="np-hp-assistant__welcome">

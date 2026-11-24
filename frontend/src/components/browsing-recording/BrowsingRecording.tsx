@@ -10,7 +10,7 @@ import type { ActiveModule } from "../../routing";
 import "../../styles/browsing-recording.css";
 
 const DESKTOP_QUERY = "(min-width: 1024px)";
-const UNSUPPORTED = "当前页面未接入，仅支持本地知识库和数据库筛选";
+const UNSUPPORTED = "本页面暂不支持浏览记录，可在本地知识库和数据库筛选页面使用";
 const OUTSIDE_RECORDING = "当前页面操作不计入记录";
 const INCOMPLETE = "部分内容未能记录，总结可能不完整。";
 function desktopSnapshot() {

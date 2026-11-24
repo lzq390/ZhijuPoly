@@ -474,7 +474,7 @@ describe("HomopolymerPropertyPredictionPage", () => {
     fireEvent.click(ai);
     expect(ai.getAttribute("aria-pressed")).toBe("true");
     const panel = screen.getByRole("tabpanel", { name: "AI 助手" });
-    expect(within(panel).getByText(/界面预览：AI 助手尚未接入/)).toBeTruthy();
+    expect(within(panel).getByText(/AI 助手暂未开放。在这里输入的问题只留在本页/)).toBeTruthy();
     expect(within(panel).getByRole("textbox", { name: "发送给 AI 助手的消息" })).toBeTruthy();
 
     fireEvent.click(help);
@@ -501,7 +501,7 @@ describe("HomopolymerPropertyPredictionPage", () => {
 
     const log = within(panel).getByRole("log", { name: "对话" });
     expect(within(log).getByText("解释这次的预测结果")).toBeTruthy();
-    expect(within(log).getByText(/结合当前结构和第 1 次运行的 1 项预测结果/)).toBeTruthy();
+    expect(within(log).getByText("AI 助手暂未开放，还不能回答问题。")).toBeTruthy();
     expect(mocks.predictSmiles).toHaveBeenCalledOnce();
 
     const input = within(panel).getByRole("textbox", { name: "发送给 AI 助手的消息" });

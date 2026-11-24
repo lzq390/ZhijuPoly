@@ -175,7 +175,7 @@ function ExportMenu({ run, comparison }: { run: PredictionRun; comparison: Predi
             <span className="np-pop__icon" aria-hidden="true"><ClipboardCopy /></span>
             <span className="np-pop__text">
               <b>复制表格</b>
-              <small id={copyHintId}>制表符分隔，可直接粘贴到 Excel</small>
+              <small id={copyHintId}>可直接粘贴到 Excel 等表格软件</small>
             </span>
           </button>
         </div>
@@ -661,7 +661,7 @@ export function HomopolymerPredictionPanel({
                 ) : (
                   <>
                     <p>预测服务没有返回结果。可以稍后重试；如果刚修改过结构，先确认 SMILES 有效。</p>
-                    <p className="np-hp-alert__detail">服务信息：<code>{error}</code></p>
+                    <p className="np-hp-alert__detail">错误详情：<code>{error}</code></p>
                   </>
                 )}
               </div>
@@ -689,7 +689,7 @@ export function HomopolymerPredictionPanel({
                   <span className="np-hp-footnote__key">
                     <span className="np-hp-delta is-up">升高</span>
                     <span className="np-hp-delta is-down">降低</span>
-                    颜色只表示升降，不代表好坏；加粗为变化超过 20%。
+                    颜色只表示升降，不代表好坏；加粗带底色表示变化达到对比值的 20%。
                   </span>
                 ) : null}
               </p>
@@ -702,7 +702,7 @@ export function HomopolymerPredictionPanel({
           {!loading && !error && !latestRun ? (
             <>
               <p className="np-hp-empty">
-                {hasAttempt ? "上次预测没有返回结果。" : "画好结构后点“运行预测”。结果会在这里按热学、力学、气体渗透分组列出。"}
+                {hasAttempt ? "上次预测没有返回结果。" : "画好结构后点“运行预测”，结果显示在这里。"}
               </p>
               {tableProperties.length ? (
                 <div className="np-hp-table-wrap">

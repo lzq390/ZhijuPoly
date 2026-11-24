@@ -183,8 +183,8 @@ export function HomopolymerPredictionHelp({ structureFactsId = "np-hp-help-struc
               <span className="np-hp-delta is-large is-up">+50</span>
             </span>
             <span>
-              <b>变化超过 20%</b>
-              加粗并带底色。
+              <b>变化达到 20%</b>
+              相对对比值变化 20% 及以上时，加粗并带底色。
             </span>
           </li>
           <li>
@@ -215,7 +215,7 @@ export function HomopolymerPredictionHelp({ structureFactsId = "np-hp-help-struc
           <li>
             <ClipboardCopy aria-hidden="true" />
             <b>复制表格</b>
-            <span>制表符分隔，可以直接粘贴到 Excel 等表格软件</span>
+            <span>可以直接粘贴到 Excel 等表格软件</span>
           </li>
         </ul>
       </HelpSection>

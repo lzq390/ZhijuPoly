@@ -632,11 +632,41 @@
   box-shadow: 0 1px 0 var(--np-hp-line);
 }
 
-/* The selected Ketcher tool uses the page's action colour instead of Ketcher's teal. */
+/* Ketcher paints its tools #333, darker than any ink on this page, so its rows read heavier
+   than the structure command bar above them. Icons take that bar's icon ink, atom symbols
+   (text) the secondary ink. :where keeps these at the page's base specificity, so the selected
+   tool and hover rules below, and the zoom and mode triggers, keep their own colours. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :where(
+  [data-testid="top-toolbar"] button:not([data-testid="zoom-selector"], [data-testid="polymer-toggler"]),
+  [class*="ActionButton-module_button"],
+  [class*="ToolbarMultiToolItem-module_icon"]
+) {
+  color: var(--np-hp-muted);
+}
+
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :where([class*="RightToolbar-module_group"] button:not([class*="ActionButton-module_button"])) {
+  color: var(--np-hp-ink2);
+}
+
+/* Hover uses the page's action blue here too, not Ketcher's teal. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :where(
+  [data-testid="top-toolbar"] button:not([data-testid="zoom-selector"], [data-testid="polymer-toggler"]),
+  [class*="RightToolbar-module_group"] button:not([class*="ActionButton-module_button"])
+):where(:hover:not(:disabled)) {
+  color: var(--np-hp-blue-ink);
+}
+
+/* The selected Ketcher tool (and atom) uses the page's action colour instead of Ketcher's teal or grey. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [class*="RightToolbar-module_group"] button.selected,
 .np-structure-workbench.np-homopolymer-prediction .Ketcher-root [class*="ActionButton-module_selected"] {
   color: var(--np-hp-blue-ink);
   background: var(--np-hp-blue-soft);
   box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.22);
+}
+
+/* Atom buttons draw Ketcher's teal border when selected; the ring above replaces it. */
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [class*="RightToolbar-module_group"] button.selected {
+  border-color: transparent;
 }
 
 .np-structure-workbench.np-homopolymer-prediction .Ketcher-root [class*="ActionButton-module_button"]:hover:not([class*="ActionButton-module_selected"]) {
