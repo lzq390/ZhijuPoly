@@ -3706,7 +3706,8 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
     min-height: 300px;
   }
 
-  .np-structure-workbench.np-homopolymer-prediction {
+  /* A container query never matches the container itself, so set these on its children. */
+  .np-structure-workbench.np-homopolymer-prediction > * {
     --np-hp-canvas-min: 300px;
     --np-hp-pad: 16px;
   }

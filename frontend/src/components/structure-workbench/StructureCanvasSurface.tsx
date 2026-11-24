@@ -357,7 +357,12 @@ export function StructureCanvasSurface({
             inert={canvas.isFlipped}
           >
             <StructureEditor workspace={structure.workspace} title={editorTitle}
-              disabled={Boolean(structure.workspace.getSnapshot().documentBusy) || canvas.isLoadingStructure || canvas.isClearing || canvas.isImportingImage || canvas.smilesDraftState === "syncing"} />
+              disabled={Boolean(structure.workspace.getSnapshot().documentBusy) || canvas.isLoadingStructure || canvas.isClearing || canvas.isImportingImage || canvas.smilesDraftState === "syncing"}
+              overlay={showEmptyState && emptyState ? (
+                <div className="np-sw-empty-state">
+                  {emptyState((smiles) => { if (requestServiceAccess()) void mutate(() => canvas.loadStructure(smiles)); })}
+                </div>
+              ) : null} />
           </div>
           {hasActivated3D ? (
             <div
@@ -375,11 +380,6 @@ export function StructureCanvasSurface({
             </div>
           ) : null}
         </div>
-        {showEmptyState && emptyState ? (
-          <div className="np-sw-empty-state">
-            {emptyState((smiles) => { if (requestServiceAccess()) void mutate(() => canvas.loadStructure(smiles)); })}
-          </div>
-        ) : null}
       </div>
 
       <footer className="np-sw-smiles" aria-labelledby="np-sw-smiles-label">

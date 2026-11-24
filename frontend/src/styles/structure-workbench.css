@@ -286,7 +286,9 @@
   pointer-events: none;
 }
 
-/* Page-provided guidance over an empty 2D canvas; only its own controls take pointer events. */
+/* Page-provided guidance over an empty 2D canvas; only its own controls take pointer events.
+   It is rendered inside the editor's isolated stacking context: above Ketcher's canvas and
+   toolbars (z-index auto), below Ketcher's toolbar flyouts (20) and menus (1300). */
 .np-structure-workbench .np-sw-empty-state {
   position: absolute;
   z-index: 5;
