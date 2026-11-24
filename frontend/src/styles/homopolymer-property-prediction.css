@@ -543,6 +543,12 @@
   opacity: 0;
 }
 
+/* Ketcher's native wrapper sets an inline 360px floor; lower it with the sheet (300px in the
+   stacked tiers) so Ketcher lays out in the visible area instead of losing its bottom toolbar. */
+.np-structure-workbench.np-homopolymer-prediction .np-structure-native {
+  --np-structure-editor-min: var(--np-hp-canvas-min);
+}
+
 .np-structure-workbench.np-homopolymer-prediction .np-sw-editor,
 .np-structure-workbench.np-homopolymer-prediction .np-sw-editor iframe,
 .np-structure-workbench.np-homopolymer-prediction .np-structure-editor,
@@ -1367,9 +1373,11 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
 }
 
 /* ---------- empty canvas: what to draw and where to start ---------- */
-/* Keep guidance clear of Ketcher's own top, side and template toolbars. */
+/* Keep guidance clear of Ketcher's own top, side and template toolbars. The overlay fills the
+   sheet, so it is also a size container: short sheets get a compact layout (see below). */
 .np-structure-workbench.np-homopolymer-prediction .np-sw-empty-state {
   padding: 56px 72px;
+  container: np-hp-guide / size;
 }
 
 .np-homopolymer-prediction .np-hp-start {
@@ -1476,6 +1484,35 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
   }
 }
 
+/* Short sheets (the 300px stacked tiers): the 2×2 cards with drawings (~230px) would run under
+   Ketcher's template toolbar, so drop the drawings and keep name cards. */
+@container np-hp-guide (max-height: 400px) {
+  .np-homopolymer-prediction .np-hp-start img {
+    display: none;
+  }
+
+  .np-homopolymer-prediction .np-hp-start button {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 7px 10px;
+  }
+
+  .np-homopolymer-prediction .np-hp-start > p {
+    margin-bottom: 12px;
+  }
+}
+
+@container np-hp-guide (max-height: 400px) and (min-width: 560px) {
+  .np-homopolymer-prediction .np-hp-start ul {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container np-hp-guide (max-height: 400px) and (max-width: 559px) {
+  .np-homopolymer-prediction .np-hp-start > p {
+    display: none;
+  }
+}
+
 /* ---------- session runs ---------- */
 .np-homopolymer-prediction .np-hp-runs {
   margin-top: 18px;
@@ -1508,8 +1545,12 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
   font-size: var(--np-hp-fs-xs);
 }
 
+/* minmax(0, 1fr): an implicit auto column grows to the longest unwrapped SMILES and makes the
+   results body scroll sideways, hiding the property names; this keeps rows at the card width so
+   the SMILES ellipsis applies. */
 .np-homopolymer-prediction .np-hp-runs ol {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
   margin: 0 -8px;
   padding: 0;

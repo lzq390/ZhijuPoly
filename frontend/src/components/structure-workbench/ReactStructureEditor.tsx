@@ -118,8 +118,9 @@ export default function ReactStructureEditor({ workspace, title }: { workspace: 
   }, [workspace]);
   // Establish size before the lazy CSS arrives; visibility gates must not wait
   // for styles that are themselves loaded only once the container is visible.
+  // A page whose sheet is shorter than 360px lowers the floor with --np-structure-editor-min.
   return <div ref={container} className="np-structure-native" role="region" aria-label={title}
-    style={{ width: "100%", height: "100%", minHeight: 360 }}>
+    style={{ width: "100%", height: "100%", minHeight: "var(--np-structure-editor-min, 360px)" }}>
     {runtime && !runtime.session.signal.aborted && <EditorBoundary session={runtime.session}>
       <runtime.View session={runtime.session} onInit={runtime.onInit} />
     </EditorBoundary>}
