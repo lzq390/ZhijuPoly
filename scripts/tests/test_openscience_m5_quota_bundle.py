@@ -80,8 +80,13 @@ class BundleGuardTests(unittest.TestCase):
                 self.assertGreater(previous.stat().st_size, 2 * 1024**2)
                 old = hashlib.sha256(previous.read_bytes()).hexdigest()
                 # Leave room for a small write, but not another generation plus the floor.
-                floor = bundle.available_bytes(directory) - 1024**2
-                with self.assertRaisesRegex(RuntimeError, "Insufficient free space"):
+                available = bundle.available_bytes
+                observed = available(directory)
+                floor = observed - 1024**2
+                # Other processes may release /dev/shm blocks between observations.
+                # Keep this scenario at or below its starting capacity.
+                with patch.object(bundle, "available_bytes", side_effect=lambda path: min(observed, available(path))), \
+                     self.assertRaisesRegex(RuntimeError, "Insufficient free space"):
                     bundle.backup(mount, owner, directory / "two", reserve_bytes=floor)
                 self.assertEqual(hashlib.sha256(previous.read_bytes()).hexdigest(), old)
                 self.assertEqual(list(directory.iterdir()), [directory / "one"])

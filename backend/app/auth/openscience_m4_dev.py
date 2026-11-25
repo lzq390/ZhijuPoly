@@ -68,6 +68,9 @@ def install(app, auth, agent_origin, parent_origin, inspect_handoff):
             raise HTTPException(401, "Workspace generation expired")
         if service == "model" and operation != "usage":
             session, turn = single("x-m4-session"), single("x-m4-turn")
+            deadline = single("x-m4-turn-expires-ms")
+            if not re.fullmatch(r"[1-9][0-9]{0,15}", deadline) or int(deadline) > 2**53 - 1:
+                raise HTTPException(403, "Model turn deadline required")
             try:
                 request_id = str(UUID(single("x-m4-request")))
             except ValueError:
@@ -80,7 +83,10 @@ def install(app, auth, agent_origin, parent_origin, inspect_handoff):
                 **grant,
                 "scope": "model.invoke",
                 "workspace_session": session,
+                # The generation verifier is an internal authorization header. Expose only its fingerprint.
+                "workspace_generation_fingerprint": hashlib.sha256(current.encode("ascii")).hexdigest(),
                 "turn_id": turn,
+                "turn_expires_ms": int(deadline),
                 "request_id": request_id,
             }
         scope = (

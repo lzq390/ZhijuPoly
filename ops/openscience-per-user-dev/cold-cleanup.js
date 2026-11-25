@@ -36,7 +36,15 @@
     };
   }
   async function list(path, after = "") {
-    const result = await call("list", {path, after});
+    let result;
+    try {
+      result = await call("list", {path, after});
+    } catch (error) {
+      if (error.message !== "cleanup_changed" || !after) throw error;
+      await list(path);
+      el("status").textContent = "目录已更改，已重新加载第一页。";
+      return;
+    }
     if (path !== directory || !after) previousNames.length = 0;
     directory = path;
     cursor = after;
@@ -63,7 +71,8 @@
       row.append(button, item.kind === "directory" ? " 文件夹" : " " + item.size.toLocaleString() + " 字节");
       el("entries").append(row);
     }
-    el("status").textContent = result.entries.length ? "" : "此目录没有可清理的文件。";
+    el("status").textContent = result.entries.length ? "" : nextName
+      ? "本页没有可清理的文件，可以查看下一页。" : "本页没有可清理的文件。";
   }
   async function view(path, start, version) {
     const result = await call("read", {path, offset:start, ...(version && {version})});
@@ -89,7 +98,7 @@
   el("more").onclick = action(async () => {
     const last = cursor;
     await list(directory, nextName);
-    previousNames.push(last);
+    if (cursor) previousNames.push(last);
   });
   el("earlier").onclick = action(async () => {
     await list(directory, previousNames.at(-1));

@@ -23,7 +23,7 @@ test("fetch observation accepts only same-origin session responses and exact dir
   const path = "/openscience-api/session/ses_valid/message?limit=400"
   const options = { headers: { "x-openscience-directory": "/openscience/files/projects/demo" } }
   assert.deepEqual(sessionRequest(path, options, origin), {
-    sessionId: "ses_valid", directory: "/openscience/files/projects/demo", messages: true,
+    sessionId: "ses_valid", directory: "/openscience/files/projects/demo", limit: 400, messages: true,
   })
   assert.equal(sessionRequest("http://outside.example" + path, options, origin), null)
   assert.equal(sessionRequest("/session/ses_valid/message", options, origin), null)

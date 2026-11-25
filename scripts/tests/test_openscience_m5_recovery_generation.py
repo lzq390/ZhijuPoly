@@ -3,7 +3,9 @@
 import errno
 import hashlib
 from pathlib import Path
+import subprocess
 import sys
+import tarfile
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -11,6 +13,8 @@ from unittest.mock import patch
 scripts = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(scripts), str(scripts / "ci")]
 import openscience_m5_guest_lifecycle as lifecycle
+import openscience_m5_archive as codec
+import openscience_m5_quota_bundle as bundle
 
 
 class RecoveryGenerationTests(unittest.TestCase):
@@ -23,11 +27,25 @@ class RecoveryGenerationTests(unittest.TestCase):
             directory = base / "generation-one"
             hard = {"a": 0, "b": 0}
             restores = []
-            for role in users:
-                (base / ("src-" + role) / "workspace").mkdir(parents=True)
-                (base / ("dst-" + role)).mkdir()
             def mount(phase, role):
                 return base / (phase + "-" + role)
+
+            def seed_workspace(path, owner):
+                path.mkdir(mode=0o700)
+                for name in sorted(codec.SKELETON - {"."}):
+                    (path / name).mkdir(mode=0o700)
+                marker = path / ".m1-owner"
+                marker.write_text(owner["workspace"])
+                marker.chmod(0o444)
+                reserve = path / "records/future-output"
+                reserve.touch(mode=0o600)
+                if owner == users["a"]:
+                    subprocess.run(["fallocate", "--keep-size", "--length", "256KiB", reserve], check=True)
+
+            for role, owner in users.items():
+                mount("src", role).mkdir()
+                seed_workspace(mount("src", role) / "workspace", owner)
+                mount("dst", role).mkdir()
 
             def snapshot(source, owner):
                 return dict(identity=owner, hard_bytes=2_000_000_000,
@@ -38,15 +56,13 @@ class RecoveryGenerationTests(unittest.TestCase):
                 return dict(filesystem_uuid=target.name, volume_label="m5quota-" + target.name,
                             uid=owner["uid"], accounting=True, enforced=True, used_bytes=0, hard_bytes=hard[role])
 
-            def tree(path, owner):
-                return {"tree_sha256": owner["workspace"]}
-
             def save(source, owner, package, reserve_bytes):
                 package.mkdir(mode=0o700)
                 archive = package / "workspace.tar"
-                archive.write_bytes(owner["workspace"].encode())
+                with tarfile.open(archive, "w:", format=tarfile.PAX_FORMAT) as tar:
+                    codec.add_tree(source / "workspace", tar, owner["uid"], owner["workspace"])
                 archive.chmod(0o600)
-                meta = dict(quota=snapshot(source, owner), inventory=tree(source, owner),
+                meta = dict(quota=snapshot(source, owner), inventory=bundle.inventory(source / "workspace", owner),
                             archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest())
                 lifecycle.write_record(package / "manifest.json", meta)
                 pin = hashlib.sha256((package / "manifest.json").read_bytes()).hexdigest()
@@ -58,13 +74,16 @@ class RecoveryGenerationTests(unittest.TestCase):
                 restores.append(role)
                 if restores == ["a", "b"]:
                     raise OSError(errno.ENOSPC, "B out of space")
-                (target / "workspace").mkdir(mode=0o700)
-                return dict(inventory=tree(target, owner), quota=read(target, owner))
+                seed_workspace(target / "workspace", owner)
+                return dict(inventory=bundle.inventory(target / "workspace", owner), quota=read(target, owner))
 
+            # Synthetic UID bindings emulate the storage guest; file contents, FIEMAP
+            # and the pinned PAX archive all use the real temporary filesystem.
             with (patch.object(lifecycle, "mount", mount),
                   patch.object(lifecycle.quota, "read", read),
                   patch.object(lifecycle.quota, "snapshot", snapshot),
-                  patch.object(lifecycle, "inventory", tree),
+                  patch.object(bundle, "validate_entry"),
+                  patch.object(codec, "validate_entry"),
                   patch.object(lifecycle, "notebook", side_effect=lambda phase, role, owner: {"uid": owner["uid"]}),
                   patch.object(lifecycle, "backup", side_effect=save) as backup,
                   patch.object(lifecycle, "restore", side_effect=restore)):
@@ -78,6 +97,23 @@ class RecoveryGenerationTests(unittest.TestCase):
                 self.assertTrue(all(row["already_restored"] for row in checked.values()))
                 self.assertEqual(backup.call_count, 2)
                 self.assertEqual((mount("dst", "a") / "workspace").stat().st_ino, inode)
+                target = mount("dst", "a") / "workspace"
+                logical = bundle.inventory(target, users["a"])
+                reserve = target / "records/future-output"
+                blocks = reserve.stat().st_blocks
+                reserve.unlink()
+                reserve.touch(mode=0o600)
+                self.assertEqual(reserve.stat().st_blocks, 0)
+                self.assertEqual(logical, bundle.inventory(target, users["a"]))
+                with self.assertRaisesRegex(ValueError, "Published file reservations"):
+                    lifecycle.recover_generation(directory, users, ["a"], 16 * 1024**2)
+                # The same number of allocated bytes at a different offset is also wrong.
+                subprocess.run(["fallocate", "--keep-size", "--offset", "256KiB", "--length", "256KiB", reserve],
+                               check=True)
+                self.assertEqual(reserve.stat().st_blocks, blocks)
+                with self.assertRaisesRegex(ValueError, "Published file reservations"):
+                    lifecycle.recover_generation(directory, users, ["a"], 16 * 1024**2)
+                self.assertTrue(lifecycle.recover_generation(directory, users, ["b"], 16 * 1024**2)["b"]["already_restored"])
                 (directory / "a/package/workspace.tar").write_bytes(b"changed")
                 with self.assertRaisesRegex(ValueError, "Stored archive differs"):
                     lifecycle.recover_generation(directory, users, ["a"], 16 * 1024**2)

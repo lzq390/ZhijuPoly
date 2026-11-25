@@ -20,12 +20,17 @@ class CleanupUnavailable(ValueError):
     """The workspace is running or the global low-water restriction has cleared."""
 
 
-def cold_owner(ws, require_low):
+def cold_owner(ws, require_low, *, reclaim_stopped=False):
     registry = ws.registry
     if registry.data["format"] != 5 or not ws.nfs or ws.env != "dev-m1" or ws.user not in manager.PILOT_USERS:
         raise ValueError("Expected a guarded dev-m1 native workspace")
     if ws.resource("backend") or ws.resource("fixture"):
-        raise CleanupUnavailable("Recycle the selected workspace before offline file recovery")
+        # Under the lifecycle lock, retire only the authenticated owner's
+        # stopped backend and network companion. Recheck low water after the
+        # Docker operation, just before allowing access to the volume.
+        if (not reclaim_stopped or registry.disk_watermark()["state"] != "low"
+                or not ws.remove_pair(only_stopped_backend=True)):
+            raise CleanupUnavailable("Recycle the selected workspace before offline file recovery")
     policy = ws.quota_status()
     aliases = manager.docker("volume", "ls", "-q", "--filter",
                              "label=org.nexpoly.m5.filesystem-uuid=" + policy["filesystem_uuid"]).splitlines()
@@ -101,7 +106,7 @@ def web_cleanup(root, user, action, data, until_ms):
     path = data["path"]
     if (not isinstance(path, str) or len(path.encode()) > 2048
             or ("offset" in data and (type(data["offset"]) is not int or not 0 <= data["offset"] < 2**53))
-            or ("after" in data and (not isinstance(data["after"], str) or len(data["after"].encode()) > 255))
+            or ("after" in data and (not isinstance(data["after"], str) or len(data["after"].encode()) > 384))
             or ("version" in data and (not isinstance(data["version"], str) or not re.fullmatch("[a-f0-9]{64}", data["version"])))):
         raise ValueError("cleanup_invalid")
     if type(until_ms) is not int or not 0 < until_ms - time.time() * 1000 <= 30_000:
@@ -111,7 +116,7 @@ def web_cleanup(root, user, action, data, until_ms):
             if time.time() * 1000 >= until_ms:
                 raise ValueError("cleanup_expired")
             ws = registry.workspace("dev-m1", user)
-            owner = cold_owner(ws, True)
+            owner = cold_owner(ws, True, reclaim_stopped=True)
             if time.time() * 1000 >= until_ms:
                 raise ValueError("cleanup_expired")
             helper = "nexpoly-m6-cleanup-" + uuid4().hex

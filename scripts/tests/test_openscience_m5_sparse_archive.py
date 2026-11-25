@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import openscience_m5_archive as codec
+from openscience_m5_quota_bundle import archived_reservations
 
 
 UID = os.getuid()
@@ -97,6 +98,13 @@ class SparseArchiveTests(unittest.TestCase):
 
         compact = self.package("sparse.tar", lambda tar: pack(tar, True), current=True)
         legacy = self.package("legacy.tar", lambda tar: pack(tar, False))
+        with legacy.open("rb") as stream:
+            self.assertEqual(archived_reservations(stream), {})
+        with compact.open("rb") as stream:
+            maps = archived_reservations(stream)
+            expected = {f"files/{name}": [] for name in cases}
+            expected[".m1-owner"] = []
+            self.assertEqual(maps, expected)
         self.assertLess(compact.stat().st_size, MIB)
         self.assertGreater(legacy.stat().st_size, 12 * MIB)
         restored = self.root / "restored"
@@ -195,6 +203,10 @@ class SparseArchiveTests(unittest.TestCase):
             "empty": ([], [(16 * unit, 3 * unit)]),
         }
         package = self.package("reservations.tar", fill, current=True)
+        with package.open("rb") as stream:
+            maps = archived_reservations(stream)
+            for name, (_, ranges) in expected.items():
+                self.assertEqual(maps["files/" + name], ranges)
         measured = {}
         destination = self.root / "reservations"
         self.restore(package, destination, allocation=lambda m, r, old: measured.update({m.name: r}))

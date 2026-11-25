@@ -1,6 +1,7 @@
 """Cold recovery must retain the exact owner and reviewed version of a file."""
 
 import base64
+import errno
 import hashlib
 import io
 import os
@@ -46,8 +47,72 @@ class OfflineFileTest(unittest.TestCase):
         first = self.browse("list", path="same-project", after="")
         second = self.browse("list", path="same-project", after=first["next"])
         names = [row["name"] for row in first["entries"] + second["entries"]]
-        self.assertEqual(names, sorted([f"item{i:02d}" for i in range(40)] + ["release.txt", "subfolder"]))
+        self.assertEqual(len(first["entries"]), client.PAGE_SIZE)
+        self.assertCountEqual(names, [f"item{i:02d}" for i in range(40)] + ["release.txt", "subfolder"])
         self.assertIsNone(second["next"])
+
+    def test_large_directory_resumes_with_bounded_work_even_across_hidden_entries(self):
+        for i in range(300):
+            (self.folder / f".hidden-{i}").touch()
+        expected = [f"visible-{i:03d}" for i in range(65)]
+        for name in expected:
+            (self.folder / name).touch()
+        visited = []
+        real_entries = client.directory_entries
+        def tracked(parent, cookie):
+            page = []
+            visited.append((cookie, page))
+            for name, offset in real_entries(parent, cookie):
+                page.append(offset)
+                yield name, offset
+        names, cursor = [], ""
+        with patch.object(client, "directory_entries", side_effect=tracked), patch.object(client, "SCAN_LIMIT", 7):
+            while True:
+                result = self.browse("list", path="same-project", after=cursor)
+                names.extend(row["name"] for row in result["entries"])
+                cursor = result["next"]
+                if not cursor:
+                    break
+                self.assertLess(len(visited), 100)
+        self.assertCountEqual(names, ["release.txt", *expected])
+        self.assertTrue(all(len(records) <= 7 for _, records in visited))
+        for (_, prior), (start, _) in zip(visited, visited[1:]):
+            self.assertEqual(start, prior[-1])
+
+    def test_page_can_checkpoint_before_the_grant_deadline(self):
+        for i in range(20):
+            (self.folder / f"item{i:02d}").touch()
+        # Less than a second remains. Preserve progress including hidden or dot entries.
+        fresh = {"path":"same-project", "after":""}
+        result = client.browse_file(self.root, self.owner, "list", fresh, time.time()*1000 + 800)
+        self.assertLessEqual(len(result["entries"]), 1)
+        self.assertTrue(result["next"])
+        second = self.browse("list", path="same-project", after=result["next"])
+        self.assertCountEqual([row["name"] for row in result["entries"] + second["entries"]],
+                              [f"item{i:02d}" for i in range(20)] + ["release.txt"])
+
+    def test_directory_cursor_binds_owner_directory_and_snapshot_and_resumes_legacy_pages(self):
+        for i in range(70):
+            (self.folder / f"item{i:02d}").touch()
+        names, cursor = [], "item29"
+        while True:
+            result = self.browse("list", path="same-project", after=cursor)
+            names.extend(row["name"] for row in result["entries"])
+            cursor = result["next"]
+            if not cursor:
+                break
+        self.assertCountEqual(names, [f"item{i:02d}" for i in range(30, 70)] + ["release.txt"])
+        cursor = self.browse("list", path="same-project", after="")["next"]
+        other = {**self.owner, "user_id":"test-user-b"}
+        for owner, path in ((other, "same-project"), (self.owner, "")):
+            with self.subTest(owner=owner, path=path), self.assertRaises(FileExistsError):
+                client.browse_file(self.root, owner, "list", {"path":path, "after":cursor}, time.time()*1000+2000)
+        with patch.object(client.os, "lseek", side_effect=OSError(errno.ESTALE, "stale NFS cookie")):
+            with self.assertRaises(FileExistsError):
+                self.browse("list", path="same-project", after=cursor)
+        (self.folder / "new").touch()
+        with self.assertRaises(FileExistsError):
+            self.browse("list", path="same-project", after=cursor)
 
     def test_paged_read_and_delete_are_bound_to_file_version_owner_and_deadline(self):
         content = b"a" * (client.READ_BYTES - 1) + "中文".encode()
@@ -112,6 +177,7 @@ class OfflineFileTest(unittest.TestCase):
     def test_host_rejects_running_workspace_attached_alias_and_non_low_disk(self):
         ws = Mock(env="dev-m1", user="test-user-a", volume="private-a")
         ws.registry.data = {"format": 5}
+        ws.registry.disk_watermark.return_value = {"state": "low"}
         ws.quota_status.return_value = {"filesystem_uuid": "disk-a"}
         with patch.object(recovery.subprocess, "run") as run:
             with self.assertRaisesRegex(ValueError, "Recycle"):
@@ -125,6 +191,38 @@ class OfflineFileTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "verified low"):
                     recovery.recover(ws, self.path, "confirmation", None)
             run.assert_not_called()
+
+    def test_cold_web_reclaims_only_terminal_backend_and_its_registered_companion(self):
+        ws = Mock(env="dev-m1", user="test-user-a", volume="private-a", deployment="dev-test",
+                  row={"id":"workspace-a", "uid":os.getuid()})
+        ws.registry.data = {"format": 5}
+        ws.quota_status.return_value = {"filesystem_uuid": "disk-a"}
+        ws.runtime = self.root / "runtime"
+        ws.remove_pair = recovery.manager.Workspace.remove_pair.__get__(ws)
+        ws.registry.disk_watermark.return_value = {"state": "normal"}
+        with self.assertRaises(recovery.CleanupUnavailable):
+            recovery.cold_owner(ws, True, reclaim_stopped=True)
+        ws.retire_generation.assert_not_called()
+        ws.registry.disk_watermark.return_value = {"state": "low"}
+        for backend, fixture in (("running", "exited"), ("paused", "running"), ("exited", "restarting")):
+            with self.subTest(backend=backend, fixture=fixture), patch.object(recovery.manager, "docker") as docker:
+                ws.resource.side_effect = {"backend":{"state":backend}, "fixture":{"state":fixture}}.get
+                with self.assertRaises(recovery.CleanupUnavailable):
+                    recovery.cold_owner(ws, True, reclaim_stopped=True)
+                ws.retire_generation.assert_not_called()
+                docker.assert_not_called()
+        ws.resource.side_effect = {"backend":{"state":"exited", "id":"backend-a"},
+                                   "fixture":{"state":"running", "id":"fixture-a"}}.get
+        with patch.object(recovery.manager, "docker", side_effect=["", "", "", "private-a", ""]) as docker:
+            owner = recovery.cold_owner(ws, True, reclaim_stopped=True)
+        self.assertEqual(owner["user_id"], "test-user-a")
+        ws.retire_generation.assert_called_once_with()
+        self.assertEqual([call.args for call in docker.call_args_list[:3]], [
+            ("rm", "backend-a"), ("stop", "--time", "10", "fixture-a"), ("rm", "fixture-a")])
+        ws.registry.disk_watermark.side_effect = [{"state":"low"}, {"state":"normal"}]
+        with patch.object(recovery.manager, "docker", side_effect=["", "", "", "private-a", ""]):
+            with self.assertRaisesRegex(recovery.CleanupUnavailable, "verified low"):
+                recovery.cold_owner(ws, True, reclaim_stopped=True)
 
     def test_read_and_delete_use_the_owner_helper_and_correct_mount_modes(self):
         nfs = SimpleNamespace(

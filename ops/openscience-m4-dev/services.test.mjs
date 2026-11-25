@@ -27,6 +27,7 @@ test("the model stream closes when its workspace generation changes", { timeout:
   const turn = {
     session: "ses_current",
     credential: generation,
+    until: Date.now() + 60000,
     page: { grant: "synthetic-login", active: new Set(), route: { tokenFile } },
   };
   let requestHeaders;
@@ -57,7 +58,10 @@ test("the model stream closes when its workspace generation changes", { timeout:
     port: server.address().port,
     path: "/v1/chat/completions",
     method: "POST",
-    headers: { "x-m4-session": turn.session, "x-m4-turn": "msg_current", "x-m4-request": requestId },
+    headers: {
+      "x-m4-session": turn.session, "x-m4-turn": "msg_current", "x-m4-request": requestId,
+      "x-m4-turn-expires-ms": String(turn.until + 10000),
+    },
   });
   const connected = once(req, "response");
   req.end();
@@ -68,6 +72,7 @@ test("the model stream closes when its workspace generation changes", { timeout:
   assert.equal(requestHeaders.authorization, "Bearer model-secret");
   assert.equal(requestHeaders["x-m4-handoff"], turn.page.grant);
   assert.equal(requestHeaders["x-m4-request"], requestId);
+  assert.equal(requestHeaders["x-m4-turn-expires-ms"], String(turn.until));
   const start = Date.now();
   await writeFile(tokenFile, "restarted");
   await closed;

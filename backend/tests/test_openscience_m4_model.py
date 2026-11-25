@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import time
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -31,14 +32,16 @@ def ledger():
         if not conn.execute("SELECT to_regclass('openscience_m4.model_requests')").fetchone()[0]:
             migration = Path(__file__).resolve().parents[1] / "migrations/openscience-dev/0006_m4_model.sql"
             conn.execute(migration.read_text())
-        if not conn.execute(
-            "SELECT 1 FROM pg_attribute WHERE attrelid='openscience_m4.model_requests'::regclass "
-            "AND attname='request_tag' AND NOT attisdropped"
-        ).fetchone():
-            migration = (
-                Path(__file__).resolve().parents[1] / "migrations/openscience-dev/0008_m4_model_retry.sql"
-            )
-            conn.execute(migration.read_text())
+        for column, filename in (
+            ("request_tag", "0008_m4_model_retry.sql"),
+            ("workspace_generation_fingerprint", "0009_m4_model_generation.sql"),
+        ):
+            if not conn.execute(
+                "SELECT 1 FROM pg_attribute WHERE attrelid='openscience_m4.model_requests'::regclass "
+                "AND attname=%s AND NOT attisdropped", (column,),
+            ).fetchone():
+                migration = Path(__file__).resolve().parents[1] / "migrations/openscience-dev" / filename
+                conn.execute(migration.read_text())
 
     @contextmanager
     def connect():
@@ -54,10 +57,12 @@ def actor(owner=None):
         "user_id": str(owner or uuid4()),
         "session_id": str(uuid4()),
         "workspace_user_id": "test-user-a",
+        "workspace_generation_fingerprint": "a" * 64,
         "scope": "model.invoke",
         "environment": "dev-m1",
         "workspace_session": "ses_test",
         "turn_id": "msg_test",
+        "turn_expires_ms": time.time_ns() // 1_000_000 + 900000,
         "request_id": str(uuid4()),
     }
 
@@ -93,6 +98,22 @@ def test_atomic_admission_retry_and_owner_budgets(ledger):
     assert summary["estimated_tokens"] == 15 and summary["reserved_tokens"] == 0
     assert b["request_id"] not in {str(r["request_id"]) for r in summary["records"]}
     ledger.release(b["request_id"])
+
+
+def test_pre_generation_request_keeps_its_usage_and_unknown_generation(ledger):
+    historical = actor()
+    with ledger.connect() as conn:
+        # Match receipts written by the earlier gateway (including during a rollback).
+        conn.execute(
+            """INSERT INTO openscience_m4.model_requests
+                (request_id,environment,owner_id,login_id,workspace_user_id,workspace_session,turn_id,
+                 model,protocol,reserved_input,max_output,request_tag)
+               VALUES (%s,'dev-m1',%s,%s,'test-user-a','ses_test','msg_test','qwen2.5-7b','responses',8,4,%s)""",
+            (historical["request_id"], historical["user_id"], historical["session_id"], b"t" * 32),
+        )
+    ledger.settle(historical["request_id"], {"input_tokens": 8, "output_tokens": 1}, None)
+    usage = ledger.summary(historical["user_id"])
+    assert usage["used_tokens"] == 9 and usage["records"][0]["workspace_generation_fingerprint"] is None
 
 
 def test_model_protocols_missing_usage_and_interrupted_provider(ledger):
@@ -309,21 +330,30 @@ def test_concurrent_gateway_streams_reserve_per_owner(ledger):
     asyncio.run(check())
 
 
-def test_revocation_during_token_count_refuses_new_model_work(ledger):
+@pytest.mark.parametrize("change", ["logout", "expiry", "generation"])
+def test_recheck_after_token_count_refuses_new_model_work(ledger, monkeypatch, change):
     owner = actor()
     called = []
     active = True
+    now_ms = owner["turn_expires_ms"] - 100
+    generation = owner["workspace_generation_fingerprint"]
+    monkeypatch.setattr(time, "time_ns", lambda: now_ms * 1_000_000)
 
     def principal(request: Request):
         if not active:
             raise HTTPException(401, "Login expired")
-        return owner
+        return {**owner, "workspace_generation_fingerprint": generation}
 
     def provider(req):
-        nonlocal active
+        nonlocal active, now_ms, generation
         called.append(req.url.path)
         if req.url.path == "/tokenize":
-            active = False
+            if change == "logout":
+                active = False
+            elif change == "expiry":
+                now_ms = owner["turn_expires_ms"]
+            else:
+                generation = "b" * 64
             return httpx.Response(200, json={"input_tokens": 8})
         return httpx.Response(200, text='{"usage":{"input_tokens":8,"output_tokens":1}}\n')
 
@@ -345,11 +375,20 @@ def test_revocation_during_token_count_refuses_new_model_work(ledger):
     asyncio.run(exercise())
 
 
-def test_busy_worker_retries_only_the_same_unstarted_request(ledger):
+@pytest.mark.parametrize("failure,code,reason", [
+    ("busy", 429, "worker_busy"),
+    ("connect", 503, "worker_not_connected"),
+    ("connect_timeout", 503, "worker_not_connected"),
+])
+def test_unstarted_worker_retries_only_the_same_request(ledger, failure, code, reason):
     original = actor()
     alternate = {**original, "session_id": str(uuid4())}
     foreign = {**actor(), "request_id": original["request_id"]}
-    logins = {"original": original, "second": alternate, "foreign": foreign}
+    logins = {
+        "original": original, "second": alternate, "foreign": foreign,
+        "restarted": {**original, "workspace_generation_fingerprint": "b" * 64},
+        "renewed": {**original, "turn_expires_ms": original["turn_expires_ms"] + 1000},
+    }
     attempts = []
 
     def principal(request: Request):
@@ -360,7 +399,12 @@ def test_busy_worker_retries_only_the_same_unstarted_request(ledger):
             return httpx.Response(200, json={"input_tokens": 8})
         attempts.append(json.loads(req.content)["request_id"])
         if len(attempts) == 1:
+            if failure == "connect":
+                raise httpx.ConnectError("Unix socket not listening", request=req)
+            if failure == "connect_timeout":
+                raise httpx.ConnectTimeout("worker connection timed out", request=req)
             return httpx.Response(429)
+        assert json.loads(req.content)["turn_expires_ms"] == original["turn_expires_ms"]
         return httpx.Response(200, text='{"usage":{"input_tokens":8,"output_tokens":1}}\n')
 
     app = FastAPI()
@@ -380,9 +424,11 @@ def test_busy_worker_retries_only_the_same_unstarted_request(ledger):
                     json={"model": "qwen2.5-7b", "input": prompt},
                 )
 
-            assert (await call()).status_code == 429
-            assert ledger.summary(original["user_id"])["reserved_tokens"] == 0
-            for login in ("second", "foreign"):
+            assert (await call()).status_code == code
+            held = ledger.summary(original["user_id"])
+            assert held["reserved_tokens"] == held["used_tokens"] == held["estimated_tokens"] == 0
+            assert held["records"][0]["state"] == "released" and held["records"][0]["reason"] == reason
+            for login in ("second", "foreign", "restarted", "renewed"):
                 assert (await call(login)).status_code == 409
             assert (await call(prompt="other")).status_code == 409
             assert (await call()).status_code == 200
@@ -390,5 +436,42 @@ def test_busy_worker_retries_only_the_same_unstarted_request(ledger):
             assert attempts == [original["request_id"]] * 2
             usage = ledger.summary(original["user_id"])
             assert usage["used_tokens"] == 9 and len(usage["records"]) == 1
+            assert usage["records"][0]["workspace_generation_fingerprint"] == original["workspace_generation_fingerprint"]
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("failure,code,state", [
+    ("read_error", 503, "estimated"), ("expired_in_worker", 401, "released"),
+])
+def test_provider_refusal_or_unknown_delivery(ledger, failure, code, state):
+    owner = actor()
+    attempts = []
+
+    def principal(request: Request):
+        return owner
+
+    def provider(req):
+        if req.url.path == "/tokenize":
+            return httpx.Response(200, json={"input_tokens": 8})
+        attempts.append(req.url.path)
+        assert json.loads(req.content)["turn_expires_ms"] == owner["turn_expires_ms"]
+        if failure == "read_error":
+            raise httpx.ReadError("connection lost after request was sent", request=req)
+        return httpx.Response(412)
+
+    app = FastAPI()
+    install_model(app, principal, request_key=b"test", ledger=ledger, transport=httpx.MockTransport(provider))
+
+    async def check():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://local") as client:
+            body = {"model": "qwen2.5-7b", "input": "hi", "max_tokens": 4}
+            for expected in (code, 409):
+                assert (await client.post(BASE + "/v1/responses", json=body)).status_code == expected
+        assert attempts == ["/generate"]
+        usage = ledger.summary(owner["user_id"])
+        assert usage["reserved_tokens"] == usage["used_tokens"] == 0
+        assert usage["records"][0]["state"] == state
+        assert usage["estimated_tokens"] == (12 if state == "estimated" else 0)
 
     asyncio.run(check())

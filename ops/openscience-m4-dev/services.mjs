@@ -147,7 +147,12 @@ export async function services(config, validate) {
         turn.credential,
         await readBody(req, 2 * 1024 * 1024),
         "application/json",
-        { "x-m4-session": session, "x-m4-turn": message, "x-m4-request": id },
+        {
+          "x-m4-session": session,
+          "x-m4-turn": message,
+          "x-m4-request": id,
+          "x-m4-turn-expires-ms": String(turn.until),
+        },
       );
     },
     async knowledge(t, method, params) {

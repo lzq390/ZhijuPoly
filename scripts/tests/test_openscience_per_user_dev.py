@@ -221,6 +221,18 @@ class ManagerTest(TestCase):
             self.assertEqual(self.a.state()["state"], "running")
             admit.assert_not_called()
 
+    def test_start_backoff_still_surfaces_cold_cleanup_during_low_water(self):
+        self.a.row["retry_after"] = m1.time.time() + 60
+        denied = m1.CapacityRefusal("global_disk", "workspace_disk_low_watermark")
+        with patch.object(self.a, "verify_template_files"), patch.object(self.a, "resource", return_value=None), \
+                patch.object(self.registry, "check_disk_admission", side_effect=[denied, None]), \
+                patch.object(self.a, "create_pair") as create:
+            with self.assertRaisesRegex(m1.CapacityRefusal, "workspace_disk_low_watermark"):
+                self.a.ensure()
+            with self.assertRaisesRegex(m1.Problem, "backoff"):
+                self.a.ensure()
+            create.assert_not_called()
+
 
 class QuotaManagerTest(TestCase):
     def setUp(self):

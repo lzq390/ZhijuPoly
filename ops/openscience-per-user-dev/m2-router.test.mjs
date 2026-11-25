@@ -181,9 +181,9 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
     assert.equal(fileDeletes, 1)
 
     await t.test("only a current low-water handoff can browse its own cold volume", async () => {
-      const list = (session, changes={}) => fetch(quotaOrigin+"/api/workspace-cleanup/list", {
+      const list = (session, changes={}, data={path:"",after:""}) => fetch(quotaOrigin+"/api/workspace-cleanup/list", {
         method:"POST", headers:{Origin:quotaOrigin, Cookie:session.cookie, "X-Nexpoly-Page":session.page,...changes},
-        body:JSON.stringify({path:"",after:""}),
+        body:JSON.stringify(data),
       })
       assert.equal((await list(grant)).status,403)
       capacityRefusal = "global_disk (workspace_disk_monitor_unavailable)"
@@ -205,10 +205,14 @@ test("scoped reads, late handoffs, two logins and live revocation", {timeout:200
       assert.equal((await list(cold)).status,200)
       assert.deepEqual(cleanupCalls.map(r=>[r.environment,r.user_id,r.action,r.data]),
         [["dev-m1","test-user-b","list",{path:"",after:""}]])
+      const component = '"'.repeat(255)
+      const continuation = {path:Array(8).fill(component).join("/"), after:"/1/" + "a".repeat(64) + "/123/" + component}
+      assert.equal((await list(cold,{},continuation)).status,200)
+      assert.deepEqual(cleanupCalls.at(-1).data,continuation)
       cold.data.revoked = true
       await new Promise(done=>setTimeout(done,2100))
       assert.equal((await list(cold)).status,401)
-      assert.equal(cleanupCalls.length,1)
+      assert.equal(cleanupCalls.length,2)
     })
 
     await t.test("shared disk admission covers growing routes, preserves reads and deletion, and fails closed", async () => {

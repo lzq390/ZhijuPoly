@@ -11,6 +11,7 @@ from contextlib import closing
 from uuid import UUID
 from pathlib import Path
 import threading
+import time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
@@ -30,6 +31,7 @@ class Prompt(BaseModel):
 
 class Generate(Prompt):
     request_id: UUID
+    turn_expires_ms: int = Field(gt=0, le=2**53 - 1, strict=True)
 
 
 class ReceiptQuery(BaseModel):
@@ -161,6 +163,9 @@ def create_app():
             finally:
                 stopped.set()
 
+        # Encoding on this CPU worker may itself outlast a turn that was valid at dispatch.
+        if body.turn_expires_ms <= time.time_ns() // 1_000_000:
+            raise HTTPException(412, "Model turn expired before worker admission")
         if not slots.acquire(blocking=False):
             raise HTTPException(429, "Local model concurrency reached")
         threading.Thread(target=infer, daemon=True).start()

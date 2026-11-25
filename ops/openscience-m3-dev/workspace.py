@@ -103,6 +103,21 @@ def prepare(root, registry, adapters=False, m4=False, verify_retries=False):
                     "        .use(devBoundary)",
                     "        .use(devBoundary)\n        .use(withToolTurn)",
                 )
+                if adapters:
+                    source = 'import { draftMessages, draftProof, latestUser } from "/m3-code/draft-bridge.ts"\n' + source
+                    source = anchor(source, "        .use(withToolTurn)",
+                                    '        .use(withToolTurn)\n        .post("/nexpoly/private/draft-evidence/:adapter", draftProof)')
+                    # Both adapters use the same canonical lookup and receipt semantics.
+                    get_messages = """getMessages: async (sessionID) => {
+            await Session.get(sessionID)
+            return Session.messages({ sessionID, limit: 1000 })
+          }"""
+                    latest_user = """const messages = await Session.messages({ sessionID, limit: 1000 })
+            const user = messages.findLast(message => message.info.role === "user")?.info"""
+                    if source.count(get_messages) != 2 or source.count(latest_user) != 4:
+                        raise ValueError("Unexpected November draft history hooks")
+                    source = source.replace(get_messages, "getMessages: draftMessages")
+                    source = source.replace(latest_user, "const user = await latestUser(sessionID)")
             elif name == "llm":
                 source = 'import { modelHeaders } from "/m3-code/instance.mjs"\n' + anchor(
                     source,
@@ -179,10 +194,12 @@ def prepare(root, registry, adapters=False, m4=False, verify_retries=False):
         acquired = true
       }""",
             )
-            bridge.write_text(source)
+            source = anchor(source, "getMessages(body.session_id)", "getMessages(adapter, body)")
+            bridge.write_text(source + "\nexport { draftEvidence, matchingReceipt }\n")
+            shutil.copyfile(HERE / "draft-bridge.ts", root / "draft-bridge.ts")
     finally:
         subprocess.run(["docker", "rm", cid], check=True, stdout=subprocess.DEVNULL)
-    for name in ["model.py", "instance.mjs"]:
+    for name in ["model.py", "instance.mjs", "draft-history.mjs"]:
         shutil.copyfile(HERE / name, root / name)
     config = json.loads((registry / "config.json").read_text())
     config["permission"].update(

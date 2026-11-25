@@ -1,4 +1,5 @@
 // Only the trusted router supplies the handle. It never enters message parts, model input or MCP arguments.
+import { rememberPreparation } from "./draft-history.mjs";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 const requests = new AsyncLocalStorage();
@@ -45,7 +46,11 @@ export async function toolsForTurn(input, jsonSchema) {
       type: "dynamic",
       description: definition.description,
       inputSchema: jsonSchema(definition.inputSchema),
-      execute: async (args, opts) => rpc("call", { call: opts.toolCallId, tool: name, arguments: args }),
+      execute: async (args, opts) => {
+        const result = await rpc("call", { call: opts.toolCallId, tool: name, arguments: args });
+        await rememberPreparation(name, result.structuredContent, session, input.processor.message.id, opts.toolCallId);
+        return result;
+      },
       // Prepare authorization before the native permission prompt. The router reads the
       // actual pending permission back from this instance when the browser answers it.
       prepare: (args, opts) => rpc("prepare", { call: opts.toolCallId, tool: name, arguments: args }),

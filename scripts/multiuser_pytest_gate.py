@@ -9,7 +9,7 @@ REQUIRED = {
     "test_task_events.py", "test_task_events_postgres.py",
     "test_private_asset_isolation.py", "test_private_assets_postgres.py",
     "test_monomer_user_isolation_postgres.py", "test_multiuser_contract.py",
-    "test_multiuser_restore.py",
+    "test_multiuser_restore.py", "test_openscience_m4_model.py",
     "test_user_isolation_release_contract.py",
     "test_service_privilege_contract.py", "test_service_privileges_migration.py",
     "test_service_isolation_readiness.py",

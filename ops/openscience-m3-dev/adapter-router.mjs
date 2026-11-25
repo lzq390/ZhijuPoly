@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import { POLYTAO_FORM_ADAPTER } from "../openscience-mcp-dev/polytao-form-bridge.mjs";
 import { RETROSYNTHESIS_FORM_ADAPTER } from "../openscience-mcp-dev/retrosynthesis-form-bridge.mjs";
 import {
-  capabilitySessionContainsDraft,
   validateCapabilityDraftAction,
 } from "../openscience-mcp-dev/capability-form-bridge.mjs";
 
@@ -76,42 +75,25 @@ export async function connectAdapters(config, unix) {
     }
     const action = validateCapabilityDraftAction(adapter, body);
     const session = action.session_id;
-    const scope = "/session/" + session;
-    const directory = "?directory=" + encodeURIComponent(action.directory);
-    const headers = { authorization: "Bearer " + credential };
     const absent = () =>
       Object.assign(Error("draft_not_in_session"), { status: 403, code: "DRAFT_NOT_IN_SESSION" });
-    // The message-list endpoint streams a 200 before discovering a missing session on this release.
-    // Resolve ownership through the session detail endpoint before consuming its message stream.
-    const details = await unix(page.route.socket, "GET", scope + directory, headers, null).catch((error) => {
-      if (error.status === 404) throw absent();
+    // The private workspace resolves against canonical records. Large/private
+    // message bodies never cross this socket just to authorize a button.
+    const proof = await unix(page.route.socket, "POST", "/nexpoly/private/draft-evidence/" + name,
+      { authorization: "Bearer " + credential, "content-type": "application/json" }, payload).catch((error) => {
+      if (error.status === 403 || error.status === 404) throw absent();
       throw error;
     });
-    if (details.id !== session || details.directory !== action.directory) throw absent();
-    const messages = await unix(
-      page.route.socket,
-      "GET",
-      scope + "/message" + directory + "&limit=1000",
-      headers,
-      null,
-    );
-    // The original preparation must be a completed tool part stored in this private conversation.
-    const message = messages.find((m) =>
-      capabilitySessionContainsDraft(adapter, [m], session, action.draft_id),
-    );
-    if (!message)
-      throw Object.assign(Error("draft_not_in_session"), { status: 403, code: "DRAFT_NOT_IN_SESSION" });
-    const part = message.parts.find((p) =>
-      capabilitySessionContainsDraft(adapter, [{ info: message.info, parts: [p] }], session, action.draft_id),
-    );
+    if (proof.session !== session || proof.draft !== action.draft_id ||
+        !/^msg_[A-Za-z0-9_-]{1,120}$/.test(proof.turn || "") || !/^[A-Za-z0-9_-]{1,128}$/.test(proof.call || "")) throw absent();
     const { name: tool, args } = adapter.call(action);
     return {
       name,
       tool,
       args: { ...args, conversation_id: session },
       session,
-      turn: message.info.parentID,
-      call: part.callID,
+      turn: proof.turn,
+      call: proof.call,
       draft_id: action.draft_id,
       revision: action.revision,
       confirmed: action.action === "confirm",

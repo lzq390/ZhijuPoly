@@ -2,14 +2,17 @@
 
 import base64
 from contextlib import contextmanager, ExitStack
+import ctypes
+import errno
 import hashlib
-import heapq
 import json
 import os
 import stat
+import struct
 import time
 
 PAGE_SIZE = 32
+SCAN_LIMIT = 128
 READ_BYTES = 16 * 1024
 
 
@@ -93,23 +96,70 @@ def project_file(root, path, owner, confirmation, output, max_output_bytes=None)
         return {**receipt, "confirmation": token, "deleted": bool(confirmation)}
 
 
-def list_directory(parent, device, uid, at_root, after, until_ms):
-    def entries():
-        with os.scandir(parent) as listing:
-            for entry in listing:
-                check_deadline(until_ms)
-                if entry.name <= after or not visible_name(entry.name):
-                    continue
-                info = entry.stat(follow_symlinks=False)
-                if (info.st_dev, info.st_uid, info.st_gid) != (device, uid, uid):
-                    continue
+def directory_entries(parent, cookie):
+    # On our Linux ext4/NFSv4.1 mounts d_off is the opaque cookie for the
+    # next record. scandir hides it and buffers more names than a UI page.
+    os.lseek(parent, cookie, os.SEEK_SET)
+    getdents = ctypes.CDLL(None, use_errno=True).getdents64
+    getdents.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t]
+    getdents.restype = ctypes.c_ssize_t
+    buffer = ctypes.create_string_buffer(8192)
+    header = struct.Struct("=QqHB")  # linux_dirent64: ino, off, reclen, type
+    while True:
+        size = getdents(parent, buffer, len(buffer))
+        if size < 0:
+            number = ctypes.get_errno()
+            raise OSError(number, os.strerror(number))
+        if not size:
+            return
+        block = buffer.raw[:size]
+        pos = 0
+        while pos < size:
+            _, offset, length, _ = header.unpack_from(block, pos)
+            name = block[pos + header.size:pos + length].split(b"\0", 1)[0]
+            yield os.fsdecode(name), offset
+            pos += length
+
+
+def list_directory(parent, device, owner, path, after, until_ms):
+    before = os.fstat(parent)
+    stamp = token_for([owner, path, before.st_ino, before.st_mtime_ns, before.st_ctime_ns])
+    cookie, lower_bound = 0, after
+    if after.startswith("/1/"):
+        _, _, previous, encoded, lower_bound = after.split("/", 4)
+        digits = encoded.removeprefix("-")
+        if not digits.isascii() or not digits.isdecimal() or len(digits) > 19:
+            raise ValueError("Invalid directory cookie")
+        cookie = int(encoded)
+        if not -(2**63) <= cookie < 2**63 or previous != stamp:
+            raise FileExistsError("cleanup_changed")
+    # Old pages used the last visible filename as a lexical lower bound.
+    # Preserve that filter on every continuation while switching to cookies.
+    if lower_bound and not visible_name(lower_bound):
+        raise ValueError("Invalid directory cursor")
+    uid = owner["uid"]
+    entries = []
+    next_cursor = None
+    for scanned, (name, offset) in enumerate(directory_entries(parent, cookie), 1):
+        check_deadline(until_ms)
+        if name > lower_bound and visible_name(name):
+            try:
+                info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                raise FileExistsError("cleanup_changed") from None
+            if (info.st_dev, info.st_uid, info.st_gid) == (device, uid, uid):
                 if stat.S_ISDIR(info.st_mode):
-                    yield entry.name, "directory", None
-                elif not at_root and regular(info, device, uid):
-                    yield entry.name, "file", info.st_size
-    page = heapq.nsmallest(PAGE_SIZE + 1, entries())
-    return {"entries": [{"name": n, "kind": k, "size": s} for n, k, s in page[:PAGE_SIZE]],
-            "next": page[PAGE_SIZE - 1][0] if len(page) > PAGE_SIZE else None}
+                    entries.append({"name": name, "kind": "directory", "size": None})
+                elif path and regular(info, device, uid):
+                    entries.append({"name": name, "kind": "file", "size": info.st_size})
+        if len(entries) == PAGE_SIZE or scanned >= SCAN_LIMIT or time.time() * 1000 >= until_ms - 1000:
+            next_cursor = f"/1/{stamp}/{offset}/{lower_bound}"
+            break
+    check_deadline(until_ms)
+    now = os.fstat(parent)
+    if (now.st_mtime_ns, now.st_ctime_ns) != (before.st_mtime_ns, before.st_ctime_ns):
+        raise FileExistsError("cleanup_changed")
+    return {"entries": entries, "next": next_cursor}
 
 
 def check_deadline(until_ms):
@@ -124,7 +174,12 @@ def browse_file(root, owner, action, data, until_ms):
     parts = components(path, directory=listing)
     with project_directory(root, parts if listing else parts[:-1], uid) as (parent, device):
         if listing:
-            return list_directory(parent, device, uid, not parts, data["after"], until_ms)
+            try:
+                return list_directory(parent, device, owner, path, data["after"], until_ms)
+            except OSError as error:
+                if data["after"].startswith("/1/") and error.errno in (errno.EINVAL, errno.ESTALE):
+                    raise FileExistsError("cleanup_changed") from error
+                raise
         name = parts[-1]
         fd = os.open(name, os.O_NOFOLLOW | os.O_RDONLY | os.O_NONBLOCK, dir_fd=parent)
         with os.fdopen(fd, "rb") as source:

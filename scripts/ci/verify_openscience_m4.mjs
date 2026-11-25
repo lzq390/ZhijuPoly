@@ -418,6 +418,9 @@ async function usage(user, other) {
   const own = records.filter(
     (row) => row.workspace_session === user.conversation && row.turn_id === user.turn,
   );
+  const workspace = bindings["test-user-" + user.tag].workspace_id;
+  const credential = await readFile(resolve(stack.registry, workspace, "secret/token"));
+  const generationFingerprint = digest(digest(credential));
   assert.ok(
     own.some((row) => row.protocol === report.users[user.tag].model.protocol),
     "The selected model protocol has no usage for the persisted question",
@@ -426,6 +429,7 @@ async function usage(user, other) {
     own.every(
       (row) =>
         row.login_id === user.session_id &&
+        row.workspace_generation_fingerprint === generationFingerprint &&
         row.state === "actual" &&
         row.model === "qwen2.5-7b" &&
         Number.isInteger(row.input_tokens) &&
@@ -434,12 +438,13 @@ async function usage(user, other) {
         row.output_tokens > 0,
     ),
   );
-  return own.map(({ request_id, protocol, input_tokens, output_tokens, state: settlement }) => ({
-    request_id,
-    protocol,
-    input_tokens,
-    output_tokens,
-    settlement,
+  return own.map((row) => ({
+    request_id: row.request_id,
+    workspace_generation_fingerprint: row.workspace_generation_fingerprint,
+    protocol: row.protocol,
+    input_tokens: row.input_tokens,
+    output_tokens: row.output_tokens,
+    settlement: row.state,
   }));
 }
 try {

@@ -919,16 +919,24 @@ class Workspace:
             result["reason"] = reason
         return result
 
-    def remove_pair(self):
-        items = [self.resource(role) for role in ("backend", "fixture")]
+    def remove_pair(self, *, only_stopped_backend=False):
+        backend, fixture = self.resource("backend"), self.resource("fixture")
+        if only_stopped_backend:
+            stopped = {"created", "exited", "dead"}
+            if ((backend and backend["state"] not in stopped)
+                    or (fixture and fixture["state"] not in stopped | {"running"})):
+                return False
+            if not backend and not fixture:
+                return True
         self.retire_generation()
-        for item in items:
+        for item in (backend, fixture):
             if item:
                 if item["state"] == "running":
                     docker("stop", "--time", "10", item["id"])
                 docker("rm", item["id"])
         if self.runtime.exists():
             shutil.rmtree(self.runtime)
+        return True
 
     def ensure(self):
         self.verify_template_files()
@@ -941,6 +949,9 @@ class Workspace:
             self.ready(fixture, backend)
             return self.state()
         if self.row["retry_after"] > time.time():
+            # A failed start can coincide with low water. Let the login enter
+            # cold cleanup immediately while retaining the normal start backoff.
+            self.registry.check_disk_admission(start=True)
             raise Problem("Workspace start backoff is active; retry shortly")
         stable = {"running", "exited", "dead", "created"}
         if any(item and item["state"] not in stable for item in (backend, fixture)):

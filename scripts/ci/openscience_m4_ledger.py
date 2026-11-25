@@ -44,7 +44,8 @@ MODEL = """
 WITH s AS (SELECT :'spec'::jsonb v)
 SELECT coalesce(jsonb_agg(jsonb_build_object(
     'request_id',r.request_id,'owner_id',r.owner_id,'login_id',r.login_id,'workspace_session',r.workspace_session,
-    'turn_id',r.turn_id,'model',r.model,'protocol',r.protocol,'settlement',r.state,
+    'turn_id',r.turn_id,'workspace_generation_fingerprint',r.workspace_generation_fingerprint,
+    'model',r.model,'protocol',r.protocol,'settlement',r.state,
     'input_tokens',r.input_tokens,'output_tokens',r.output_tokens
 )), '[]') FROM openscience_m4.model_requests r, s WHERE r.workspace_session=v->>'workspace_session';
 """

@@ -17,7 +17,9 @@ from tempfile import TemporaryDirectory
 ROOT = Path(__file__).resolve().parents[2]
 OPS = ROOT / "ops/openscience-per-user-dev"
 sys.path[:0] = [str(ROOT / "scripts"), str(OPS)]
-from openscience_m5_quota_bundle import DRILL_BACKUP_FLOOR, backup, disk_admission, restore, inventory, quota  # noqa: E402
+from openscience_m5_quota_bundle import (  # noqa: E402
+    DRILL_BACKUP_FLOOR, archived_reservations, backup, disk_admission, restore, inventory, quota,
+)
 from openscience_m5_backup import available_bytes, digest, private_dir, private_file, publish, require_space  # noqa: E402
 
 guest = runpy.run_path(str(OPS / "quota-guest.py"))
@@ -190,9 +192,12 @@ def recover_generation(directory, users, selected_roles, reserve_bytes):
             manifest = json.loads(raw)
             with private_file(package / "workspace.tar") as stream:
                 require(digest(stream) == manifest["archive_sha256"], "Stored archive differs from manifest")
+                stream.seek(0)
+                reservations = archived_reservations(stream)
             require(manifest["inventory"] == row["inventory"] and manifest["quota"] == row["quota"],
                     "Stored manifest differs from the generation")
-            recovered = dict(inventory=inventory(target / "workspace", owner), quota=current)
+            recovered = dict(inventory=inventory(target / "workspace", owner, reservations=reservations),
+                             quota=current)
         else:
             # An interruption after quota installation but before tree publication
             # leaves this same destination and hard limit safe to retry.

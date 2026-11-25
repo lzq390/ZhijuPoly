@@ -772,6 +772,7 @@ OPENSCIENCE_OVERLAY_STEP_HEADERS = (
     "      - name: Set up Node.js",
     "      - name: Install the pinned browser probe package",
     "      - name: Run deterministic overlay patch tests",
+    "      - name: Run private workspace router, draft and model relay regressions",
     "      - name: Run development MCP overlay tests in Chromium",
     "      - name: Run confirmed MCP browser verifier contract tests",
     "      - name: Set up Buildx",

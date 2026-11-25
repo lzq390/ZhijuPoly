@@ -67,6 +67,12 @@ def workspace_extensions(dsn):
                 "WHERE attrelid='openscience_m4.model_requests'::regclass AND attname='request_tag' AND NOT attisdropped",
                 "0008_m4_model_retry.sql",
             ),
+            (
+                "SELECT max(attname::text) FROM pg_attribute WHERE "
+                "attrelid='openscience_m4.model_requests'::regclass "
+                "AND attname='workspace_generation_fingerprint' AND NOT attisdropped",
+                "0009_m4_model_generation.sql",
+            ),
         )
     with psycopg.connect(dsn, autocommit=True) as conn:
         # Each extension script owns its transaction. This session lock spans them

@@ -16,10 +16,15 @@ import tarfile
 from tempfile import TemporaryDirectory
 
 from openscience_m5_archive import (
+    LAYOUT_VERSION,
+    WorkspaceTarInfo,
     add_tree,
     entries,
+    fiemap_layout,
+    file_layout,
     hash_entry,
     process_archive,
+    reservation_extents,
     validate_entry,
 )
 from openscience_m5_backup import (
@@ -44,7 +49,27 @@ quota = import_module("quota")
 FORMAT = "openscience-m5-ext4-workspace-v1"
 
 
-def inventory(root, binding):
+def archived_reservations(stream):
+    """Read the per-file reservation contract from an already digest-verified package."""
+    expected = {}
+    current_layout = False
+    with tarfile.open(fileobj=stream, mode="r:", tarinfo=WorkspaceTarInfo) as reader:
+        for member in reader:
+            if member.isdir():
+                if member.name == ".":
+                    current_layout = member.pax_headers.get(LAYOUT_VERSION) == "1"
+                continue
+            if member.sparse is not None:
+                # GNU PAX stores only the packed data before the next header.
+                file_layout(reader, member)
+            ranges = reservation_extents(member)
+            # Legacy dense backups did not record physical extents.
+            if current_layout or ranges:
+                expected[member.name] = ranges
+    return expected
+
+
+def inventory(root, binding, *, reservations=None):
     # Produce the same canonical tree digest used by the earlier M5 restore.
     tree = hashlib.sha256()
     files = folders = size = 0
@@ -63,6 +88,10 @@ def inventory(root, binding):
             length = info.st_size
             with path.open("rb") as src:
                 checksum = digest(src)
+                if reservations is not None and name in reservations:
+                    actual = fiemap_layout(src.fileno(), length)
+                    if actual is None or actual[1] != reservations[name]:
+                        raise ValueError(f"Published file reservations differ from the archive: {name}")
             files += 1
             size += length
         hash_entry(

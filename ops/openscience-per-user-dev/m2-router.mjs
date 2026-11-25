@@ -451,7 +451,9 @@ export async function startRouter(c, loadUi = pinnedUi) {
         if (req.headers.origin !== c.public_origin || req.headers["x-nexpoly-page"] !== page.key)
           throw new Refusal(403,"write_origin_denied")
         let data
-        const payload = await body(req, 4096)
+        // The path and cursor are bounded again by the manager after JSON decoding.
+        // Leave room for a full-length path containing JSON-escaped filename bytes.
+        const payload = await body(req, 6144)
         try { data = JSON.parse(payload) } catch { throw new Refusal(400,"cleanup_invalid") }
         await validate(page)
         gate(page)

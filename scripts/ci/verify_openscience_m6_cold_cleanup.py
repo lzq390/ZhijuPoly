@@ -9,48 +9,7 @@ from uuid import uuid4
 
 from verify_openscience_m5_watermark import MIB, OWNERS, ROOT, Trial, json_write, wait_file
 
-# Place one non-sparse file under A's real unprivileged UID. The 96 MiB allocation
-# lets the browser deletion alone take the pool from below 96 to above 160 MiB.
-FIXTURE = """
-import hashlib, json, os, stat, sys
-from pathlib import Path
-sys.path[:0] = ['/opt/nexpoly/scripts','/opt/nexpoly/ops/openscience-per-user-dev','/inputs']
-import water_pool as pool
-from quota_guest import run_as
-action, tag, project, fs, uid = sys.argv[1:]
-cfg, roles = pool.topology()
-state = pool.observation(cfg, roles)['workspaces']['a']
-assert state['uid'] == int(uid) and state['filesystem_uuid'] == fs
-folder = pool.ROOTS / 'src-a/workspace/files/projects' / project
-binding = json.loads(Path('/inputs/spec.json').read_bytes())['users']['a']
-assert binding['uid'] == int(uid)
-def file():
-    path = folder / ('release-' + tag + '.txt')
-    block = (('A ' + tag + ' release').encode().ljust(1023, b'.') + b'\\n') * 1024
-    sha = hashlib.sha256()
-    for _ in range(96):
-        sha.update(block)
-    if action == 'create':
-        with path.open('xb') as f:
-            for _ in range(96):
-                f.write(block)
-            f.flush()
-            os.fsync(f.fileno())
-    elif not path.exists():
-        return {'absent': True}
-    info = path.lstat()
-    assert stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == int(uid)
-    assert info.st_size == len(block) * 96 and info.st_blocks * 512 >= info.st_size
-    with path.open('rb') as f:
-        observed = hashlib.sha256()
-        while chunk := f.read(1024*1024):
-            observed.update(chunk)
-    assert observed.digest() == sha.digest()
-    if action == 'cleanup':
-        path.unlink()
-    return {'size': info.st_size, 'allocated_bytes': info.st_blocks * 512, 'sha256': sha.hexdigest()}
-print(json.dumps(run_as(binding, file)))
-"""
+FIXTURE = Path(__file__).with_name("openscience_m6_cold_fixture.py")
 
 
 def bound_rows(trial, action):
@@ -80,7 +39,7 @@ def drill(args):
     assert guest_work["uid"] == initial[OWNERS[0]]["uid"]
     tag = uuid4().hex[:12]
     def fixture(action):
-        return json.loads(t.guest.run("python3", "-IBc", FIXTURE, action, tag, ac22["project"],
+        return json.loads(t.guest.run("python3", "-IBc", FIXTURE.read_text(), action, tag, ac22["project"],
                                       guest_work["filesystem_uuid"], str(guest_work["uid"]),
                                       capture_output=True, timeout=120).stdout)
     t.guest.run("test", "!", "-e", "/mnt/nexpoly-m5-pool/.m5-global-drill/pressure.dat", timeout=20)
@@ -88,9 +47,12 @@ def drill(args):
     json_write(args.work / "fixture.json", data)
     history = t.alerts()
     report = {"environment": "dev-m1", "pool": sample["filesystem_uuid"], "initial": initial,
-              "before": first, "fixture": fixture("create")}
+              "before": first}
     pressure = False
     try:
+        report["fixture"] = fixture("create")
+        if report["fixture"].get("name_in_use"):
+            raise FileExistsError("Release file name already exists in the project")
         with (args.work / "browser.log").open("x") as log:
             proc = subprocess.Popen(["node", ROOT / "scripts/ci/verify_openscience_m6_cold_cleanup.mjs",
                                      args.state, args.work], stdout=log, stderr=subprocess.STDOUT)
@@ -137,7 +99,8 @@ def drill(args):
             t.wait_observed("normal", 160 * MIB)
         report["parked"] = bound_rows(t, "recycle")
         assert all(r["state"] == "recycled" and not r["volume_holders"] for r in report["parked"].values())
-        fixture("cleanup")
+        if not report.get("fixture", {}).get("name_in_use"):
+            fixture("cleanup")
     report["browser"] = json.loads((args.work / "browser.json").read_bytes())
     assert report["browser"]["status"] == "passed"
     report["status"] = "passed"

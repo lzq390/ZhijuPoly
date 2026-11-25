@@ -39,7 +39,7 @@ function toolOutput(adapter, part) {
   return null
 }
 
-function draftEvidence(adapter, messages, sessionId, draftId) {
+export function draftEvidence(adapter, messages, sessionId, draftId) {
   if (!Array.isArray(messages)) return null
   for (const message of messages) {
     if (message.info?.role !== "assistant" || message.info.sessionID !== sessionId) continue
@@ -55,7 +55,7 @@ export function capabilitySessionContainsDraft(adapter, messages, sessionId, dra
   return Boolean(draftEvidence(adapter, messages, sessionId, draftId))
 }
 
-function matchingReceipt(adapter, messages, body) {
+export function matchingReceipt(adapter, messages, body) {
   for (const message of messages) {
     if (message.info?.role !== "user") continue
     for (const part of message.parts ?? []) {

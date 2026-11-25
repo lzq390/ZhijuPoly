@@ -27,8 +27,10 @@ REQUEST_BINDING = (
     "user_id",
     "session_id",
     "workspace_user_id",
+    "workspace_generation_fingerprint",
     "workspace_session",
     "turn_id",
+    "turn_expires_ms",
     "request_id",
 )
 
@@ -68,11 +70,13 @@ class ModelLedger:
             conn.execute("SELECT pg_advisory_xact_lock(hashtext('dev-m1-open-science-model-budget'))")
             self.expire(conn)
             existing = conn.execute(
-                f"SELECT state,reason,request_tag FROM {TABLE} WHERE request_id=%s", (actor["request_id"],)
+                f"SELECT state,reason,request_tag,workspace_generation_fingerprint FROM {TABLE} WHERE request_id=%s",
+                (actor["request_id"],),
             ).fetchone()
             if existing and not (
                 existing["state"] == "released"
-                and existing["reason"] == "worker_busy"
+                and existing["reason"] in ("worker_busy", "worker_not_connected")
+                and existing["workspace_generation_fingerprint"] == actor["workspace_generation_fingerprint"]
                 and request_tag
                 and existing["request_tag"]
                 and hmac.compare_digest(request_tag, existing["request_tag"])
@@ -96,7 +100,7 @@ class ModelLedger:
                     429, "Model token budget or concurrent stream limit reached", headers={"Retry-After": "5"}
                 )
             if existing:
-                # The worker definitely refused this particular request before starting it.
+                # This particular request was never started by the worker.
                 # Re-reserve against today's capacity and restart the six-minute lease clock.
                 conn.execute(
                     f"""UPDATE {TABLE} SET state='reserved',reason=NULL,settled_at=NULL,
@@ -108,8 +112,9 @@ class ModelLedger:
             conn.execute(
                 f"""
                 INSERT INTO {TABLE}(request_id,environment,owner_id,login_id,workspace_user_id,
-                           workspace_session,turn_id,model,protocol,reserved_input,max_output,request_tag)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                           workspace_generation_fingerprint,workspace_session,turn_id,model,protocol,
+                           reserved_input,max_output,request_tag)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
                 (
                     actor["request_id"],
@@ -117,6 +122,7 @@ class ModelLedger:
                     owner,
                     actor["session_id"],
                     actor["workspace_user_id"],
+                    actor["workspace_generation_fingerprint"],
                     actor["workspace_session"],
                     actor["turn_id"],
                     MODEL,
@@ -192,9 +198,9 @@ class ModelLedger:
             totals = self.totals(conn, owner)
             rows = conn.execute(
                 f"""
-                SELECT request_id,environment,owner_id,login_id,workspace_user_id,workspace_session,turn_id,
-                       model,protocol,state,input_tokens,output_tokens,estimated_tokens,reserved_tokens,
-                       reason,budget_date,created_at,settled_at
+                SELECT request_id,environment,owner_id,login_id,workspace_user_id,workspace_generation_fingerprint,
+                       workspace_session,turn_id,model,protocol,state,input_tokens,output_tokens,estimated_tokens,
+                       reserved_tokens,reason,budget_date,created_at,settled_at
                   FROM {TABLE} WHERE owner_id=%s ORDER BY created_at DESC LIMIT 200
             """,
                 (owner,),
@@ -450,6 +456,8 @@ def install_model(app, principal, *, request_key, transport=None, ledger=None):
 
     async def invoke(request, actor, protocol):
         scope(actor, "model.invoke")
+        if actor["turn_expires_ms"] <= time.time_ns() // 1_000_000:
+            raise HTTPException(401, "Workspace model turn expired")
         if request.query_params:
             raise HTTPException(422, "Unsupported model query parameters")
         raw = await request.body()
@@ -477,7 +485,7 @@ def install_model(app, principal, *, request_key, transport=None, ledger=None):
             inputs = tokenized.json()["input_tokens"]
             if type(inputs) is not int or not 0 < inputs <= 16384:
                 raise ValueError("Invalid token count")
-            # Bind a busy retry to its verified actor, turn, and exact inference input
+            # Bind an unstarted retry to its verified actor, generation, turn, and exact inference input
             # without keeping a copy of the prompt or a publicly guessable hash.
             binding = [actor[field] for field in REQUEST_BINDING]
             message = json.dumps(
@@ -500,6 +508,7 @@ def install_model(app, principal, *, request_key, transport=None, ledger=None):
             if (
                 any(current[field] != actor[field] for field in REQUEST_BINDING)
                 or await request.is_disconnected()
+                or actor["turn_expires_ms"] <= time.time_ns() // 1_000_000
             ):
                 raise HTTPException(401, "Workspace model request expired")
         except BaseException:
@@ -511,21 +520,30 @@ def install_model(app, principal, *, request_key, transport=None, ledger=None):
             raise
 
         try:
-            upstream = await client.send(
-                client.build_request("POST", "/generate", json={**work, "request_id": str(request_id)}),
-                stream=True,
-            )
+            dispatch = {**work, "request_id": str(request_id), "turn_expires_ms": actor["turn_expires_ms"]}
+            upstream = await client.send(client.build_request("POST", "/generate", json=dispatch), stream=True)
             upstream.raise_for_status()
         except BaseException as exc:
+            status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            code = 503
             with anyio.CancelScope(shield=True):
-                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
-                    await anyio.to_thread.run_sync(ledger.release, request_id)
-                else:
-                    await anyio.to_thread.run_sync(ledger.settle, request_id, None, "upstream_unavailable")
-                await client.aclose()
+                try:
+                    if status == 429:
+                        code = 429
+                        await anyio.to_thread.run_sync(ledger.release, request_id)
+                    elif status == 412:
+                        code = 401
+                        await anyio.to_thread.run_sync(ledger.release, request_id, "turn_expired")
+                    elif isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
+                        await anyio.to_thread.run_sync(ledger.release, request_id, "worker_not_connected")
+                    else:
+                        await anyio.to_thread.run_sync(ledger.settle, request_id, None, "upstream_unavailable")
+                finally:
+                    await client.aclose()
             if not isinstance(exc, Exception):
                 raise
-            code = 429 if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429 else 503
+            if code == 401:
+                raise HTTPException(401, "Workspace model turn expired") from None
             raise HTTPException(code, "Local model worker unavailable") from None
 
         actual = None

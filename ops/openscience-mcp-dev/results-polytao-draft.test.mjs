@@ -337,7 +337,10 @@ test("conversation controller keeps one live draft across turns and recovers it 
     const requests = []
     await page.route("**/openscience-api/**", async route => {
       const request = route.request(), url = new URL(request.url())
-      if (url.pathname.endsWith("/message")) return route.fulfill({ json: session })
+      if (url.pathname.endsWith("/message")) {
+        const history = url.searchParams.get("limit") === "2" ? messages([], "recent-user") : session
+        return route.fulfill({ json: history })
+      }
       assert.equal(url.pathname, "/openscience-api/nexpoly/polytao/draft")
       assert.equal(request.method(), "POST")
       assert.equal(request.headers().authorization, undefined)
@@ -367,6 +370,12 @@ test("conversation controller keeps one live draft across turns and recovers it 
     assert.equal(await panel.count(), 1)
     assert.equal(requests.length, 1)
     await page.locator('[data-descriptor-name="MolWt"]').fill("77")
+    await page.evaluate(() => fetch("/openscience-api/session/ses_current/message?limit=2", {
+      headers: { "x-openscience-directory": "/openscience/files/general" },
+    }).then(response => response.json()))
+    await page.waitForTimeout(200)
+    assert.equal(await panel.count(), 1, "a partial tail cannot discard an open historical form")
+    assert.equal(await page.locator('[data-descriptor-name="MolWt"]').inputValue(), "77")
     saved = draft({ revision: 2, descriptors: { MolWt: 88 }, updated_at: "2026-11-16T01:02:00Z" })
     session = [...session, ...messages([tool(saved, "get_polytao_draft", { draft_id: DRAFT_ID })], "user-two")]
     await page.evaluate(async () => {
