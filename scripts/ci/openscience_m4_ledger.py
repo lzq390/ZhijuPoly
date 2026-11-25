@@ -1,6 +1,7 @@
 """Match the two browser uploads, citations and actual model calls to their private dev PostgreSQL rows."""
 
 import json
+import hashlib
 from contextlib import closing
 from pathlib import Path
 import sqlite3
@@ -16,14 +17,14 @@ TABLES = {
 }
 
 
-def snapshot(pg):
+def snapshot(pg, database="nexpoly_m2_dev"):
     # Count the entire dedicated catalog, including service accounts and owners outside this test.
     counts = " UNION ALL ".join(
         f"SELECT '{name}' kind, owner_id::text owner, count(*) n FROM {table} GROUP BY owner_id"
         for name, table in TABLES.items()
     )
     statement = f"SELECT coalesce(jsonb_agg(to_jsonb(s)),'[]') FROM ({counts}) s;"
-    (rows,) = query(pg, statement, {})
+    (rows,) = query(pg, statement, {}, database)
     return {name: {r["owner"]: r["n"] for r in rows if r["kind"] == name} for name in TABLES}
 
 
@@ -67,12 +68,12 @@ def match_provider_receipts(state_dir, rows):
     return len(rows)
 
 
-def reconcile(spec, pg, after):
+def reconcile(spec, pg, after, owners=OWNERS, database="nexpoly_m2_dev"):
     users, baseline = spec["users"], spec["baseline"]
     require(
-        baseline["deployment"] == spec["deployment"] and set(users) == set(OWNERS), "Wrong dev deployment"
+        baseline["deployment"] == spec["deployment"] and set(users) == set(owners), "Wrong candidate deployment"
     )
-    docs, rls = query(pg, KNOWLEDGE, {"filename": spec["filename"]})
+    docs, rls = query(pg, KNOWLEDGE, {"filename": spec["filename"]}, database)
     require(
         rls == ["chunks", "collections", "documents"], "Knowledge RLS missing on one or more private tables"
     )
@@ -80,15 +81,15 @@ def reconcile(spec, pg, after):
     report = {"forced_rls": rls, "users": {}, "other_account_deltas": {}}
     for name in TABLES:
         before = baseline["counts"][name]
-        others = (set(before) | set(after[name])) - set(OWNERS.values())
+        others = (set(before) | set(after[name])) - set(owners.values())
         require(
             all(after[name].get(uid, 0) == before.get(uid, 0) for uid in others),
             "Unrelated owner received " + name,
         )
         report["other_account_deltas"][name] = 0
-    for tag, uid in OWNERS.items():
+    for tag, uid in owners.items():
         user = users[tag]
-        require(user["id"] == uid, "Test login is not the retained dev-m1 account")
+        require(user["id"] == uid, "Web login differs from the enrolled candidate account")
         (doc,) = [r for r in docs if r["doc"] == user["document_id"]]
         require(
             doc
@@ -105,7 +106,7 @@ def reconcile(spec, pg, after):
             },
             "Stored owner, original bytes or cited passage differs from browser evidence",
         )
-        (model_rows,) = query(pg, MODEL, {"workspace_session": user["workspace_session"]})
+        (model_rows,) = query(pg, MODEL, {"workspace_session": user["workspace_session"]}, database)
         visible = {row["request_id"]: row for row in user["requests"]}
         require(
             len(model_rows) == len(visible) == len(user["requests"]) > 0,
@@ -130,7 +131,7 @@ def reconcile(spec, pg, after):
         }
         require(counts == expected_counts, "Unexpected records during the browser test: " + str(counts))
         report["users"][tag] = {
-            "owner": "test-user-" + tag,
+            "owner": uid if database == "nexpoly_deploy_m6" else "test-user-" + tag,
             "new_rows": counts,
             "upload_and_citation_match": True,
             "original_workspace_and_login": True,
@@ -144,9 +145,19 @@ def reconcile(spec, pg, after):
 def main():
     spec = json.load(sys.stdin)
     pg = pg_target(spec)
-    counts = snapshot(pg)
+    root = Path(spec["state_dir"])
+    stack = json.loads((root / "running.json").read_bytes())
+    require(stack["pg"] == pg and stack["deployment"] == spec["deployment"], "Unexpected authority database")
+    database, owners = "nexpoly_m2_dev", OWNERS
+    if stack.get("environment") == "deploy-m6":
+        pinned = json.loads((root / "candidate.json").read_bytes())
+        digest = hashlib.sha256(json.dumps(stack["members"], sort_keys=True).encode()).hexdigest()
+        require(pinned["environment"] == "deploy-m6" and digest == pinned["members_sha256"], "Candidate enrollment changed")
+        database = "nexpoly_deploy_m6"
+        owners = {tag: member["user_id"] for tag, member in zip("ab", stack["members"], strict=True)}
+    counts = snapshot(pg, database)
     result = (
-        reconcile(spec, pg, counts)
+        reconcile(spec, pg, counts, owners, database)
         if "users" in spec
         else {"deployment": spec["deployment"], "counts": counts}
     )

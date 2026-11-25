@@ -29,8 +29,11 @@ ROOT = Path(__file__).resolve().parents[1]
 OPS = ROOT / "ops/openscience-per-user-dev"
 DEFAULT = Path.home() / ".local/state"
 REGISTRY = DEFAULT / "nexpoly-openscience-m1-dev"
-PROFILES = json.loads((ROOT / "backend/app/auth/openscience_candidates.json").read_bytes())
+sys.path.insert(0, str(ROOT / "backend"))
+from app.auth.openscience_candidate import PROFILES, candidate_database, candidate_members
+
 SECOND_ROOT = DEFAULT / "nexpoly-m6-ac22"
+DEPLOY_ROOT = DEFAULT / "nexpoly-m6-deploy-01"
 API_IMAGE = "sha256:886fc49f0ad7a4a4922e9f820886a9b0f7e76829f6dfbc84a41b02fbd9a68961"
 PG_IMAGE = "sha256:eb4759788a2182f08257135e61a34f2cfc3c2914079f3465d64ee62350f4d081"
 UI_IMAGE = "sha256:fea8a3c294bb324a98041f8f8354448e6ca5c6502dedc565c4b884994c567bb0"
@@ -167,7 +170,7 @@ def recycle_workspaces(targets, attempt, grace_seconds=20):
         time.sleep(min(1, remaining))
 
 
-def start_adapters(stack, state, transport, api_socket, cred, deploy, verify):
+def start_adapters(stack, state, transport, api_socket, cred, deploy, verify, *, member_snapshot=None):
     endpoints, evidence = {}, {}
     for name, image in ADAPTER_IMAGES.items():
         ipc = transport / ("m3-" + name)
@@ -223,6 +226,10 @@ def start_adapters(stack, state, transport, api_socket, cred, deploy, verify):
             "PYTHONPATH=/app/backend:/app",
             "-e",
             "PYTHONDONTWRITEBYTECODE=1",
+            *([*mount(member_snapshot, "/candidate-members.json"),
+               "-e", "OPENSCIENCE_M2_ENVIRONMENT=deploy-m6",
+               "-e", "OPENSCIENCE_CANDIDATE_MEMBERS_FILE=/candidate-members.json"]
+              if member_snapshot else []),
             *verification,
             "--entrypoint",
             "python",
@@ -247,11 +254,10 @@ def start_adapters(stack, state, transport, api_socket, cred, deploy, verify):
     return endpoints, evidence
 
 
-def require_quota_workspaces(rows):
-    if len(rows) != 2 or {(r.get("environment"), r.get("user_id")) for r in rows} != {
-        ("dev-m1", "test-user-a"), ("dev-m1", "test-user-b")
-    }:
-        raise RuntimeError("Expected exactly the two retained dev-m1 quota workspaces")
+def require_quota_workspaces(rows, environment="dev-m1", users=("test-user-a", "test-user-b")):
+    expected = {(environment, user) for user in users}
+    if len(rows) != 2 or len(expected) != 2 or {(r.get("environment"), r.get("user_id")) for r in rows} != expected:
+        raise RuntimeError("Expected the selected candidate's two registered quota workspaces")
     for row in rows:
         # list/status reads the owner, actual filesystem and enforced kernel
         # policy. A requested tier or an unverified Docker volume label cannot
@@ -267,16 +273,27 @@ def require_quota_workspaces(rows):
 def run_stack(args, stack):
     environment = args.environment
     profile = PROFILES[environment]
+    database = candidate_database(environment)
+    members = candidate_members(environment, args.candidate_members)
+    users = {m["workspace_user_id"] for m in members}
+    node = shutil.which("node")
+    if environment == "deploy-m6":
+        version = tuple(map(int, run(node, "-p", "process.versions.node").split("."))) if node else ()
+        if not ((20, 19, 0) <= version < (21, 0, 0) or version >= (22, 12, 0)):
+            raise ValueError("Vite requires Node 20.19+ on 20.x or Node 22.12+ in the candidate launcher PATH")
     parent, agent = profile["parent"], profile["agent"]
     parent_url, agent_url = urlsplit(parent), urlsplit(agent)
     frontend_port, authority_port = profile["frontend_port"], profile["authority_port"]
     authority_url = f"http://127.0.0.1:{authority_port}"
     args.registry = args.registry.resolve(strict=True)
     local_engine()
-    if environment != "dev-m1" and (args.m5_quota_files or args.m3_gateway_image or args.m4 or args.verify):
+    if environment == "dev-m6" and (args.m5_quota_files or args.m3_gateway_image or args.m4 or args.verify):
         raise ValueError("The second AC-22 site supports the independent workspace browser profile")
+    if environment == "deploy-m6" and (args.verify_retries or
+            (args.verify and (not (args.m3_gateway_image or args.m4) or args.m3_adapters))):
+        raise ValueError("The deployment candidate supports the scoped gateway and model browser checks")
     registry = json.loads((args.registry / "registry.json").read_bytes())
-    required = {f"{environment}/test-user-{role}" for role in "ab"}
+    required = {f"{environment}/{user}" for user in users}
     if not required.issubset(registry["workspaces"]) or (environment != "dev-m1" and set(registry["workspaces"]) != required):
         raise ValueError("Both workspace bindings must belong to the selected candidate environment")
     if args.m3_adapters and not args.m3_gateway_image:
@@ -298,6 +315,10 @@ def run_stack(args, stack):
     expected_identity = {"environment": environment}
     if environment != "dev-m1":
         expected_identity["registry_deployment"] = UUID(registry["deployment"]).hex
+    if environment == "deploy-m6":
+        expected_identity["members_sha256"] = hashlib.sha256(json.dumps(members, sort_keys=True).encode()).hexdigest()
+        before = json.loads(run(sys.executable, str(MANAGER), "--state-dir", str(args.registry), "list"))["workspaces"]
+        require_quota_workspaces(before, environment, users)
     if identity_file.exists():
         if json.loads(identity_file.read_bytes()) != expected_identity:
             raise ValueError("This state directory belongs to a different candidate")
@@ -404,7 +425,7 @@ def run_stack(args, stack):
         "-e",
         "POSTGRES_USER=m2_admin",
         "-e",
-        "POSTGRES_DB=nexpoly_m2_dev",
+        "POSTGRES_DB=" + database,
         "-e",
         "POSTGRES_PASSWORD_FILE=/admin-pw",
         "-e",
@@ -443,13 +464,13 @@ def run_stack(args, stack):
         "-d",
         "postgres",
         "-c",
-        "SELECT 1 FROM pg_database WHERE datname='nexpoly_m2_dev'",
+        f"SELECT 1 FROM pg_database WHERE datname='{database}'",
         env=pg_env,
     ):
-        subprocess.run(["createdb", "nexpoly_m2_dev"], env=pg_env, check=True)
+        subprocess.run(["createdb", database], env=pg_env, check=True)
 
     def dsn(role):
-        return "host=/m2pg dbname=nexpoly_m2_dev user=m2_" + role + " password=" + secret(cred / role)
+        return f"host=/m2pg dbname={database} user=m2_" + role + " password=" + secret(cred / role)
 
     # The pilot has two distinct owners. Simultaneous cold handoffs can queue
     # behind each other while the manager serializes capacity reservations.
@@ -488,6 +509,12 @@ def run_stack(args, stack):
     ]
 
     m3_api, manager_env, tool_config = [], dict(os.environ), {}
+    member_snapshot = None
+    if environment == "deploy-m6":
+        member_snapshot = transport / "members.json"
+        file(member_snapshot, json.dumps({"environment": environment, "members": members}))
+        common += mount(member_snapshot, "/candidate-members.json")
+        env["OPENSCIENCE_CANDIDATE_MEMBERS_FILE"] = "/candidate-members.json"
     if args.m5_quota_files:
         manager_env.pop("OPENSCIENCE_M3_OVERLAY", None)
     retry_evidence = None
@@ -727,7 +754,8 @@ def run_stack(args, stack):
         wait(lambda: (peer_dir / "gateway.sock").is_socket(), "isolated capability gateway")
         if args.m3_adapters:
             tool_config["adapters"], adapter_evidence = start_adapters(
-                stack, state, transport, api_socket, cred, deploy, args.verify or args.verify_retries
+                stack, state, transport, api_socket, cred, deploy, args.verify or args.verify_retries,
+                member_snapshot=member_snapshot,
             )
         if args.verify_retries or (args.verify and not args.m3_adapters and not args.m4):
             retry_evidence = transport / "retry.json"
@@ -737,7 +765,7 @@ def run_stack(args, stack):
                 logs,
                 "m3-retry",
                 [
-                    shutil.which("node"),
+                    node,
                     str(ROOT / "scripts/ci/openscience_m3_retry.mjs"),
                     "--listen",
                     str(replay),
@@ -771,11 +799,11 @@ def run_stack(args, stack):
         "workspaces"
     ]
     if args.m5_quota_files:
-        require_quota_workspaces(before)
+        require_quota_workspaces(before, environment, users)
     retained = {
         b["user_id"]: b
         for b in before
-        if b["environment"] == environment and b["user_id"] in ("test-user-a", "test-user-b")
+        if b["environment"] == environment and b["user_id"] in users
     }
     if len(retained) != 2:
         raise RuntimeError(f"Both {environment} workspace bindings are required")
@@ -847,7 +875,6 @@ def run_stack(args, stack):
         config["m3"] = tool_config
     config_file = transport / "router.json"
     file(config_file, json.dumps(config))
-    node = shutil.which("node")
     launch(stack, logs, "router", [node, str(OPS / "m2-router.mjs"), "--config", str(config_file)])
     frontend = ROOT / "frontend"
     launch(
@@ -938,6 +965,8 @@ http {{
         "user_volumes": {k: v["volume"] for k, v in retained.items()},
         "startup_timeout_seconds": startup_seconds,
     }
+    if environment == "deploy-m6":
+        ready["members"] = members
     if args.m5_quota_files:
         ready["quota_files"] = True
     if args.m6_operator_id is not None:
@@ -1010,6 +1039,7 @@ def main():
     parser.add_argument("--environment", choices=PROFILES, help="Use the named candidate and its local-only browser profile")
     parser.add_argument("--state-dir", type=Path)
     parser.add_argument("--registry", type=Path)
+    parser.add_argument("--candidate-members", type=Path, help="Trusted two-account enrollment file for deploy-m6")
     parser.add_argument("--m5-quota-files", action="store_true",
                         help="Enable quota-aware files on verified dev-m1 NFS volumes, with the selected M3/M4 services")
     parser.add_argument("--m6-operator-id", type=UUID,
@@ -1049,9 +1079,17 @@ def main():
     args = parser.parse_args()
     args.candidate_browser = args.environment is not None or args.m6_operator_id is not None
     args.environment = args.environment or "dev-m1"
-    second = args.environment != "dev-m1"
-    args.state_dir = args.state_dir or (SECOND_ROOT / "site" if second else DEFAULT / "nexpoly-openscience-m2-dev")
-    args.registry = args.registry or (SECOND_ROOT / "ws" if second else REGISTRY)
+    if args.environment == "deploy-m6":
+        args.candidate_members = args.candidate_members or DEPLOY_ROOT / "members.json"
+        args.state_dir = args.state_dir or DEPLOY_ROOT / "site"
+        args.registry = args.registry or DEPLOY_ROOT / "ws"
+        args.m5_quota_files = True
+    else:
+        if args.candidate_members:
+            parser.error("--candidate-members applies only to deploy-m6")
+        second = args.environment == "dev-m6"
+        args.state_dir = args.state_dir or (SECOND_ROOT / "site" if second else DEFAULT / "nexpoly-openscience-m2-dev")
+        args.registry = args.registry or (SECOND_ROOT / "ws" if second else REGISTRY)
     os.umask(0o077)
 
     def stop(*_):

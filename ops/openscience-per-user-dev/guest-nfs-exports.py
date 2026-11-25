@@ -19,6 +19,7 @@ SLOTS = ("src-a", "src-b", "dst-a", "dst-b")
 # The first dev VM enumerated metadata() in insertion order. Its four export
 # IDs match the subsequent checked-in driver and the exact legacy config below.
 LEGACY_DRIVERS = {
+    "744329b9c4cf2d9869c3eac09ece7ddad9953341862874b8f4eb0e9c74a9a7fb",
     "821bebc34f3746533fab68454ec99236af4a2af7833585234b0880babbcaeade",
     "33be08374d79a495c90efdf8cccb9db9c208e5ca08f5336700ff348fa12ad9cf",
 }
@@ -37,9 +38,11 @@ def metadata():
         disk = MOUNTS / slot
         observed = quota.read(disk, owner)
         serial = ("m5-" if stage == "src" else "m5-restore-") + role
+        # Retained dev-m1 guests have the original read-only quota module on their input ISO.
+        label = "m5quota-" + slot if owner["environment"] == "dev-m1" else quota.volume_label(owner, stage)
         if (
             observed["filesystem_uuid"] != pins[serial]
-            or observed["volume_label"] != "m5quota-" + slot
+            or observed["volume_label"] != label
         ):
             raise ValueError("Expected the pinned dedicated ext4 mount for " + slot)
         rows[slot] = {

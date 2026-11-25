@@ -1,0 +1,38 @@
+{
+  "environment": "deploy-m6",
+  "workspace_image": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+  "model_image": "sha256:886fc49f0ad7a4a4922e9f820886a9b0f7e76829f6dfbc84a41b02fbd9a68961",
+  "model_manifest_sha256": "2cdb0c3afafb408c85ae429636bfb4e19f2f0342fbd8d6fa0491b6db92f8d04a",
+  "workspace_bindings": {
+    "ba404642-b217-433b-b9fd-197a19052ebd": {
+      "workspace_id": "9fab349023044d6cad03bfa7e6da1d1a",
+      "uid": 21920475,
+      "volume": "nexpoly-m5-c4e5734f0b8d-src-a"
+    },
+    "9a523765-6bee-4dd3-af85-c2da61cfc778": {
+      "workspace_id": "88dbb1094ce543779c99a061bb7b9cf8",
+      "uid": 11718917,
+      "volume": "nexpoly-m5-c4e5734f0b8d-src-b"
+    }
+  },
+  "browser": "153.0.8010.12",
+  "start": "2026-11-25T03:08:14.127Z",
+  "status": "passed",
+  "users": {
+    "a": {
+      "project_session_matches": true,
+      "project_file_matches": true,
+      "original_reply_matches": true,
+      "private_document_matches": true
+    },
+    "b": {
+      "project_session_matches": true,
+      "project_file_matches": true,
+      "original_reply_matches": true,
+      "private_document_matches": true
+    }
+  },
+  "site_deployment": "3dd2a8ca68b74095a47ff958657f4c58",
+  "prior_report_sha256": "5c96c0e14d2ad547f347765b5b5746897c52c83d29370bc6705efd419bbdfd18",
+  "end": "2026-11-25T03:09:05.476Z"
+}

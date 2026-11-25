@@ -192,7 +192,7 @@ MCP_TOOLS = [
 ]
 
 
-def install_knowledge(app, principal):
+def install_knowledge(app, principal, *, environment="dev-m1"):
     settings = app.state.auth.settings
     router = APIRouter(prefix=PREFIX)
 
@@ -203,7 +203,7 @@ def install_knowledge(app, principal):
                 yield conn
 
     def web(grant=Depends(principal)):
-        if grant["scope"] != "knowledge.web" or grant["environment"] != "dev-m1":
+        if grant["scope"] != "knowledge.web" or grant["environment"] != environment:
             raise refused(403, "wrong_knowledge_scope")
         return grant
 
@@ -326,7 +326,7 @@ def install_knowledge(app, principal):
 
     @router.post("/mcp")
     def mcp(call: dict, grant=Depends(principal)):
-        if grant["scope"] != "knowledge.mcp" or grant["environment"] != "dev-m1":
+        if grant["scope"] != "knowledge.mcp" or grant["environment"] != environment:
             raise refused(403, "wrong_knowledge_scope")
         method, call_id = call.get("method"), call.get("id")
         envelope = {"jsonrpc": "2.0", "id": call_id}
@@ -351,7 +351,7 @@ def install_knowledge(app, principal):
             result = {
                 "protocolVersion": version if version in versions else versions[-1],
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "dev-m1-private-knowledge", "version": "1"},
+                "serverInfo": {"name": f"{environment}-private-knowledge", "version": "1"},
             }
         elif method == "ping":
             result = {}

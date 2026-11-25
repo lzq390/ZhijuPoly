@@ -33,6 +33,15 @@ test("the second candidate rejects a mixed authority, parent or workspace profil
   await assert.rejects(startRouter({...site,environment:"unknown"}), /Invalid isolated router environment/)
 })
 
+test("the deployment router requires its pinned authority and the quota file profile", async () => {
+  const site = {environment:"deploy-m6",listen_port:18861,public_origin:"https://agent.deploy-m6.test:18861",
+    parent_origins:["https://app.deploy-m6.test:18860"],authority_url:"http://127.0.0.1:18862",quota_files:true}
+  for (const change of [{quota_files:false}, {authority_url:"http://127.0.0.1:18762"},
+    {parent_origins:["https://app.m6.test:18780"]}]) {
+    await assert.rejects(startRouter({...site,...change}), /Wrong origins, services or authority/)
+  }
+})
+
 test("scoped reads, late handoffs, two logins and live revocation", {timeout:20000}, async t => {
   const root = await mkdtemp(join(os.tmpdir(),"np-m2-router-"))
   t.after(() => rm(root,{recursive:true,force:true}))

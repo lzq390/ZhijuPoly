@@ -8,6 +8,7 @@ import tempfile
 import psycopg
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
+from app.auth.openscience_candidate import authority_environment, candidate_database, candidate_members, validate_candidate_dsn
 from app.auth.service import hash_password
 
 from app.auth.cutover import apply_identity_cutover
@@ -74,20 +75,34 @@ def workspace_extensions(dsn):
                 "0009_m4_model_generation.sql",
             ),
         )
+    if authority_environment() == "deploy-m6":
+        tables = [("openscience_m2.environments", "0010_deploy_candidate.sql")]
+        if os.environ.get("OPENSCIENCE_M4_ENABLED") == "1":
+            tables.append(("openscience_m4.model_requests", "0011_deploy_model.sql"))
+        extensions += tuple(
+            (f"SELECT oid FROM pg_constraint WHERE conname='deploy_m6_environment' "
+             f"AND conrelid='{table}'::regclass", name)
+            for table, name in tables
+        )
     with psycopg.connect(dsn, autocommit=True) as conn:
         # Each extension script owns its transaction. This session lock spans them
         # and is automatically released if setup is interrupted.
         conn.execute("SELECT pg_advisory_lock(hashtext('openscience_m2_development_extensions'))")
         for check, name in extensions:
-            if conn.execute(check).fetchone()[0] is None:
+            found = conn.execute(check).fetchone()
+            if not found or found[0] is None:
                 conn.execute((directory / name).read_text())
 
 
 def initialize():
     dsn = os.environ["OPENSCIENCE_M2_ADMIN_DSN"]
+    environment = authority_environment()
+    database = candidate_database(environment)
+    first_member = candidate_members(environment)[0]
+    validate_candidate_dsn(environment, dsn, "admin")
     target = conninfo_to_dict(dsn)
     if (target.get("dbname"), target.get("user"), target.get("host")) != (
-        "nexpoly_m2_dev",
+        database,
         "m2_admin",
         "/m2pg",
     ):
@@ -104,13 +119,13 @@ def initialize():
     if fresh:
         initial_schema(dsn)
     with psycopg.connect(dsn) as conn:
-        # Use the retained development A identity for the empty cluster's cutover.
-        owner = "10000000-0000-4000-8000-000000000001"
+        # Fresh identity cutover needs an owner even when the database has no legacy rows.
+        owner = first_member["user_id"]
         password = Path(os.environ["OPENSCIENCE_M2_PASSWORD_A_FILE"]).read_text().strip()
         conn.execute(
             """INSERT INTO auth.users (user_id,username,password_hash,must_change_password)
-                        VALUES (%s,'test-user-a',%s,false) ON CONFLICT DO NOTHING""",
-            (owner, hash_password(password)),
+                        VALUES (%s,%s,%s,false) ON CONFLICT DO NOTHING""",
+            (owner, first_member["username"], hash_password(password)),
         )
         for kind in ("api", "auth", "service"):
             name = "m2_" + kind
@@ -134,7 +149,7 @@ def initialize():
         apply_identity_cutover(dsn, owner)
     if latest < "0019":
         apply_service_auth_least_privilege(
-            dsn, service_roles=["m2_service"], expected_database="nexpoly_m2_dev"
+            dsn, service_roles=["m2_service"], expected_database=database
         )
     # Install the canonical, checksum-verified private expansions on this synthetic cluster.
     with psycopg.connect(dsn) as conn:

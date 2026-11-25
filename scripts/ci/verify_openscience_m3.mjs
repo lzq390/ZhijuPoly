@@ -5,7 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
-import { developmentBrowser, retainedBindings } from "./openscience_dev_browser.mjs";
+import { developmentBrowser, enrolledMembers, retainedBindings } from "./openscience_dev_browser.mjs";
 
 function option(name) {
   const i = process.argv.indexOf(name);
@@ -20,10 +20,11 @@ const stack = JSON.parse(
 assert.match(stack.gateway_image, /^sha256:[a-f0-9]{64}$/);
 const registry = JSON.parse(await readFile(resolve(stack.registry, "registry.json"), "utf8"));
 const bindings = retainedBindings(stack, registry);
+const members = enrolledMembers(stack);
 const { browser, device, app, login, logout, workbench } =
   await developmentBrowser(state, stack);
 const report = {
-  environment: "dev-m1",
+  environment: stack.environment || "dev-m1",
   workspace_image: registry.image,
   workspace_bindings: bindings,
   start: new Date().toISOString(),
@@ -46,6 +47,8 @@ function ledger(extra = {}) {
       input: JSON.stringify({
         pg: stack.pg,
         deployment: stack.deployment,
+        environment: report.environment,
+        members,
         ...extra,
       }),
       encoding: "utf8",
@@ -55,8 +58,10 @@ function ledger(extra = {}) {
 async function client(tag) {
   const c = await device(),
     p = await app(c),
-    name = "test-user-" + tag;
-  const identity = await login(p, name);
+    member = members[tag === "a" ? 0 : 1],
+    name = member.username;
+  const identity = await login(p, name, tag);
+  assert.equal(identity.user_id, member.user_id);
   profiles.push({ p, name });
   const f = await workbench(p);
   return { f, p, c, tag, ...identity };
@@ -366,15 +371,17 @@ try {
       observed: u.observed,
       downloads: u.downloads,
     };
-  const retried = JSON.parse(await readFile(stack.retry_evidence, "utf8"));
-  assert.ok(!retried.failed);
-  assert.deepEqual(retried.job_ids.slice().sort(), [a.job, b.job].sort());
-  assert.equal(retried.retries, 2);
-  assert.deepEqual(retried.sync_retries, {
-    predict_polymer_properties: 2,
-    polymerize_monomers: 2,
-  });
-  report.replayed_writes = retried;
+  if (stack.retry_evidence || report.environment === "dev-m1") {
+    const retried = JSON.parse(await readFile(stack.retry_evidence, "utf8"));
+    assert.ok(!retried.failed);
+    assert.deepEqual(retried.job_ids.slice().sort(), [a.job, b.job].sort());
+    assert.equal(retried.retries, 2);
+    assert.deepEqual(retried.sync_retries, {
+      predict_polymer_properties: 2,
+      polymerize_monomers: 2,
+    });
+    report.replayed_writes = retried;
+  }
   report.ledger = ledger({ baseline, users });
   report.distinct_browser_results = {
     predicted_tg: true,

@@ -1,4 +1,4 @@
-"""Bind private M4 service requests to the original dev-m1 browser handoff and workspace generation."""
+"""Bind private M4 service requests to the selected candidate's browser handoff and workspace generation."""
 
 import hashlib
 import hmac
@@ -13,7 +13,7 @@ from fastapi import HTTPException, Request
 PREFIX = "/internal/openscience/m4/"
 
 
-def install(app, auth, agent_origin, parent_origin, inspect_handoff):
+def install(app, auth, agent_origin, parent_origin, inspect_handoff, *, environment, workspaces):
     from app.auth.openscience_m4_knowledge import install_knowledge
     from app.auth.openscience_m4_model import install_model
 
@@ -46,9 +46,9 @@ def install(app, auth, agent_origin, parent_origin, inspect_handoff):
             raise HTTPException(401, "Active workspace login required")
         with auth.connection() as conn:
             row = conn.execute(
-                """SELECT * FROM openscience_m2.handoffs WHERE agent_hash=%s AND environment='dev-m1'
+                """SELECT * FROM openscience_m2.handoffs WHERE agent_hash=%s AND environment=%s
                    AND agent_origin=%s AND parent_origin=%s AND redeemed_at IS NOT NULL""",
-                (hashlib.sha256(token.encode()).digest(), agent_origin, parent_origin),
+                (hashlib.sha256(token.encode()).digest(), environment, agent_origin, parent_origin),
             ).fetchone()
             grant = inspect_handoff(conn, row)
             active = conn.execute(
@@ -56,7 +56,7 @@ def install(app, auth, agent_origin, parent_origin, inspect_handoff):
                 (row["handoff_id"],),
             ).fetchone()
         owner = grant["workspace_user_id"]
-        if not active or grant["valid_until"] <= time.time() or owner not in ("test-user-a", "test-user-b"):
+        if not active or grant["valid_until"] <= time.time() or owner not in workspaces:
             raise HTTPException(401, "Workspace login expired")
         try:
             current = (generations / owner).read_text().strip()
@@ -97,5 +97,5 @@ def install(app, auth, agent_origin, parent_origin, inspect_handoff):
         return {**grant, "scope": scope}
 
     app.state.openscience_m4 = True
-    install_knowledge(app, principal)
-    install_model(app, principal, request_key=keys["model"])
+    install_knowledge(app, principal, environment=environment)
+    install_model(app, principal, request_key=keys["model"], environment=environment)

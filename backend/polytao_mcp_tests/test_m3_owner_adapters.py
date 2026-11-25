@@ -12,14 +12,34 @@ import httpx2 as httpx
 import pytest
 
 from app.auth import openscience_m3_adapters as adapters
+from app.auth.openscience_candidate import candidate_members
 from app.polytao_mcp_contract import DESCRIPTOR_DESCRIPTIONS
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("kind", ["polytao", "retrosynthesis"])
-@pytest.mark.parametrize("receipt_fault", ["response_lost", "lease_expired", "legacy_expiry"])
-async def test_scoped_confirm_and_recover_after_restart(tmp_path, monkeypatch, kind, receipt_fault):
-    owner_a, owner_b = sorted(adapters.OWNERS)
+@pytest.mark.parametrize(
+    "environment,receipt_fault",
+    [
+        ("dev-m1", "response_lost"),
+        ("dev-m1", "lease_expired"),
+        ("dev-m1", "legacy_expiry"),
+        ("deploy-m6", "response_lost"),
+    ],
+)
+async def test_scoped_confirm_and_recover_after_restart(
+    tmp_path, monkeypatch, kind, environment, receipt_fault
+):
+    monkeypatch.setenv("OPENSCIENCE_M2_ENVIRONMENT", environment)
+    if environment == "deploy-m6":
+        roster = [
+            {"user_id": str(uuid4()), "username": "member-" + k, "workspace_user_id": "workspace-" + k}
+            for k in "ab"
+        ]
+        manifest = tmp_path / "members.json"
+        manifest.write_text(json.dumps({"environment": environment, "members": roster}))
+        monkeypatch.setenv("OPENSCIENCE_CANDIDATE_MEMBERS_FILE", str(manifest))
+    owner_a, owner_b = (m["user_id"] for m in candidate_members(environment))
     alice, other_alice, bob = (str(uuid4()) for _ in range(3))
     ingress, authority = (secrets.token_urlsafe(32) for _ in range(2))
     for label, key in (("ingress", ingress), ("authority", authority)):
@@ -204,13 +224,14 @@ def test_owner_journal_publication(tmp_path, monkeypatch):
 
     cfg = SimpleNamespace(
         name="polytao",
+        environment="dev-m1",
         evidence=None,
         state=tmp_path,
         authority_socket="/unused",
         authority_key=secrets.token_urlsafe(32),
     )
     service = adapters.Adapter(cfg)
-    owner, damaged_owner = sorted(adapters.OWNERS)
+    owner, damaged_owner = (m["user_id"] for m in candidate_members("dev-m1"))
     initialize = service.journal_type.initialize
 
     children = multiprocessing.get_context("fork")

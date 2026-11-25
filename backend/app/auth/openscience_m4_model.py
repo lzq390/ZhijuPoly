@@ -387,12 +387,12 @@ class Output:
         ]
 
 
-def install_model(app, principal, *, request_key, transport=None, ledger=None):
+def install_model(app, principal, *, request_key, transport=None, ledger=None, environment="dev-m1"):
     ledger = ledger or ModelLedger(app.state.auth.connection)
     socket_path = os.environ.get("M4_MODEL_SOCKET", "/m4provider/model.sock")
 
     def scope(actor, expected):
-        if actor.get("scope") != expected or actor.get("environment") != "dev-m1":
+        if actor.get("scope") != expected or actor.get("environment") != environment:
             raise HTTPException(403, "Model authorization scope mismatch")
 
     async def reconcile(owner=None, after="00000000-0000-0000-0000-000000000000"):

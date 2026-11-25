@@ -6,9 +6,11 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { developmentBrowser, retainedBindings } from "./openscience_dev_browser.mjs";
+import { developmentBrowser, enrolledMembers, retainedBindings } from "./openscience_dev_browser.mjs";
 
-const { values } = parseArgs({ options: { state: { type: "string" }, output: { type: "string" } } });
+const { values } = parseArgs({ options: {
+  state: { type: "string" }, output: { type: "string" }, readback: { type: "string" },
+} });
 const state = resolve(values.state);
 const output = resolve(values.output);
 const stack = JSON.parse(await readFile(resolve(state, "running.json"), "utf8"));
@@ -17,9 +19,10 @@ assert.match(stack.model_image, /^sha256:[0-9a-f]{64}$/);
 assert.match(stack.model_manifest_sha256, /^[0-9a-f]{64}$/);
 const registry = JSON.parse(await readFile(resolve(stack.registry, "registry.json"), "utf8"));
 const bindings = retainedBindings(stack, registry);
+const members = enrolledMembers(stack);
 const { browser, device, app, login, logout, workbench } = await developmentBrowser(state, stack);
 const report = {
-  environment: "dev-m1",
+  environment: stack.environment ?? "dev-m1",
   workspace_image: registry.image,
   model_image: stack.model_image,
   model_manifest_sha256: stack.model_manifest_sha256,
@@ -29,6 +32,7 @@ const report = {
   status: "failed",
   users: {},
 };
+if (stack.environment === "deploy-m6") report.site_deployment = stack.deployment;
 const profiles = [];
 const run = randomUUID().replaceAll("-", "");
 const directory = "/openscience/files/general";
@@ -47,15 +51,17 @@ function ledger(input = {}) {
 async function client(tag) {
   const context = await device();
   const page = await app(context);
-  const name = "test-user-" + tag;
-  const identity = await login(page, name);
+  const member = members[tag === "a" ? 0 : 1];
+  const name = member.username;
+  const identity = await login(page, name, tag);
+  assert.equal(identity.user_id, member.user_id);
   profiles.push({ page, name });
   const frame = await workbench(page);
   const marker = "lab" + randomUUID().replaceAll("-", "");
   const content = ["Private notebook.", "Experiment " + common + ".", "Specimen " + marker + ".", ""].join(
     "\n",
   );
-  return { ...identity, tag, page, frame, marker, content };
+  return { ...identity, tag, workspaceUser: member.workspace_user_id, page, frame, marker, content };
 }
 async function request(user, path, { method = "GET", json } = {}) {
   return user.frame.evaluate(
@@ -110,6 +116,36 @@ async function quotaFiles(a, b) {
     assert.ok(!listing.value.some(file => file.name === name));
   }
   return {same_name: name, isolated_content: true, independently_deleted: true, combined_editor: true};
+}
+
+async function sameNameProjects(users) {
+  const name = "deployment-" + run;
+  const parent = "/openscience/files/projects";
+  const dir = parent + "/" + name;
+  const route = p => "/openscience-api" + p + "?directory=" + encodeURIComponent(dir);
+  const sessions = [];
+  for (const u of users) {
+    const created = await request(u, "/openscience-api/api/resolve-folder/create", { method: "POST", json: {parent, name} });
+    assert.equal(created.status, 201);
+    assert.equal(created.value.absolute, dir);
+    const saved = await request(u, route("/file/content"), {method:"PUT", json:{path:"notebook.txt", content:u.marker}});
+    assert.equal(saved.status, 200);
+    const chat = await request(u, route("/session"), {method:"POST", json:{title: name + "-" + u.tag}});
+    assert.equal(chat.status, 200);
+    sessions.push(chat.value.id);
+  }
+  assert.notEqual(...sessions);
+  const result = {};
+  for (const [i, u] of users.entries()) {
+    const own = await request(u, route("/file/content") + "&path=notebook.txt");
+    assert.equal(own.status, 200);
+    assert.equal(own.value.content, u.marker);
+    const list = await request(u, route("/session"));
+    assert.equal(list.status, 200);
+    assert.deepEqual(list.value.map(row => row.id), [sessions[i]]);
+    result[u.tag] = {session_sha256: digest(sessions[i]), file_sha256: digest(own.value.content)};
+  }
+  return {project: name, file:"notebook.txt", owners:result, separate_sessions:true};
 }
 
 async function conversation(user) {
@@ -418,7 +454,7 @@ async function usage(user, other) {
   const own = records.filter(
     (row) => row.workspace_session === user.conversation && row.turn_id === user.turn,
   );
-  const workspace = bindings["test-user-" + user.tag].workspace_id;
+  const workspace = bindings[user.workspaceUser].workspace_id;
   const credential = await readFile(resolve(stack.registry, workspace, "secret/token"));
   const generationFingerprint = digest(digest(credential));
   assert.ok(
@@ -447,13 +483,14 @@ async function usage(user, other) {
     settlement: row.state,
   }));
 }
-try {
+async function exercise() {
   const baseline = ledger();
   const a = await client("a"),
     b = await client("b");
   assert.notEqual(a.user_id, b.user_id);
   assert.notEqual(a.session_id, b.session_id);
   if (stack.quota_files) report.quota_files = await quotaFiles(a, b);
+  if (stack.environment === "deploy-m6") report.same_name_projects = await sameNameProjects([a, b]);
   for (const u of [a, b]) {
     u.conversation = await conversation(u);
     await upload(u);
@@ -488,6 +525,46 @@ try {
     report.users[u.tag].model.foreign_usage = 0;
   }
   report.ledger = ledger({ baseline, filename, users });
+}
+
+async function reopened() {
+  const bytes = await readFile(values.readback);
+  const prior = JSON.parse(bytes);
+  assert.equal(stack.environment, "deploy-m6");
+  assert.equal(prior.status, "passed");
+  assert.equal(prior.site_deployment, stack.deployment);
+  assert.deepEqual(prior.workspace_bindings, bindings);
+  const projects = prior.same_name_projects;
+  assert.match(projects.project, /^deployment-[a-f0-9]{32}$/);
+  const project = "/openscience/files/projects/" + projects.project;
+  for (const tag of ["a", "b"]) {
+    const u = await client(tag);
+    const scoped = path => "/openscience-api" + path + "?directory=" + encodeURIComponent(project);
+    const list = await request(u, scoped("/session"));
+    assert.equal(list.status, 200);
+    const saved = list.value.filter(s => s.title === projects.project + "-" + tag);
+    assert.equal(saved.length, 1);
+    assert.equal(digest(saved[0].id), projects.owners[tag].session_sha256);
+    const file = await request(u, scoped("/file/content") + "&path=notebook.txt");
+    assert.equal(file.status, 200);
+    assert.equal(digest(file.value.content), projects.owners[tag].file_sha256);
+    const { model, knowledge } = prior.users[tag];
+    const history = await workspace(u, "/session/" + model.workspace_session + "/message");
+    assert.equal(history.status, 200);
+    const reply = history.value.filter(m => m.info.role === "assistant" && m.info.parentID === model.turn_id)
+      .flatMap(m => m.parts.filter(p => p.type === "text" && !p.synthetic).map(p => p.text)).join("").trim();
+    assert.equal(digest(reply), model.answer_sha256);
+    const source = await request(u, "/knowledge-api/kbs/" + knowledge.kb_id + "/documents/" + knowledge.document_id + "/download");
+    assert.equal(source.status, 200);
+    assert.equal(digest(source.value), knowledge.upload_sha256);
+    report.users[tag] = { project_session_matches:true, project_file_matches:true, original_reply_matches:true, private_document_matches:true };
+  }
+  report.prior_report_sha256 = digest(bytes);
+}
+
+try {
+  if (values.readback) await reopened();
+  else await exercise();
   report.status = "passed";
 } catch (error) {
   console.error(String(error.stack ?? error).replace(/np_page=[^ &"]+/g, "np_page=[redacted]"));

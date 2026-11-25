@@ -115,10 +115,12 @@ def allowed_target(tool, job_id, method, path, query):
 
 
 class Delegations:
-    def __init__(self, auth, agent, gateway_secret, inspect_handoff):
+    def __init__(self, auth, agent, gateway_secret, inspect_handoff, *, environment, workspaces):
         self.auth, self.agent = auth, agent
         self.gateway_secret = b"Bearer " + gateway_secret
         self.inspect_handoff = inspect_handoff
+        self.environment = environment
+        self.workspaces = workspaces
         self.keys = {"gateway": self.gateway_secret}
         if os.environ.get("OPENSCIENCE_M3_ADAPTERS_ENABLED") == "1":
             for name in adapters.BASES:
@@ -138,7 +140,7 @@ class Delegations:
         raise HTTPException(403, "Private service credential required")
 
     def current_generation(self, workspace, expected):
-        if workspace not in {"test-user-a", "test-user-b"} or not isinstance(expected, str):
+        if workspace not in self.workspaces or not isinstance(expected, str):
             return False
         try:
             marker = (GENERATIONS / workspace).read_bytes()
@@ -149,9 +151,9 @@ class Delegations:
     def live_handoff(self, conn, predicate, value):
         # The predicate is chosen by our handlers, never taken from a request.
         row = conn.execute(
-            "SELECT * FROM openscience_m2.handoffs WHERE redeemed_at IS NOT NULL AND environment='dev-m1' "
+            "SELECT * FROM openscience_m2.handoffs WHERE redeemed_at IS NOT NULL AND environment=%s "
             f"AND {predicate}=%s AND agent_origin=%s",
-            (value, self.agent),
+            (self.environment, value, self.agent),
         ).fetchone()
         grant = self.inspect_handoff(conn, row)
         # inspect_handoff locked user/session/binding across this transaction.
@@ -486,8 +488,10 @@ class Delegations:
             await app(scope, replay, delivery)
 
 
-def install(app, auth, agent, router_identity, gateway_secret, inspect_handoff):
-    authority = Delegations(auth, agent, gateway_secret, inspect_handoff)
+def install(app, auth, agent, router_identity, gateway_secret, inspect_handoff, *, environment, workspaces):
+    authority = Delegations(
+        auth, agent, gateway_secret, inspect_handoff, environment=environment, workspaces=workspaces
+    )
     app.state.openscience_m3 = authority
 
     @app.post(ISSUE, dependencies=[Depends(router_identity)])

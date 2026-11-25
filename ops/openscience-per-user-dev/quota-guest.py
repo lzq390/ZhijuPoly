@@ -162,14 +162,14 @@ def blank_volumes():
     return disks
 
 
-def mount_volumes(disks, mounted):
+def mount_volumes(disks, mounted, owners=None):
     volumes = {}
     MOUNT_ROOT.mkdir(exist_ok=False)
     MOUNT_ROOT.chmod(0o755)
     for (phase, role), device in disks.items():
         target = MOUNT_ROOT / (phase + "-" + role)
         target.mkdir()
-        label = f"m5quota-{phase}-{role}"
+        label = quota.volume_label(owners[role], phase) if owners else f"m5quota-{phase}-{role}"
         command(
             "mkfs.ext4",
             "-q",

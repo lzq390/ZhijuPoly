@@ -47,6 +47,57 @@ class QuotaNfsTest(unittest.TestCase):
         self.path.write_text(json.dumps(self.manifest))
         self.path.chmod(0o600)
 
+    def test_deploy_registry_requires_named_owners_verified_quota_and_original_host_media(self):
+        owners, members = {}, []
+        primary = self.root.stat().st_dev
+        filesystem = f"{os.major(primary)}:{os.minor(primary)}"
+        disks = {"primary": {"device": "259:0", "name": "nvme0n1"}}
+        inodes = {}
+        for role, binding in zip("ab", self.bindings):
+            account = str(uuid4())
+            binding.update(environment="deploy-m6", user_id=account)
+            owners[role] = {k: binding[k] for k in ("environment", "user_id", "workspace", "uid")}
+            owners[role]["gid"] = binding["uid"]
+            members.append({"user_id": account, "workspace_user_id": account})
+            self.rows["src-" + role].update(binding)
+            backing = self.root / f"m5-{role}.raw"
+            backing.touch()
+            inodes[backing.stem] = backing.stat().st_ino
+        roster = {"environment": "deploy-m6", "members": members}
+        with self.assertRaises(manager.Problem):
+            manager.candidate_roster(owners, {**roster, "members": members[:1] * 2})
+        with self.assertRaises(manager.Problem):
+            manager.candidate_roster(owners, {**roster, "members": members[::-1]})
+        self.registry.data.update(format=6, candidate_owners=manager.candidate_roster(owners, roster))
+        self.write_manifest()
+        vm = self.root / "vm.json"
+        vm.write_text(json.dumps({"format": "nexpoly-m5-isolated-browser-v1", "disk_inodes": inodes, "host_disks": disks}))
+        vm.chmod(0o600)
+        account = owners["a"]["user_id"]
+        with self.assertRaises(manager.Problem):
+            self.registry.workspace("deploy-m6", account, create=True)
+        with self.assertRaises(manager.Problem):
+            self.registry.register_quota_storage([{**self.bindings[0], "uid": owners["a"]["uid"] + 10}, self.bindings[1]],
+                                                 manifest=self.path, phase="src")
+        with patch("openscience_m5_backup.physical_disk", return_value=(disks["primary"], "disk")) as physical, \
+                patch.object(nfs, "attest", return_value={}), patch.object(nfs, "claim_pair", return_value=self.claim), \
+                patch.object(manager.pilot_module("quota_web_files"), "prepare"):
+            self.registry.register_quota_storage(self.bindings[::-1], manifest=self.path, phase="src")
+        physical.assert_called_with(filesystem)
+        fresh = manager.Registry(self.root)
+        ws = fresh.workspace("deploy-m6", account)
+        with patch.object(ws, "resource", return_value=ws.volume), patch.object(ws, "helper", return_value="900000"), \
+                patch.object(nfs, "host_free_mib", return_value=99):
+            self.assertEqual(ws.volume_free_mib(), 99)
+        for environment, user in [("dev-m1", "test-user-a"), ("deploy-m6", str(uuid4()))]:
+            with self.assertRaises(manager.Problem):
+                fresh.workspace(environment, user, create=True)
+        source = self.root / "m5-a.raw"
+        source.rename(self.root / "saved")
+        source.touch()
+        with self.assertRaisesRegex(ValueError, "storage medium"):
+            nfs.host_free_mib(fresh.data["host_media"]["deploy-m6/" + account])
+
     def volume(self):
         return ["local", {"type": "nfs", "device": ":/m5-src-a/workspace",
                           "o": "addr=127.0.0.1,port=38901,nfsvers=4.1,proto=tcp,resvport,hard,timeo=30,retrans=2"},

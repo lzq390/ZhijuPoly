@@ -52,12 +52,14 @@ def manager(root, *args):
 
 def dispatch(root, request):
     if isinstance(request, dict) and request.get("operation") == "cleanup":
-        if request.keys() != WORKSPACE_KEYS | {"action", "data", "until_ms"} or request["environment"] != "dev-m1":
+        if (request.keys() != WORKSPACE_KEYS | {"action", "data", "until_ms"}
+                or request["environment"] not in ("dev-m1", "deploy-m6")):
             raise ValueError("cleanup_invalid")
         if not CLEANUP_WORKERS.acquire(blocking=False):
             raise ValueError("cleanup_busy")
         try:
-            return web_cleanup(root, request["user_id"], request["action"], request["data"], request["until_ms"])
+            return web_cleanup(root, request["user_id"], request["action"], request["data"], request["until_ms"],
+                               environment=request["environment"])
         finally:
             CLEANUP_WORKERS.release()
     if not isinstance(request, dict) or not all(isinstance(value, str) for value in request.values()):

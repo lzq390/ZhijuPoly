@@ -1,4 +1,4 @@
-"""Operator recovery of a dev-m1 project file while its guarded workspace is cold."""
+"""Operator recovery of an owner's project file while its guarded workspace is cold."""
 
 import argparse
 import json
@@ -22,8 +22,11 @@ class CleanupUnavailable(ValueError):
 
 def cold_owner(ws, require_low, *, reclaim_stopped=False):
     registry = ws.registry
-    if registry.data["format"] != 5 or not ws.nfs or ws.env != "dev-m1" or ws.user not in manager.PILOT_USERS:
-        raise ValueError("Expected a guarded dev-m1 native workspace")
+    if registry.data["format"] != 5 or not ws.nfs or not (
+        (ws.env == "dev-m1" and ws.user in manager.PILOT_USERS)
+        or (ws.env == manager.DEPLOY_ENV and ws.env + "/" + ws.user in registry.quota_keys())
+    ):
+        raise ValueError("Expected a registered workspace with a global disk guard")
     if ws.resource("backend") or ws.resource("fixture"):
         # Under the lifecycle lock, retire only the authenticated owner's
         # stopped backend and network companion. Recheck low water after the
@@ -96,11 +99,13 @@ print(json.dumps(reply))
 """
 
 
-def web_cleanup(root, user, action, data, until_ms):
+def web_cleanup(root, user, action, data, until_ms, *, environment="dev-m1"):
     # Validate even private socket callers before taking a lifecycle reservation.
     fields = {"list": {"path", "after"}, "read": {"path", "offset"}, "delete": {"path", "version"}}
     valid_fields = fields.get(action)
-    if (user not in manager.PILOT_USERS or not valid_fields or not isinstance(data, dict)
+    allowed_user = ((environment == "dev-m1" and isinstance(user, str) and user in manager.PILOT_USERS)
+                    or (environment == manager.DEPLOY_ENV and manager.account_uuid(user)))
+    if (not allowed_user or not valid_fields or not isinstance(data, dict)
             or (data.keys() != valid_fields and not (action == "read" and data.keys() == valid_fields | {"version"}))):
         raise ValueError("cleanup_invalid")
     path = data["path"]
@@ -115,7 +120,7 @@ def web_cleanup(root, user, action, data, until_ms):
         with manager.locked_registry(root, False, operation="offline-file") as registry:
             if time.time() * 1000 >= until_ms:
                 raise ValueError("cleanup_expired")
-            ws = registry.workspace("dev-m1", user)
+            ws = registry.workspace(environment, user)
             owner = cold_owner(ws, True, reclaim_stopped=True)
             if time.time() * 1000 >= until_ms:
                 raise ValueError("cleanup_expired")
@@ -138,7 +143,8 @@ def web_cleanup(root, user, action, data, until_ms):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", required=True, type=Path)
-    parser.add_argument("--user-id", choices=sorted(manager.PILOT_USERS), required=True)
+    parser.add_argument("--environment", choices=("dev-m1", manager.DEPLOY_ENV), default="dev-m1")
+    parser.add_argument("--user-id", required=True)
     parser.add_argument("--path", required=True, help="File relative to files/projects, including the project name")
     sub = parser.add_subparsers(dest="action", required=True)
     read = sub.add_parser("read")
@@ -152,7 +158,7 @@ def main():
     # Hold the lifecycle reservation throughout the operation. Other running
     # users can still submit read-only disk admission checks for their writes.
     with manager.locked_registry(args.state_dir, False, operation="offline-file") as registry:
-        ws = registry.workspace("dev-m1", args.user_id)
+        ws = registry.workspace(args.environment, args.user_id)
         if args.action == "delete":
             if not re.fullmatch("[a-f0-9]{64}", args.confirm):
                 raise ValueError("Expected the complete read confirmation")

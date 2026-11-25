@@ -10,5 +10,11 @@
     "agent": "https://agent.m6.test:18781",
     "authority_port": 18782,
     "frontend_port": 18783
+  },
+  "deploy-m6": {
+    "parent": "https://app.deploy-m6.test:18860",
+    "agent": "https://agent.deploy-m6.test:18861",
+    "authority_port": 18862,
+    "frontend_port": 18863
   }
 }

@@ -6,12 +6,14 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import stat
 import subprocess
 
 import verify_openscience_m5_quota as offline
+from openscience_m5_backup import available_bytes, private_file, require_space, separate_disks
 from openscience_m5_quota_inputs import stage_inputs
 from openscience_m5_native_storage import ssh_config_text
-from openscience_per_user_dev import write_atomic
+from openscience_per_user_dev import validate_candidate_owners, write_atomic
 from prepare_openscience_m5_water_pool import DEDICATED, registered_pool, storage_lock
 
 BOOT = """#!/bin/sh
@@ -61,7 +63,34 @@ Path('/run/m5-provision.json').write_text(json.dumps(result, sort_keys=True))
 """
 
 
-def build(work, registry, packages, evidence, base, modules):
+CANDIDATE_BACKUP_BYTES = 5 * offline.GIB
+SECONDARY_DISKS = {"m5-restore-a", "m5-restore-b", offline.BACKUP_DISK}
+
+
+def device(path):
+    identity = path.stat().st_dev
+    return f"{os.major(identity)}:{os.minor(identity)}"
+
+
+def secondary(path, primary):
+    info = path.lstat()
+    if (not path.is_absolute() or path.resolve(strict=True) != path or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.getuid() or info.st_mode & 0o077):
+        raise ValueError("Use a private, canonical operator-owned backup directory")
+    return separate_disks(device(primary), device(path))
+
+
+def disk_layout(work, archive):
+    layout = {}
+    for serial in offline.DATA_DISKS:
+        directory = archive if archive and serial in SECONDARY_DISKS else work
+        layout[serial] = (directory / (serial + ".raw"), offline.DISK_BYTES)
+    layout[offline.BACKUP_DISK] = ((archive or work) / (offline.BACKUP_DISK + ".raw"),
+                                   CANDIDATE_BACKUP_BYTES if archive else offline.BACKUP_BYTES)
+    return layout
+
+
+def build(work, registry, packages, evidence, base, modules, owners=None, archive=None):
     if (
         not base.is_file()
         or offline.file_digest(base) != offline.image_lock()["sha256"]
@@ -72,7 +101,17 @@ def build(work, registry, packages, evidence, base, modules):
         raise ValueError("Need 66 GiB scratch space including the 32 GiB host reserve")
     inputs = work / "inputs"
     inputs.mkdir()
-    stage_inputs(inputs, registry, packages, evidence)
+    if owners:
+        with private_file(owners) as handle:
+            rows = validate_candidate_owners(json.load(handle))
+        archive.mkdir(mode=0o700)
+        secondary(archive, work)
+        require_space(available_bytes(archive), 2 * offline.DISK_BYTES + CANDIDATE_BACKUP_BYTES, 16 * offline.GIB)
+        spec = {"version": 1, "environment": "deploy-m6", "hard_limit_bytes": 2_000_000_000,
+                "users": {r: {**row, "registered_generation": 0} for r, row in rows.items()}}
+        (inputs / "spec.json").write_text(json.dumps(spec, sort_keys=True))
+    else:
+        stage_inputs(inputs, registry, packages, evidence)
     offline.guest_kernel(base, work, inputs, modules)
     ops = offline.ROOT / "ops/openscience-per-user-dev"
     for src, dst in [
@@ -88,7 +127,10 @@ def build(work, registry, packages, evidence, base, modules):
         "openscience_per_user_dev.py",
     ):
         shutil.copyfile(offline.ROOT / "scripts" / name, inputs / name)
-    (inputs / "provision.py").write_text(PROVISION)
+    if owners:
+        shutil.copyfile(ops / "quota-candidate-provision.py", inputs / "provision.py")
+    else:
+        (inputs / "provision.py").write_text(PROVISION)
     for target in (work / "key", inputs / "ssh_host_key"):
         offline.run("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(target))
     shutil.copyfile(work / "key.pub", inputs / "client.pub")
@@ -113,13 +155,9 @@ def build(work, registry, packages, evidence, base, modules):
         str(work / "system.qcow2"),
         "20G",
     )
-    for serial in (*offline.DATA_DISKS, offline.BACKUP_DISK):
-        with (work / (serial + ".raw")).open("xb") as handle:
-            handle.truncate(
-                offline.BACKUP_BYTES
-                if serial == offline.BACKUP_DISK
-                else offline.DISK_BYTES
-            )
+    for path, size in disk_layout(work, archive).values():
+        with path.open("xb") as handle:
+            handle.truncate(size)
     (work / "user-data").write_text(BOOT)
     (work / "meta-data").write_text(
         "instance-id: nexpoly-m5-web\nlocal-hostname: m5-quota-web\n"
@@ -146,11 +184,11 @@ def build(work, registry, packages, evidence, base, modules):
         str(work / "inputs.iso"),
         str(inputs),
     )
-    pin_existing(work, base, port)
+    pin_existing(work, base, port, archive)
     launch(work, port)
 
 
-def pin_existing(work, base, port):
+def pin_existing(work, base, port, archive=None):
     data = {
         "format": "nexpoly-m5-isolated-browser-v1",
         "storage": DEDICATED,
@@ -161,6 +199,11 @@ def pin_existing(work, base, port):
             for name in ("kernel", "initrd", "seed.iso", "inputs.iso")
         },
     }
+    if archive:
+        data["backup_dir"] = str(archive)
+        disks = secondary(archive, work)
+        data["host_disks"] = {role: row for role, row in zip(("primary", "backup"), disks)}
+        data["disk_inodes"] = {k: path.stat().st_ino for k, (path, size) in disk_layout(work, archive).items()}
     pin = work / "vm.json"
     with storage_lock(work):
         if pin.exists() or pin.is_symlink():
@@ -208,20 +251,24 @@ def resume(work):
         or info["backing-filename-format"] != "qcow2"
     ):
         raise ValueError("The retained system overlay has an unexpected backing file")
-    for serial in (*offline.DATA_DISKS, offline.BACKUP_DISK):
-        path = work / (serial + ".raw")
-        if (
-            path.is_symlink()
-            or not path.is_file()
-            or path.stat().st_size
-            != (
-                offline.BACKUP_BYTES
-                if serial == offline.BACKUP_DISK
-                else offline.DISK_BYTES
-            )
-        ):
-            raise ValueError(f"Unexpected retained M5 disk: {serial}")
+    checked_layout(work, config)
     launch(work, config["ssh_port"])
+
+
+def checked_layout(work, config):
+    archive = Path(config["backup_dir"]) if "backup_dir" in config else None
+    layout = disk_layout(work, archive)
+    if archive:
+        disks = secondary(archive, work)
+        if config["host_disks"] != dict(zip(("primary", "backup"), disks)):
+            raise ValueError("Workspace and backup disks changed")
+    for serial, (path, size) in layout.items():
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_size != size or (archive and
+                (config["disk_inodes"][serial] != info.st_ino or info.st_nlink != 1 or info.st_uid != os.getuid()
+                 or info.st_mode & 0o077))):
+            raise ValueError(f"Unexpected retained M5 disk: {serial}")
+    return layout
 
 
 def launch(work, port):
@@ -230,6 +277,11 @@ def launch(work, port):
 
 
 def launch_pinned(work, port, water):
+    config = json.loads((work / "vm.json").read_bytes())
+    # The historical water pool stores its own overlays. Keep that layout apart from split-host storage.
+    if water and "backup_dir" in config:
+        raise ValueError("A candidate with split storage cannot use the synthetic water pool")
+    layout = checked_layout(work, config) if "backup_dir" in config else disk_layout(work, None)
     with socket.socket() as listener:
         # Match a restarting TCP listener: a completed loopback SSH connection
         # may still be in TIME_WAIT after the previous QEMU has exited.
@@ -247,7 +299,7 @@ def launch_pinned(work, port, water):
         "-smp",
         "4",
         "-m",
-        "8192",
+        "2048" if "backup_dir" in config else "8192",
         "-kernel",
         "kernel",
         "-initrd",
@@ -276,14 +328,15 @@ def launch_pinned(work, port, water):
         "-drive",
         "file=inputs.iso,format=raw,if=virtio,readonly=on",
     ]
-    for serial in (*offline.DATA_DISKS, offline.BACKUP_DISK):
+    for serial, (path, _) in layout.items():
+        escaped_path = str(path).replace(",", ",,")
         argv.extend(
             [
                 "-drive",
                 (
                     f"if=none,file=waterpool/{serial}.qcow2,format=qcow2,id={serial}"
                     if water
-                    else f"if=none,file={serial}.raw,format=raw,id={serial}"
+                    else f"if=none,file={escaped_path},format=raw,id={serial}"
                 ),
                 "-device",
                 f"virtio-blk-pci,drive={serial},serial={serial}",
@@ -336,6 +389,8 @@ def main():
         action="store_true",
         help="Boot the existing private VM after a clean guest shutdown",
     )
+    parser.add_argument("--owners", type=Path, help="Private deploy-m6 account registration for a fresh candidate")
+    parser.add_argument("--backup-dir", type=Path, help="New private directory on a different physical disk")
     for key in ("registry", "packages", "evidence"):
         parser.add_argument("--" + key, type=Path)
     parser.add_argument("--base-image", type=Path, default=offline.default_image())
@@ -346,7 +401,11 @@ def main():
     if args.resume:
         resume(work)
         return
-    if not all((args.registry, args.packages, args.evidence)):
+    legacy = (args.registry, args.packages, args.evidence)
+    if args.owners or args.backup_dir:
+        if not (args.owners and args.backup_dir) or any(legacy):
+            parser.error("Use --owners and --backup-dir together on a fresh candidate")
+    elif not all(legacy):
         parser.error("New VM creation requires registry, packages and evidence")
     work.mkdir(mode=0o700)
     build(
@@ -356,6 +415,8 @@ def main():
         args.evidence,
         args.base_image,
         args.quota_modules,
+        args.owners,
+        args.backup_dir.absolute() if args.backup_dir else None,
     )
 
 

@@ -42,7 +42,10 @@ def endpoints(manifest, phase, bindings):
     config_hash = hashlib.sha256(private_content(obj["ssh_config"])).hexdigest()
     result = {}
     for b in bindings:
-        slot = phase + "-" + b["user_id"][-1]
+        slot = Path(b["mount"]).name
+        if (slot not in {phase + "-a", phase + "-b"}
+                or (b["environment"] == "dev-m1" and b["user_id"] != "test-user-" + slot[-1])):
+            raise ValueError("Volume slot and registered quota owner differ")
         row = obj["workspaces"][slot]
         vol = "nexpoly-m5-" + obj["run_id"] + "-" + slot
         if (row.get("volume") != vol or row.get("pseudo") != "/m5-" + slot
@@ -67,6 +70,44 @@ def inspect_volume(endpoint, binding, docker):
     owners = volume_labels(endpoint, slot, row)
     if driver != "local" or options != expected or any((labels or {}).get(k) != v for k, v in owners.items()):
         raise ValueError("Docker NFS volume driver, options or ownership differ from the registered endpoint")
+
+
+def candidate_medium(endpoint):
+    from openscience_m5_backup import physical_disk
+
+    vm = Path(endpoint["ssh_config"]).parent
+    config = json.loads(private_content(vm / "vm.json"))
+    phase, role = endpoint["slot"].split("-")
+    if phase == "src":
+        root, device, serial = vm, "primary", "m5-" + role
+    else:
+        root, device, serial = Path(config["backup_dir"]), "backup", "m5-restore-" + role
+    if config["format"] != "nexpoly-m5-isolated-browser-v1" or root != root.resolve(strict=True):
+        raise ValueError("Expected the registered storage guest and its canonical host directory")
+    backing = root / (serial + ".raw")
+    dev = backing.lstat().st_dev
+    filesystem = f"{os.major(dev)}:{os.minor(dev)}"
+    disk, _ = physical_disk(filesystem)
+    if disk != config["host_disks"][device]:
+        raise ValueError("Deployment storage is on another physical disk")
+    pin = {"file": str(backing), "device": filesystem, "inode": config["disk_inodes"][serial]}
+    host_free_mib(pin)
+    return pin
+
+
+def host_free_mib(pin):
+    # Measure on the open backing image, even when Docker and the quota guest live on different disks.
+    fd = os.open(pin["file"], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        device = f"{os.major(info.st_dev)}:{os.minor(info.st_dev)}"
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()
+                or (device, info.st_ino) != (pin["device"], pin["inode"])):
+            raise ValueError("Deployment storage medium differs from its registered host image")
+        space = os.fstatvfs(fd)
+        return space.f_bavail * space.f_frsize // 1024**2
+    finally:
+        os.close(fd)
 
 
 def guest_client(endpoint):
@@ -144,9 +185,12 @@ def claim_pair(registry, endpoints, bindings, docker):
             own = registry.workspace(*key.split("/", 1)).resource("backend") if key in registry.data["workspaces"] else None
             if not own or clients != {own["id"]}:
                 raise ValueError("Another container holds the requested NFS volume")
-    first = endpoints["dev-m1/test-user-a"]
+    ordered = sorted(endpoints, key=lambda key: endpoints[key]["slot"])
+    first = endpoints[ordered[0]]
     phase = first["slot"][:3]
-    uuids = [bindings["dev-m1/test-user-" + r]["filesystem_uuid"] for r in "ab"]
+    if [endpoints[key]["slot"] for key in ordered] != [phase + "-a", phase + "-b"]:
+        raise ValueError("Expected the two distinct quota slots belonging to one phase")
+    uuids = [bindings[key]["filesystem_uuid"] for key in ordered]
     owner = ownership(registry)
     record = claim_record(phase, *owner, *uuids)
     # An existing owner can replay registration while its own backend runs. Creating or
@@ -174,8 +218,12 @@ def attest(endpoint, binding, docker, *, owner=None):
     if owner and result.get("claim") != owner:
         raise ValueError("Quota attestation belongs to a different native registry")
     obs = result["quota"]
+    expected_label = "m5quota-" + slot
+    if binding["environment"] == "deploy-m6":
+        from openscience_per_user_dev import pilot_module
+        expected_label = pilot_module("quota").volume_label(binding, slot[:3])
     if (result.get("binding") != {k: binding[k] for k in IDENTITY} or obs.get("filesystem_type") != "ext4"
-            or obs.get("volume_label") != "m5quota-" + slot or obs.get("filesystem_uuid") != binding["filesystem_uuid"]
+            or obs.get("volume_label") != expected_label or obs.get("filesystem_uuid") != binding["filesystem_uuid"]
             or obs.get("uid") != binding["uid"] or obs.get("hard_bytes") != 2_000_000_000
             or obs.get("accounting") is not True or obs.get("enforced") is not True):
         raise ValueError("Remote quota attestation and the registered ext4 identity differ")

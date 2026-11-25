@@ -28,11 +28,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from app.mcp_security import CallLimiter, MCPFailure
+from app.auth.openscience_candidate import authority_environment, candidate_members
 
 
 CONTEXT = "/internal/openscience/adapter-context"
 EXCHANGE = "/internal/openscience/adapter-exchange"
-OWNERS = {f"10000000-0000-4000-8000-00000000000{i}" for i in (1, 2)}
 ERROR_STATUS = {
     "INVALID_ARGUMENT": 422,
     "DRAFT_INCOMPLETE": 422,
@@ -63,6 +63,8 @@ class Config:
     authority_socket: str
     submit_limit: int
     evidence: Path | None
+    environment: str
+    owners: frozenset[str]
 
     @classmethod
     def load(cls):
@@ -86,7 +88,11 @@ class Config:
             if os.environ.get("M3_ADAPTER_VERIFY_DROP_RECEIPT") == "1"
             else None
         )
-        return cls(name, root, ingress, authority, os.environ["M3_AUTHORITY_SOCKET"], limit, evidence)
+        environment = authority_environment()
+        if environment == "dev-m6":
+            raise ValueError("The AC-22 candidate does not provide tool adapters")
+        owners = frozenset(m["user_id"] for m in candidate_members(environment))
+        return cls(name, root, ingress, authority, os.environ["M3_AUTHORITY_SOCKET"], limit, evidence, environment, owners)
 
 
 class ReceiptProbe:
@@ -141,7 +147,7 @@ class DelegatedCall:
 
     async def authorize(self):
         ctx = await self.authority(CONTEXT, self.claim)
-        if ctx["owner_id"] not in OWNERS or ctx["tool"] != self.claim["tool"]:
+        if ctx["owner_id"] not in self.bridge.config.owners or ctx["tool"] != self.claim["tool"]:
             raise MCPFailure("PERMISSION_DENIED", "Unexpected adapter operation or workspace owner.")
         self.owner = ctx["owner_id"]
         self.login = str(UUID(ctx["login_id"]))
@@ -349,7 +355,7 @@ class Adapter:
         )
 
     def open_journal(self, path, owner):
-        journal = self.journal_type(path, backend_url="http://dev-m1-native", account_uuid=owner)
+        journal = self.journal_type(path, backend_url=f"http://{self.config.environment}-native", account_uuid=owner)
         try:
             journal.create_admissions()
         except BaseException:
@@ -506,7 +512,7 @@ def create_app():
     cfg = Config.load()
     adapter = Adapter(cfg)
     server = Server(
-        "dev-m1-" + cfg.name, version="1.0.0", on_list_tools=adapter.catalog, on_call_tool=adapter.call
+        f"{cfg.environment}-{cfg.name}", version="1.0.0", on_list_tools=adapter.catalog, on_call_tool=adapter.call
     )
     server.middleware.clear()
     app = server.streamable_http_app(

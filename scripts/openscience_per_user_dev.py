@@ -41,6 +41,7 @@ VOLUME_RESERVE_MIB = 2048
 QUOTA_BACKEND = "ext4-user-quota"
 NFS_BACKEND = "nfs-ext4-user-quota"
 PILOT_USERS = {"test-user-a", "test-user-b"}
+DEPLOY_ENV = "deploy-m6"
 DEFAULT_READY_SECONDS = 30
 DEFAULT_CAPACITY = {"workspace_memory_mib": 2 * PAIR_MEMORY_MIB, "host_memory_floor_mib": 16384,
                     "volume_free_floor_mib": 32768}
@@ -155,6 +156,44 @@ def new_row(workspace, uid, generation=0):
             "last_activity": 0, "leases": [], "failed_starts": 0, "retry_after": 0}
 
 
+def account_uuid(user):
+    try:
+        if not isinstance(user, str):
+            return False
+        value = UUID(user)
+        return value.int > 1 and str(value) == user
+    except ValueError:
+        return False
+
+
+def validate_candidate_owners(owners):
+    if not isinstance(owners, dict) or set(owners) != {"a", "b"}:
+        raise Problem("Expected two deployment storage owners")
+    fields = {"environment", "user_id", "workspace", "uid", "gid"}
+    for owner in owners.values():
+        if (not isinstance(owner, dict) or set(owner) != fields or owner["environment"] != DEPLOY_ENV
+                or not account_uuid(owner["user_id"]) or not isinstance(owner["workspace"], str)
+                or not re.fullmatch("[a-f0-9]{32}", owner["workspace"])
+                or type(owner["uid"]) is not int or not 210000 <= owner["uid"] < 100210000
+                or type(owner["gid"]) is not int or owner["uid"] != owner["gid"]):
+            raise Problem("Invalid deployment storage owner")
+    if any(len({owner[field] for owner in owners.values()}) != 2 for field in ("user_id", "uid", "workspace")):
+        raise Problem("Deployment owners must have distinct accounts, UIDs and workspaces")
+    return owners
+
+
+def candidate_roster(owners, members):
+    # The platform authority and the quota provisioner must agree before any volume is claimed.
+    validate_candidate_owners(owners)
+    if (not isinstance(members, dict) or members.get("environment") != DEPLOY_ENV
+            or not isinstance(members.get("members"), list) or len(members["members"]) != 2
+            or any(not isinstance(m, dict) or not account_uuid(m.get("user_id"))
+                   or m["user_id"] != m.get("workspace_user_id") for m in members["members"])
+            or [m["user_id"] for m in members["members"]] != [owners[role]["user_id"] for role in "ab"]):
+        raise Problem("Deployment membership does not match the registered storage accounts")
+    return owners
+
+
 def validated_readiness(seconds):
     if type(seconds) is not int or not DEFAULT_READY_SECONDS <= seconds <= 180:
         raise Problem("Quota readiness timeout must be between 30 and 180 seconds")
@@ -163,13 +202,14 @@ def validated_readiness(seconds):
 
 def validate_quota_binding(binding, *, local=True):
     keys = {"mount", "filesystem_uuid", "user_id", "environment", "workspace", "uid", "generation"}
-    if (not isinstance(binding, dict) or set(binding) != keys or binding["environment"] != "dev-m1"
-            or not isinstance(binding["user_id"], str) or binding["user_id"] not in PILOT_USERS
+    if (not isinstance(binding, dict) or set(binding) != keys or not isinstance(binding["user_id"], str)
+            or not ((binding["environment"] == "dev-m1" and binding["user_id"] in PILOT_USERS)
+                    or (binding["environment"] == DEPLOY_ENV and account_uuid(binding["user_id"])))
             or not isinstance(binding["workspace"], str)
             or not re.fullmatch("[0-9a-f]{32}", binding["workspace"]) or type(binding["uid"]) is not int
             or not 210000 <= binding["uid"] < 100210000 or type(binding["generation"]) is not int
             or binding["generation"] < 0):
-        raise Problem("Expected a retained dev-m1 pilot binding and generation")
+        raise Problem("Expected a valid quota binding and generation")
     mount, fs_uuid = binding["mount"], binding["filesystem_uuid"]
     if (not isinstance(mount, str) or not re.fullmatch(r"/[\w./-]+", mount, re.ASCII)
             or os.path.normpath(mount) != mount or (local and str(Path(mount).resolve(strict=True)) != mount)
@@ -281,9 +321,18 @@ class Registry:
         docker("image", "inspect", "--format", "{{.Id}}", PYTHON)
         settings = dict(image=args.image, template_version=VERSION, max_active=args.max_active,
                         idle_seconds=args.idle_seconds)
+        owner_file = getattr(args, "candidate_owners", None)
+        member_file = getattr(args, "candidate_members", None)
+        if bool(owner_file) != bool(member_file):
+            raise Problem("Deployment initialization requires both private identity files")
+        if owner_file:
+            read_private = pilot_module("quota_nfs").private_content
+            settings["candidate_owners"] = candidate_roster(json.loads(read_private(owner_file)),
+                                                           json.loads(read_private(member_file)))
         if self.data:
             self.check_format()
-            if any(self.data.get(k) != v for k, v in settings.items()):
+            if (any(self.data.get(k) != v for k, v in settings.items())
+                    or bool(owner_file) != ("candidate_owners" in self.data)):
                 raise Problem("Development registry already initialized with different settings")
         else:
             existing = {p.name for p in self.root.iterdir()} - {"supervisor.lock", "lifecycle.lock"}
@@ -297,7 +346,7 @@ class Registry:
                 if hashlib.sha256(data).hexdigest() != expected:
                     raise Problem("Unexpected synthetic model template input")
                 write_atomic(self.root / name, data, 0o444)
-            self.data = {**settings, "format": 1, "deployment": uuid4().hex, "workspaces": {},
+            self.data = {**settings, "format": 6 if owner_file else 1, "deployment": uuid4().hex, "workspaces": {},
                          "capacity": DEFAULT_CAPACITY.copy()}
             self.save()
         return {**{k: v for k, v in self.data.items() if k != "workspaces"}, "capacity": self.capacity()}
@@ -320,15 +369,38 @@ class Registry:
         self.save()
         return {"deployment": self.data["deployment"], "capacity": limits}
 
+    def quota_keys(self):
+        owners = self.data.get("candidate_owners")
+        if owners is None:
+            return ["dev-m1/test-user-" + role for role in "ab"]
+        return [DEPLOY_ENV + "/" + owners[role]["user_id"] for role in "ab"]
+
     def check_format(self, *, allow_unclaimed=False):
-        if not self.data or self.data.get("format") not in (1, 2, 3, 4, 5):
+        if not self.data or self.data.get("format") not in (1, 2, 3, 4, 5, 6):
             raise Problem("Initialize an M1 development registry first")
+        owners = self.data.get("candidate_owners")
+        if "candidate_owners" in self.data:
+            validate_candidate_owners(owners)
+            if self.data["format"] not in (4, 5, 6):
+                raise Problem("Invalid deployment identity registry")
+        if self.data["format"] == 6 and (not owners or self.data["workspaces"] or "nfs_endpoints" in self.data):
+            raise Problem("Unbound deployment registry requires its two owners and no attached workspaces")
         # Older supervisors must refuse quota registries. A missing pin must never select the Docker backend.
         if self.data["format"] in (2, 3, 4, 5):
-            expected = {"dev-m1/" + user for user in PILOT_USERS}
+            ordered = self.quota_keys()
+            expected = set(ordered)
             pins = self.data.get("quota_storage")
             if not isinstance(pins, dict) or set(pins) != expected or set(self.data["workspaces"]) != expected:
                 raise Problem("Quota registry identity bindings are incomplete")
+            if owners:
+                media = self.data.get("host_media")
+                if not isinstance(media, dict) or set(media) != expected:
+                    raise Problem("Deployment registry requires both host storage pins")
+                for role, key in zip("ab", ordered):
+                    owner, binding, row = owners[role], pins[key], self.data["workspaces"][key]
+                    if (any(binding[k] != owner[k] for k in ("environment", "user_id", "workspace", "uid"))
+                            or row["uid"] != owner["uid"] or row["id"] != owner["workspace"]):
+                        raise Problem("Deployment volume differs from its registered account")
             nfs = self.data.get("nfs_endpoints")
             if self.data["format"] in (3, 4, 5):
                 if not isinstance(nfs, dict) or set(nfs) != expected or not all(nfs.values()):
@@ -337,8 +409,10 @@ class Registry:
                     raise Problem("Legacy NFS registry requires exclusive registration; repeat register-quota-nfs while quiescent")
                 if self.data["format"] in (4, 5):
                     module = pilot_module("quota_nfs")
-                    phase = nfs["dev-m1/test-user-a"]["slot"][:3]
-                    uuids = [pins["dev-m1/test-user-" + r]["filesystem_uuid"] for r in "ab"]
+                    phase = nfs[ordered[0]]["slot"][:3]
+                    if [nfs[key]["slot"] for key in ordered] != [phase + "-a", phase + "-b"]:
+                        raise Problem("NFS endpoint slots differ from the registered owners")
+                    uuids = [pins[key]["filesystem_uuid"] for key in ordered]
                     if self.data.get("native_claim") != module.claim_record(phase, *module.ownership(self), *uuids):
                         raise Problem("NFS owner claim differs from this registry or its location")
             elif nfs is not None:
@@ -361,7 +435,7 @@ class Registry:
 
     def pool_command(self, action, policy, *options):
         nfs = pilot_module("quota_nfs")
-        endpoint = self.data["nfs_endpoints"]["dev-m1/test-user-a"]
+        endpoint = self.data["nfs_endpoints"][self.quota_keys()[0]]
         claim = self.data["native_claim"]
         raw = nfs.guest_client(endpoint).run(
             "python3", "-IB", "/opt/nexpoly/ops/openscience-per-user-dev/water_monitor.py", action,
@@ -454,8 +528,22 @@ class Registry:
         if any(len({b[key] for b in bindings}) != 2 for key in ("uid", "user_id", "workspace", "mount", "filesystem_uuid")):
             raise Problem("Quota pilot requires two distinct users, UIDs, workspaces, mounts and filesystem UUIDs")
         pins = {b["environment"] + "/" + b["user_id"]: b for b in bindings}
+        keys = self.quota_keys()
+        if set(pins) != set(keys):
+            raise Problem("Supplied volumes do not match the registered accounts")
+        owners = self.data.get("candidate_owners")
+        if owners:
+            if manifest is None:
+                raise Problem("The deployment candidate requires claimed NFS quota volumes")
+            for role, key in zip("ab", keys):
+                if (any(pins[key][k] != owners[role][k] for k in ("workspace", "uid"))
+                        or pins[key]["mount"] != f"/mnt/openscience-m5-quota/{phase}-{role}"):
+                    raise Problem("Supplied volume differs from its registered deployment owner or slot")
         nfs = pilot_module("quota_nfs") if manifest is not None else None
         endpoints = nfs.endpoints(manifest, phase, bindings) if nfs else None
+        media = {key: nfs.candidate_medium(endpoints[key]) for key in keys} if owners else None
+        if owners and self.data.get("host_media", media) != media:
+            raise Problem("Deployment storage media changed since registration")
         if self.data["workspaces"] and (self.data.get("quota_storage") != pins or self.data.get("nfs_endpoints") != endpoints):
             raise Problem("Register quota storage on a fresh development registry")
         observed = {key: nfs.attest(endpoints[key], b, docker) if nfs else inspect_quota_volume(b) for key, b in pins.items()}
@@ -468,6 +556,8 @@ class Registry:
             self.data.update(format=4 if nfs else 2, quota_storage=pins, workspaces=rows)
             if nfs:
                 self.data["nfs_endpoints"] = endpoints
+            if media:
+                self.data["host_media"] = media
         if first or self.readiness_seconds() != seconds or (claim and self.data.get("native_claim") != claim):
             if nfs:
                 self.data.update(format=5 if "disk_watermark" in self.data else 4, native_claim=claim)
@@ -478,7 +568,10 @@ class Registry:
 
     def workspace(self, env, user, create=False):
         self.check_format()
-        if not re.fullmatch(r"dev-[a-z0-9][a-z0-9-]{0,39}", env):
+        if "candidate_owners" in self.data:
+            if self.data["format"] == 6 or env + "/" + user not in self.quota_keys():
+                raise Problem("Deployment workspace requires its registered account and quota volume")
+        elif not re.fullmatch(r"dev-[a-z0-9][a-z0-9-]{0,39}", env):
             raise Problem("Only explicitly named dev-* environments are supported")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}", user):
             raise Problem("Expected a stable user identifier")
@@ -684,6 +777,9 @@ class Workspace:
         value = self.helper(VOLUME_FREE_MIB, anonymous=bool(self.quota_binding) or not exists)
         if not value.isascii() or not value.isdecimal():
             raise ValueError("Docker local volume probe returned invalid available MiB")
+        if self.registry.data.get("candidate_owners"):
+            media = self.registry.data["host_media"][self.env + "/" + self.user]
+            return min(int(value), pilot_module("quota_nfs").host_free_mib(media))
         return int(value)
 
     def verify_template_files(self):
@@ -729,7 +825,7 @@ class Workspace:
 
     def m3_root(self):
         root = os.environ.get("OPENSCIENCE_M3_OVERLAY")
-        if not root or self.env != "dev-m1" or self.user not in ("test-user-a", "test-user-b"):
+        if not root or self.env + "/" + self.user not in self.registry.quota_keys():
             return None
         return Path(root)
 
@@ -1115,6 +1211,8 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     init = commands.add_parser("init", help="Initialize the fixed offline two-user development template")
     init.add_argument("--image", required=True)
+    init.add_argument("--candidate-owners", type=Path, help="Private deploy-m6 A/B storage identity file")
+    init.add_argument("--candidate-members", type=Path, help="Matching private platform member registration")
     init.add_argument("--max-active", type=int, default=2)
     init.add_argument("--idle-seconds", type=int, default=1800)
     upgrade = commands.add_parser("set-image", help="Change the pinned development image after recycling every instance")

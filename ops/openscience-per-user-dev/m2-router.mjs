@@ -136,8 +136,10 @@ export async function startRouter(c, loadUi = pinnedUi) {
     if (!Object.hasOwn(candidates, c.environment)) throw Error("Invalid isolated router environment")
     const site = candidates[c.environment]
     if (c.public_origin !== site.agent || parents.length !== 1 || parents[0] !== site.parent ||
-        c.authority_url !== "http://127.0.0.1:" + site.authority_port || c.m3 || c.m4 || c.quota_files)
-      throw Error("Wrong origins, services or authority for the second candidate")
+        c.authority_url !== "http://127.0.0.1:" + site.authority_port ||
+        (c.environment === "dev-m6" && (c.m3 || c.m4 || c.quota_files)) ||
+        (c.environment === "deploy-m6" && c.quota_files !== true))
+      throw Error("Wrong origins, services or authority for the selected candidate")
   }
   if (new URL(c.authority_url).port === "9011" || Number(c.listen_port) === 9011) throw Error("Reserved production port")
   const authorityKey = (await readFile(c.service_token_file, "utf8")).trim()

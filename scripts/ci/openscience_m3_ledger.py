@@ -53,16 +53,17 @@ def pg_target(spec):
     return pg
 
 
-def query(pg, script, values):
+def query(pg, script, values, database="nexpoly_m2_dev"):
     # psql quotes the JSON parameter as an SQL literal. The only password stays inside the database container.
-    shell = 'export PGPASSWORD="$(cat /admin-pw)" PGHOST=/m2pg PGUSER=m2_admin; exec psql -XqAt -v ON_ERROR_STOP=1 -d nexpoly_m2_dev -v "spec=$1"'
+    require(database in {"nexpoly_m2_dev", "nexpoly_deploy_m6"}, "Unknown candidate database")
+    shell = 'export PGPASSWORD="$(cat /admin-pw)" PGHOST=/m2pg PGUSER=m2_admin; exec psql -XqAt -v ON_ERROR_STOP=1 -d "$2" -v "spec=$1"'
     sql = (
         "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSET LOCAL statement_timeout='12s';\n"
         + script
         + "\nCOMMIT;\n"
     )
     result = subprocess.run(
-        ["docker", "exec", "-i", pg, "sh", "-ec", shell, "ledger", json.dumps(values)],
+        ["docker", "exec", "-i", pg, "sh", "-ec", shell, "ledger", json.dumps(values), database],
         input=sql,
         text=True,
         check=True,
@@ -72,9 +73,9 @@ def query(pg, script, values):
     return [json.loads(line) for line in result.stdout.splitlines() if line]
 
 
-def other_counts_sql():
+def other_counts_sql(owners=OWNERS):
     # These counts cover every account outside the two seeded M1 identities, including system/service accounts.
-    exclude = ",".join("'" + value + "'::uuid" for value in OWNERS.values())
+    exclude = ",".join("'" + str(UUID(value)) + "'::uuid" for value in owners.values())
     pairs = [
         f"'{key}',(SELECT count(*) FROM {table} WHERE {field} NOT IN ({exclude}))"
         for key, (table, field) in OTHERS.items()
@@ -108,16 +109,40 @@ def check_downloaded_bundle(downloads):
 def main():
     spec = json.load(sys.stdin)
     pg = pg_target(spec)
+    environment = spec.get("environment", "dev-m1")
+    require(environment in {"dev-m1", "deploy-m6"}, "Unknown M3 candidate")
+    database = "nexpoly_deploy_m6" if environment == "deploy-m6" else "nexpoly_m2_dev"
+    owners = OWNERS
+    workspaces = {k: f"test-user-{k}" for k in OWNERS}
+    if environment == "deploy-m6":
+        members = spec["members"]
+        require(len(members) == 2, "Expected two registered owners")
+        owners = {k: str(UUID(m["user_id"])) for k, m in zip("ab", members, strict=True)}
+        workspaces = {k: m["workspace_user_id"] for k, m in zip("ab", members, strict=True)}
+        (registered,) = query(
+            pg,
+            """
+            SELECT jsonb_object_agg(user_id,workspace_user_id) FROM openscience_m2.workspace_bindings
+                WHERE environment=:'spec'::jsonb->>'environment' AND enabled;
+        """,
+            {"environment": environment},
+            database,
+        )
+        require(
+            registered == dict(zip(owners.values(), workspaces.values(), strict=True))
+            and len(set(owners.values())) == len(set(workspaces.values())) == 2,
+            "Candidate database bindings differ from the enrolled owners",
+        )
     if "users" not in spec:
-        (snapshot,) = query(pg, other_counts_sql(), {})
+        (snapshot,) = query(pg, other_counts_sql(owners), {}, database)
         print(json.dumps({"deployment": spec["deployment"], **snapshot}))
         return
     before = spec["baseline"]
     require(before["deployment"] == spec["deployment"], "Baseline belongs to another deployment")
     users = spec["users"]
-    require(set(users) == set(OWNERS), "Expected both retained test owners")
+    require(set(users) == set(owners), "Expected both enrolled test owners")
     for label, user in users.items():
-        require(str(UUID(user["id"])) == OWNERS[label], "Account differs from the original M2 binding")
+        require(str(UUID(user["id"])) == owners[label], "Account differs from the registered binding")
         require(
             re.fullmatch(r"ses_[A-Za-z0-9_-]{1,150}", user["workspace_session"]),
             "Invalid workspace session",
@@ -133,13 +158,14 @@ def main():
     )
     counts, records, jobs = query(
         pg,
-        other_counts_sql() + CALLS_SQL + JOBS_SQL,
+        other_counts_sql(owners) + CALLS_SQL + JOBS_SQL,
         {
             "since": before["at"],
             "sessions": [v["workspace_session"] for v in users.values()],
             "jobs": [v["job_id"] for v in users.values()],
             "observed": {v["id"]: v["observed"] for v in users.values()},
         },
+        database,
     )
     require(
         counts["other_owners"] == before["other_owners"],
@@ -151,7 +177,7 @@ def main():
         selected = [r for r in records if r["workspace_session"] == user["workspace_session"]]
         operation_count += len(selected)
         output[label] = reconcile(
-            label, user, users["b" if label == "a" else "a"]["job_id"], selected, jobs
+            label, user, users["b" if label == "a" else "a"]["job_id"], selected, jobs, workspaces[label]
         )
         output[label]["verified_bundle_members"] = check_downloaded_bundle(user["downloads"])
     require(operation_count == len(records), "Unaccounted workspace records")
@@ -226,7 +252,7 @@ SELECT COALESCE(jsonb_agg(to_jsonb(evidence)),'[]') FROM evidence;
 """
 
 
-def reconcile(label, user, other_job, operations, all_jobs):
+def reconcile(label, user, other_job, operations, all_jobs, workspace):
     matches = [j for j in all_jobs if j["job_id"] == user["job_id"]]
     require(len(matches) == 1, f"{label}: native DFT task missing")
     job = matches[0]
@@ -253,7 +279,7 @@ def reconcile(label, user, other_job, operations, all_jobs):
     for op in operations:
         tool = op["tool"]
         require(
-            op["workspace_user_id"] == f"test-user-{label}"
+            op["workspace_user_id"] == workspace
             and op["owner_id"] == user["id"]
             and op["login_owned"]
             and op["workspace_bound"]
@@ -366,7 +392,7 @@ def reconcile(label, user, other_job, operations, all_jobs):
         ]
         require(matched, f"{label}/{call['tool']}: requested call was not accounted for")
     return {
-        "workspace": f"test-user-{label}",
+        "workspace": workspace,
         "job_ref": reference(job["job_id"]),
         "dft_authorized_attempts": 1,
         "dft_completed_usage_attempts": 1,

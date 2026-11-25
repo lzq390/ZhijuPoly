@@ -1,10 +1,54 @@
 """Integration checks against a freshly seeded, independent M2 authority database."""
 
 import asyncio
+import json
 import os
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
+
+
+def test_local_deployment_requires_registered_members_and_a_scoped_database(monkeypatch, tmp_path):
+    from app.auth.openscience_candidate import candidate_members, validate_candidate_dsn
+
+    path = tmp_path / "members.json"
+    owners = [
+        {"user_id": str(uuid4()), "username": "member-" + k, "workspace_user_id": "workspace-" + k}
+        for k in "ab"
+    ]
+
+    def store(members, environment="deploy-m6"):
+        path.write_text(json.dumps({"environment": environment, "members": members}))
+
+    monkeypatch.delenv("OPENSCIENCE_CANDIDATE_MEMBERS_FILE", raising=False)
+    with pytest.raises(ValueError, match="explicit member registry"):
+        candidate_members("deploy-m6")
+    store(owners)
+    assert candidate_members("deploy-m6", path) == owners
+    with pytest.raises(ValueError, match="requires the deploy-m6 environment"):
+        candidate_members("dev-m6", path)
+    with monkeypatch.context() as isolated:
+        isolated.delenv("OPENSCIENCE_M2_ENVIRONMENT", raising=False)
+        isolated.setenv("OPENSCIENCE_CANDIDATE_MEMBERS_FILE", str(path))
+        from app.auth.openscience_candidate import authority_environment
+        with pytest.raises(ValueError, match="requires the deploy-m6 environment"):
+            candidate_members(authority_environment())
+    for field in owners[0]:
+        store([owners[0], {**owners[1], field: owners[0][field]}])
+        with pytest.raises(ValueError, match="distinct"):
+            candidate_members("deploy-m6", path)
+    store(owners, "dev-m1")
+    with pytest.raises(ValueError, match="selected candidate"):
+        candidate_members("deploy-m6", path)
+    valid = dict(host="/m2pg", user="m2_auth", dbname="nexpoly_deploy_m6")
+    for change in ({}, {"dbname": "nexpoly_m2_dev"}, {"host": "localhost"}, {"user": "m2_admin"}):
+        dsn = " ".join(f"{key}={value}" for key, value in {**valid, **change}.items())
+        if change:
+            with pytest.raises(ValueError):
+                validate_candidate_dsn("deploy-m6", dsn, "auth")
+        else:
+            validate_candidate_dsn("deploy-m6", dsn, "auth")
 
 
 def test_candidates_cannot_use_each_others_browser_origins(monkeypatch, tmp_path):

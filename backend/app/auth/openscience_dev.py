@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.auth.context import Identity, user_context
-from app.auth.openscience_candidate import PROFILES, authority_environment
+from app.auth.openscience_candidate import PROFILES, authority_environment, candidate_members, validate_candidate_dsn
 from app.auth import openscience_delegation_dev as m3
 from app.auth.middleware import AuthenticationMiddleware
 from app.auth.policy import capabilities
@@ -100,6 +100,8 @@ def create_app():
     operator_id = UUID(operator) if operator is not None else None
     environment = authority_environment()
     profile = PROFILES[environment]
+    members = candidate_members(environment)
+    owner_workspaces = {m["user_id"]: m["workspace_user_id"] for m in members}
     parent = checked_origin("OPENSCIENCE_M2_PARENT_ORIGIN", profile["parent"])
     agent = checked_origin("OPENSCIENCE_M2_AGENT_ORIGIN", profile["agent"])
     other_origins = {
@@ -107,9 +109,10 @@ def create_app():
     }
     if parent in other_origins or agent in other_origins:
         raise ValueError("Candidate origins belong to a different authority")
-    if environment != "dev-m1" and (
-        parent != profile["parent"] or agent != profile["agent"]
-        or os.environ.get("OPENSCIENCE_M3_GATEWAY_TOKEN_FILE") or os.environ.get("OPENSCIENCE_M4_ENABLED") == "1"
+    if environment != "dev-m1" and (parent != profile["parent"] or agent != profile["agent"]):
+        raise ValueError("Candidate origins differ from the registered browser profile")
+    if environment == "dev-m6" and (
+        os.environ.get("OPENSCIENCE_M3_GATEWAY_TOKEN_FILE") or os.environ.get("OPENSCIENCE_M4_ENABLED") == "1"
     ):
         raise ValueError("The AC-22 authority requires its own browser origins and workspace-only profile")
     startup_seconds = int(os.environ.get("OPENSCIENCE_M2_STARTUP_SECONDS", "35"))
@@ -128,13 +131,12 @@ def create_app():
             runtime_environment="dev",
         )
     )
-    from psycopg.conninfo import conninfo_to_dict
-
-    if any(
-        conninfo_to_dict(dsn).get("dbname") != "nexpoly_m2_dev"
-        for dsn in (auth.settings.application_dsn, auth.settings.auth_dsn, auth.settings.service_dsn)
+    for role, dsn in (
+        ("api", auth.settings.application_dsn),
+        ("auth", auth.settings.auth_dsn),
+        ("service", auth.settings.service_dsn),
     ):
-        raise ValueError("M2 authority requires its dedicated development database")
+        validate_candidate_dsn(environment, dsn, role)
     service_secret = Path(os.environ["OPENSCIENCE_M2_ROUTER_TOKEN_FILE"]).read_bytes().strip()
     if not 32 <= len(service_secret) <= 256:
         raise ValueError("Invalid M2 service credential")
@@ -180,6 +182,8 @@ def create_app():
         ).fetchone()["binding"]
         if workspace is None or (operator_id is not None and UUID(str(owner)) != operator_id):
             raise HTTPException(403, "Workspace pilot access is disabled")
+        if environment == "deploy-m6" and owner_workspaces.get(str(owner)) != workspace:
+            raise HTTPException(403, "Workspace owner differs from the candidate registry")
         # Use the real billing/entitlement resolver and the API role's owner RLS.
         # Internal calls start in service_context, so explicitly restore the real owner.
         with user_context(Identity(str(owner), str(login_id)), auth.settings):
@@ -322,12 +326,29 @@ def create_app():
         gateway_key = Path(m3_key_file).read_bytes().strip()
         if not 32 <= len(gateway_key) <= 256 or hmac.compare_digest(service_secret, gateway_key):
             raise ValueError("Use a distinct M3 gateway service credential")
-        m3.install(app, auth, agent, router_identity, gateway_key, inspect_handoff)
+        m3.install(
+            app,
+            auth,
+            agent,
+            router_identity,
+            gateway_key,
+            inspect_handoff,
+            environment=environment,
+            workspaces=frozenset(owner_workspaces.values()),
+        )
         install_native(app)
     if os.environ.get("OPENSCIENCE_M4_ENABLED") == "1":
         from app.auth.openscience_m4_dev import install
 
-        install(app, auth, agent, parent, inspect_handoff)
+        install(
+            app,
+            auth,
+            agent,
+            parent,
+            inspect_handoff,
+            environment=environment,
+            workspaces=frozenset(owner_workspaces.values()),
+        )
     # Auth must establish the original actor before native entitlement and usage admission.
     app.add_middleware(WorkspaceAuthenticationMiddleware, auth_service=auth)
     return app

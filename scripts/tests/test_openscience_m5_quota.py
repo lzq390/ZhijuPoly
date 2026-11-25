@@ -19,6 +19,19 @@ TARGET = "2b1297ff-7b2b-44d4-994e-6dcc63407e47"
 
 
 class QuotaTests(unittest.TestCase):
+    def test_candidate_label_binds_account_workspace_uid_and_phase(self):
+        account = dict(A, environment="deploy-m6", user_id="e89ff385-a3db-4b4d-91ad-564f9b286e9e")
+        label = quota.volume_label(account, "src")
+        self.assertEqual(len(label), 16)
+        self.assertEqual(quota.volume_label(dict(account, gid=A["uid"]), "src"), label)
+        for other in (dict(account, workspace=B["workspace"]), dict(account, uid=B["uid"]),
+                      dict(account, user_id="b60ff385-a3db-4b4d-91ad-564f9b286e9e")):
+            self.assertNotEqual(quota.volume_label(other, "src"), label)
+        self.assertNotEqual(quota.volume_label(account, "dst"), label)
+        self.assertEqual(quota.volume_label(B, "src"), "m5quota-src-b")
+        with self.assertRaises(quota.QuotaError):
+            quota.volume_label(dict(account, user_id="test-user-a"), "src")
+
     def test_linux_uapi_layout(self):
         self.assertEqual(ctypes.sizeof(quota._DiskQuota), 72)
         self.assertEqual(ctypes.sizeof(quota._QuotaStatusV1), 160)

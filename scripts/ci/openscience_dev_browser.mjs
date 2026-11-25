@@ -8,18 +8,36 @@ const require = createRequire(new URL("../../frontend/package.json", import.meta
 const { chromium } = require("playwright");
 const profiles = JSON.parse(await readFile(new URL("../../backend/app/auth/openscience_candidates.json", import.meta.url)));
 
+export function enrolledMembers(stack) {
+  if (stack.environment === "deploy-m6") {
+    assert.equal(stack.members?.length, 2);
+    for (const member of stack.members) assert.equal(member.workspace_user_id, member.user_id);
+    for (const key of ["user_id", "username"]) assert.equal(new Set(stack.members.map(m => m[key])).size, 2);
+    return stack.members;
+  }
+  return ["a", "b"].map((tag, i) => ({
+    username: "test-user-" + tag, workspace_user_id: "test-user-" + tag, user_id: "10000000-0000-4000-8000-00000000000" + (i + 1),
+  }));
+}
+
 export function retainedBindings(stack, registry) {
-  const users = ["test-user-a", "test-user-b"];
-  assert.deepEqual(Object.keys(stack.user_volumes).sort(), users);
+  const environment = stack.environment ?? "dev-m1";
+  const users = enrolledMembers(stack).map(m => m.workspace_user_id);
+  assert.deepEqual(Object.keys(stack.user_volumes).sort(), [...users].sort());
   const bindings = {};
   for (const user of users) {
-    const owner = (stack.environment ?? "dev-m1") + "/" + user;
+    const owner = environment + "/" + user;
     const row = registry.workspaces[owner], volume = stack.user_volumes[user];
     assert.ok(row.initialized && row.uid > 0);
     if (stack.quota_files) {
       const pin = registry.quota_storage[owner], endpoint = registry.nfs_endpoints[owner];
-      assert.deepEqual([pin.environment, pin.user_id, pin.workspace, pin.uid], ["dev-m1", user, row.id, row.uid]);
-      assert.ok(["src-", "dst-"].some(prefix => endpoint.slot === prefix + user.at(-1)));
+      assert.deepEqual([pin.environment, pin.user_id, pin.workspace, pin.uid], [environment, user, row.id, row.uid]);
+      let role = user.at(-1);
+      if (environment === "deploy-m6") {
+        role = Object.keys(registry.candidate_owners).find(k => registry.candidate_owners[k].user_id === user);
+        assert.deepEqual([row.id, row.uid], [registry.candidate_owners[role].workspace, registry.candidate_owners[role].uid]);
+      }
+      assert.ok(["src-", "dst-"].some(prefix => endpoint.slot === prefix + role));
       assert.match(endpoint.run_id, /^[0-9a-f]{12}$/);
       assert.equal(endpoint.volume, "nexpoly-m5-" + endpoint.run_id + "-" + endpoint.slot);
       assert.equal(volume, endpoint.volume);
@@ -70,7 +88,6 @@ export async function developmentBrowser(state, stack, additional = []) {
 }
 
 function siteControls(state, stack) {
-  const A = "test-user-a";
   const authorizedContexts = [];
   const { parent, agent } = stack;
   async function app(c) {
@@ -78,7 +95,8 @@ function siteControls(state, stack) {
     await p.goto(parent + "/", { waitUntil: "domcontentloaded" });
     return p;
   }
-  async function login(p, user) {
+  async function login(p, user, credential = user === "test-user-a" ? "a" : "b") {
+    assert.ok(credential === "a" || credential === "b");
     const sidebar = p.locator(".np-sidebar-desktop");
     await sidebar.getByRole("button", { name: "游客账号菜单", exact: true }).click({ timeout: 25000 });
     await p.getByRole("menuitem", { name: "登录", exact: true }).click();
@@ -86,7 +104,7 @@ function siteControls(state, stack) {
     await form.getByLabel("用户名", { exact: true }).fill(user);
     await form
       .getByLabel("密码", { exact: true })
-      .fill((await readFile(resolve(state, "credentials", user === A ? "a" : "b"), "utf8")).trim());
+      .fill((await readFile(resolve(state, "credentials", credential), "utf8")).trim());
     await Promise.all([
       p.waitForResponse((r) => r.url() === parent + "/api/v1/auth/login" && r.status() === 200),
       form.getByRole("button", { name: "登录", exact: true }).click(),

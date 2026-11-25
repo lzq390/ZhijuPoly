@@ -16,6 +16,33 @@ import water_pool
 
 
 class StorageProfileTest(unittest.TestCase):
+    def test_split_candidate_rejects_replaced_or_crossed_disks(self):
+        with TemporaryDirectory() as tmp, patch.object(vm, "secondary", return_value=("primary-id", "backup-id")):
+            root = Path(tmp)
+            backup = root / "separate"
+            backup.mkdir()
+            layout = vm.disk_layout(root, backup)
+            pins = {}
+            for serial, (path, size) in layout.items():
+                expected = root if serial in ("m5-a", "m5-b") else backup
+                self.assertEqual(path.parent, expected)
+                with path.open("xb") as stream:
+                    stream.truncate(size)
+                path.chmod(0o600)
+                pins[serial] = path.stat().st_ino
+            config = dict(backup_dir=str(backup), host_disks=dict(primary="primary-id", backup="backup-id"),
+                          disk_inodes=pins)
+            self.assertEqual(vm.checked_layout(root, config), layout)
+            with self.assertRaisesRegex(ValueError, "disks changed"):
+                vm.checked_layout(root, {**config, "host_disks": dict(primary="other", backup="backup-id")})
+            disk, size = layout["m5-backup"]
+            disk.rename(backup / "prior.raw")
+            with disk.open("xb") as stream:
+                stream.truncate(size)
+            disk.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "retained M5 disk"):
+                vm.checked_layout(root, config)
+
     def test_only_explicit_fresh_layout_can_attach_raw(self):
         layout = {"filesystem_uuid": "pinned", "sources": {"a": "A", "b": "B"}}
         with TemporaryDirectory() as tmp, patch.object(vm, "launch_pinned") as start:

@@ -1,4 +1,4 @@
-"""Manage byte hard limits for the two dev-m1 owners on dedicated ext4 test filesystems."""
+"""Manage byte hard limits for registered workspace owners on dedicated ext4 filesystems."""
 
 import argparse
 import ctypes
@@ -56,12 +56,24 @@ def _identity(binding):
         raise QuotaError("Expected a dev-m1 workspace binding")
     keys = ("environment", "user_id", "workspace", "uid")
     result = {key: binding.get(key) for key in keys}
-    if (result["environment"] != "dev-m1" or result["user_id"] not in ("test-user-a", "test-user-b")
+    pilot = result["environment"] == "dev-m1" and result["user_id"] in ("test-user-a", "test-user-b")
+    candidate = (result["environment"] == "deploy-m6" and isinstance(result["user_id"], str)
+                 and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", result["user_id"]))
+    if (not (pilot or candidate)
             or not isinstance(result["workspace"], str) or not re.fullmatch("[0-9a-f]{32}", result["workspace"])
             or type(result["uid"]) is not int or not 210000 <= result["uid"] < 100210000
             or binding.get("gid", result["uid"]) != result["uid"]):
-        raise QuotaError("Invalid retained dev-m1 workspace binding")
+        raise QuotaError("Invalid workspace quota binding")
     return result
+
+
+def volume_label(binding, stage):
+    owner = _identity(binding)
+    if stage not in ("src", "dst"):
+        raise QuotaError("Unknown workspace storage phase")
+    if owner["environment"] == "dev-m1":
+        return f"m5quota-{stage}-{owner['user_id'][-1]}"
+    return f"nc{stage[0]}-{snapshot_digest(owner)[:12]}"
 
 
 def _hard_kib(value):
@@ -114,10 +126,9 @@ def _filesystem(mount, owner, role=None):
     result = subprocess.run(["blkid", "-p", "-o", "export", str(device)], check=True,
                             capture_output=True, text=True, timeout=5)
     metadata = dict(line.split("=", 1) for line in result.stdout.splitlines())
-    suffix = owner["user_id"][-1]
-    labels = {f"m5quota-{stage}-{suffix}" for stage in ([role] if role else ["src", "dst"])}
+    labels = {volume_label(owner, stage) for stage in ([role] if role else ["src", "dst"])}
     if metadata.get("TYPE") != "ext4" or metadata.get("LABEL") not in labels:
-        raise QuotaError("Device label does not identify this owner's independent dev-m1 test volume")
+        raise QuotaError("Device label does not identify this owner's independent volume")
     fs_uuid = str(UUID(metadata["UUID"]))
     status = _QuotaStatusV1(version=1)
     _call(device, Q_XGETQSTATV, 0, status)
