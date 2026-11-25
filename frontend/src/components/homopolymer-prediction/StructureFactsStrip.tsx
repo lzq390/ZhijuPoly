@@ -79,11 +79,14 @@ function FactList({ descriptors }: { descriptors: StructureDescriptorResponse })
             >
               <span className="np-hp-fact__label">{fact.label}</span>
               <span className="np-hp-fact__value">
-                {fact.key === "formula"
-                  ? formulaParts(value).map((part, partIndex) =>
+                {fact.key === "formula" ? (
+                  // One inline run, so the value's flex gap separates the formula from its unit, not each element from its count.
+                  <span className="np-hp-fact__formula">
+                    {formulaParts(value).map((part, partIndex) =>
                       part.sub ? <sub key={partIndex}>{part.text}</sub> : <span key={partIndex}>{part.text}</span>
-                    )
-                  : value}
+                    )}
+                  </span>
+                ) : value}
                 {fact.unit ? <small>{fact.unit}</small> : null}
                 {flagged ? <AlertTriangle aria-hidden="true" /> : null}
               </span>

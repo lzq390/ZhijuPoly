@@ -3,7 +3,7 @@ import {
   useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode
 } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUpRight, CircleAlert, LoaderCircle, Sparkles, X } from "lucide-react";
+import { ArrowUpRight, CircleAlert, CircleDot, LoaderCircle, Sparkles, X } from "lucide-react";
 import { useKnowledgeRecording } from "../../hooks/useKnowledgeRecording";
 import { ModalFocusSuspendedContext } from "../../hooks/useModalFocus";
 import type { ActiveModule } from "../../routing";
@@ -127,7 +127,7 @@ export function BrowsingRecordingControls({ module, placement = "page" }: {
       aria-expanded={ui.open} aria-controls={ui.open ? ui.panelId : undefined} aria-describedby={hintId}
       onClick={handleClick}>
       {busy ? <LoaderCircle size={16} className="ks-recording-spinner" aria-hidden="true" />
-        : phase === "recording" ? <span className="ks-recording-dot" aria-hidden="true" /> : <Sparkles size={16} aria-hidden="true" />}
+        : phase === "recording" ? <span className="ks-recording-dot" aria-hidden="true" /> : <CircleDot size={16} aria-hidden="true" />}
       {!compact ? label : null}
       {notice ? <CircleAlert size={12} className="np-recording-warning" aria-hidden="true" /> : null}
     </button>

@@ -329,7 +329,7 @@ function ResultTable({
           <th aria-hidden="true" className="np-hp-table__scale-head" />
           <th scope="col" className="is-num">本次</th>
           {compare ? <th scope="col" className="is-num">对比</th> : null}
-          {compare ? <th scope="col" className="is-num">变化</th> : null}
+          {compare ? <th scope="col" className="is-num is-delta">变化</th> : null}
         </tr>
       </thead>
       {groupedProperties(properties).map(({ group, properties: groupProperties }) => (
@@ -508,7 +508,9 @@ export function HomopolymerPredictionPanel({
               <ChevronDown className={selectionOpen ? "is-flipped" : undefined} aria-hidden="true" />
             </button>
           </div>
-          {selectionOpen || (selectedProperties.length > 0 && selectedProperties.length < PREDICTABLE_PROPERTIES.length) ? (
+          {/* The badge already gives the total and the open editor counts each group, so the line
+              only names a partial selection while collapsed, or says why nothing can run. */}
+          {selectedProperties.length === 0 || (!selectionOpen && selectedProperties.length < PREDICTABLE_PROPERTIES.length) ? (
             <p className="np-hp-selection__detail">{summary.detail}</p>
           ) : null}
           {!selectionOpen ? (

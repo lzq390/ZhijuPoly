@@ -9,6 +9,9 @@ export type ModuleTool = {
   pressed?: boolean;
   /** Shows progress in place of the icon, e.g. while the assistant is answering. */
   busy?: boolean;
+  /** A short tag after the label for an entry that opens but is not in service yet, e.g. "未开放".
+      The mark drops the action colour so the entry does not read as the primary tool. */
+  status?: string;
   controls?: string;
   buttonRef?: RefObject<HTMLButtonElement | null>;
   onClick: () => void;
@@ -30,6 +33,7 @@ function ToolButton({ tool }: { tool: ModuleTool }) {
       type="button"
       className={`np-module-tools__button${tool.pressed ? " is-pressed" : ""}`}
       data-module-tool={tool.id}
+      data-status={tool.status ? "" : undefined}
       aria-pressed={tool.pressed}
       aria-controls={tool.controls}
       aria-busy={tool.busy || undefined}
@@ -37,6 +41,8 @@ function ToolButton({ tool }: { tool: ModuleTool }) {
     >
       {tool.busy ? <LoaderCircle className="np-module-tools__spin" aria-hidden="true" /> : tool.icon}
       <span>{tool.label}</span>
+      {/* The hidden comma makes the accessible name read "AI 助手，未开放" rather than run together. */}
+      {tool.status ? <span className="np-module-tools__status"><span className="np-module-tools__sr">，</span>{tool.status}</span> : null}
     </button>
   );
 }

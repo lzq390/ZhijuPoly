@@ -180,7 +180,11 @@ describe("HomopolymerPropertyPredictionPage", () => {
 
     fireEvent.click(within(editor).getAllByRole("button", { name: "选择本组" })[0]);
     expect(within(editor).getByText("已选 4 / 9 项")).toBeTruthy();
-    expect(within(editor).getByText("Tg、Tm、Td、失重率")).toBeTruthy();
+    // While open, the tiles show which ones; the collapsed bar names a partial selection.
+    expect(within(editor).queryByText("Tg、Tm、Td、失重率")).toBeNull();
+    fireEvent.click(within(editor).getByRole("button", { name: "收起" }));
+    expect(within(panel()).getByText("Tg、Tm、Td、失重率")).toBeTruthy();
+    fireEvent.click(within(panel()).getByRole("button", { name: "调整" }));
     fireEvent.click(within(editor).getByRole("button", { name: "全选" }));
     run();
 
@@ -468,7 +472,7 @@ describe("HomopolymerPropertyPredictionPage", () => {
 
   it("AI 助手在辅助栏打开，与使用说明共用一个辅助栏", () => {
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
-    const ai = screen.getByRole("button", { name: "AI 助手" });
+    const ai = screen.getByRole("button", { name: /^AI 助手\s*，\s*未开放$/ });
     const help = screen.getByRole("button", { name: "使用说明" });
 
     fireEvent.click(ai);
@@ -492,7 +496,7 @@ describe("HomopolymerPropertyPredictionPage", () => {
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
     run();
     await waitFor(() => expect(within(resultsTable()).getByText("123")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "AI 助手" }));
+    fireEvent.click(screen.getByRole("button", { name: /^AI 助手\s*，\s*未开放$/ }));
     const panel = screen.getByRole("tabpanel", { name: "AI 助手" });
 
     expect(within(panel).getByLabelText("AI 可读取的页面内容").textContent).toContain("1 项预测结果");

@@ -10,7 +10,9 @@
   --np-sidebar-surface: #ffffff;
   --np-sidebar-text: #0b1f3a;
   --np-sidebar-text-secondary: #58708d;
-  --np-sidebar-text-muted: #8da1b8;
+  /* Meta text (counts, hints, subtitles) at 11–12px: #8da1b8 read at 2.5:1. This keeps a cooler
+     grey than the secondary text and still reaches 4.5:1 on the sidebar and workspace grounds. */
+  --np-sidebar-text-muted: #5b6f87;
   --np-sidebar-primary: #2563eb;
   --np-sidebar-primary-strong: #1d4ed8;
   --np-sidebar-cyan: #0891b2;
@@ -389,9 +391,11 @@
   background: rgba(239, 246, 255, 0.72);
 }
 
+/* The active row's words use the deeper blue (5.8:1 on its tint; the action blue was 4.48:1);
+   its icon keeps the action blue. */
 .np-sidebar-module[data-active="true"],
 .np-sidebar-list-item[data-active="true"] {
-  color: var(--np-sidebar-primary);
+  color: var(--np-sidebar-primary-strong);
   border-color: transparent;
   background: rgba(37, 99, 235, 0.065);
   box-shadow: none;

@@ -47,6 +47,34 @@
   color: var(--np-theme-blue, #2563eb);
 }
 
+/* An entry that is not in service yet keeps the plain tool colour and says so in a quiet tag. */
+.np-module-tools__button[data-status] svg {
+  color: #5f6b80;
+}
+
+.np-module-tools__button .np-module-tools__status {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #5f6b80;
+  background: #f1f4f8;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.np-module-tools__button:hover .np-module-tools__status {
+  background: #e4e8ef;
+}
+
+.np-module-tools__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .np-module-tools__button:hover {
   color: #101a2e;
   background: #f1f4f8;
@@ -153,6 +181,11 @@
   .np-module-tools .np-module-tools__button {
     padding: 0 14px;
     border-radius: 10px;
+  }
+
+  .np-module-tools__button .np-module-tools__status {
+    padding: 3px 8px;
+    font-size: 13px;
   }
 
   .np-module-tools .np-recording-entry .ks-recording-trigger {

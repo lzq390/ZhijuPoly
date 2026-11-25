@@ -920,6 +920,17 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
   line-height: 1.45;
 }
 
+/* Most SMILES are one line, so the field is one line tall and grows with long input (about three
+   lines, then it scrolls) instead of always reserving the shared component's two rows. Browsers
+   without field-sizing keep the two rows. */
+@supports (field-sizing: content) {
+  .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > textarea {
+    max-height: calc(3lh + 48px);
+    overflow-y: auto;
+    field-sizing: content;
+  }
+}
+
 .np-structure-workbench.np-homopolymer-prediction .np-sw-smiles > textarea::placeholder {
   color: var(--np-hp-muted);
   font-family: var(--font-body);
@@ -1118,6 +1129,10 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
   color: var(--np-hp-muted);
   font-size: 0.92em;
   font-weight: 400;
+}
+
+.np-homopolymer-prediction .np-hp-fact__formula {
+  white-space: nowrap;
 }
 
 .np-homopolymer-prediction .np-hp-fact__value sub {
@@ -1394,9 +1409,12 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
   height: 100%;
 }
 
-/* Duplicates on this page: the canvas syncs SMILES continuously, and our toolbar already clears. */
+/* Duplicates on this page: the canvas syncs SMILES continuously, and our toolbar already clears,
+   loads (示例／我的结构), saves (保存结构) and explains (使用说明). Ketcher's Open, Save as and
+   Help would sit one row below with the same folder, floppy and question icons but different
+   meanings (a file dialog, a file download, an English help page). */
 .np-structure-workbench.np-homopolymer-prediction .np-sw-tool[data-workbench-tool="sync"],
-.np-structure-workbench.np-homopolymer-prediction .Ketcher-root [data-testid="clear-canvas"] {
+.np-structure-workbench.np-homopolymer-prediction .Ketcher-root :is([data-testid="clear-canvas"], [data-testid="open-file-button"], [data-testid="save-file-button"], [data-testid="help-button"]) {
   display: none;
 }
 
@@ -1671,6 +1689,20 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
   font-size: var(--np-hp-fs-sm);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------- module dock placement ---------- */
+/* Below 1800px the dock floats instead of pushing. The platform default floats it over the right
+   edge, which here is the task panel: the help section that explains the results, and the assistant
+   that discusses them, would hide the very results. While the panel sits beside the canvas (≥ 900px
+   workbench), the dock floats just left of the panel instead, over the canvas. The offset repeats
+   the panel column's own clamp, whose 42% is of the same width (the frame is the grid). */
+@media (min-width: 900px) and (max-width: 1799px) {
+  @container np-sw-workbench (min-width: 900px) {
+    .np-structure-workbench.np-homopolymer-prediction .np-hp-frame > .np-module-dock {
+      right: calc(clamp(var(--np-hp-panel-min), 42%, var(--np-hp-panel-max)) + 8px);
+    }
+  }
 }
 
 /* ---------- help (module dock): quick start, a sticky index, then one card per topic ---------- */
@@ -2499,10 +2531,11 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
   font-size: 11.5px;
 }
 
+/* Selected tiles stay white: the channel colour lives only in the filled check (and the group
+   badge), so nine selected tiles no longer outshout the run button and the results. */
 .np-homopolymer-prediction .np-hp-chip.is-selected {
   color: var(--np-hp-ink);
-  background: color-mix(in srgb, var(--np-hp-channel) 7%, #fff);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--np-hp-channel) 42%, transparent);
+  box-shadow: inset 0 0 0 1px var(--np-hp-tick);
 }
 
 .np-homopolymer-prediction .np-hp-chip.is-selected .np-hp-chip__check {
@@ -3125,6 +3158,12 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
 
 .np-homopolymer-prediction .np-hp-delta.is-down::before {
   border-top: 5px solid currentColor;
+}
+
+/* The change column keeps room for the tint's overhang, so the tinted chip ends at the table edge
+   while its number still lines up with the plain changes and the header. */
+.np-homopolymer-prediction .np-hp-table .is-num.is-delta {
+  padding-right: 6px;
 }
 
 /* Changes over 20%: bold on a tint of the same colour. */
@@ -3837,6 +3876,12 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
 }
 
 @container np-sw-workbench (max-width: 559px) {
+  /* Ketcher's phone toolbar runs ~60px past the canvas edge, so the zoom selector (and its rule)
+     would show only as a clipped "1"; it was off-screen before Open/Save left. Drop it here. */
+  .np-structure-workbench.np-homopolymer-prediction .Ketcher-root [data-testid="top-toolbar"] > div > :is(:has(> [data-testid="zoom-selector"]), hr:has(+ :has(> [data-testid="zoom-selector"]))) {
+    display: none;
+  }
+
   .np-structure-workbench.np-homopolymer-prediction .np-sw-empty-state {
     padding: 52px 60px 48px;
   }
