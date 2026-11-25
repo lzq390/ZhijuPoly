@@ -461,12 +461,16 @@ class Registry:
             raise Problem("Only the claimed native development quota volumes support the shared pool")
         policy = dict(filesystem_uuid=fs_uuid, low_bytes=low_mib * 1024**2, recover_bytes=recover_mib * 1024**2)
         self.validate_watermark(policy)
-        if self.data.get("disk_watermark", policy) != policy:
+        candidate = bool(self.data.get("candidate_owners"))
+        if not candidate and self.data.get("disk_watermark", policy) != policy:
             raise Problem("A different global disk policy is already configured")
         if self.data["format"] != 5:
             if self.resident_ids() or any(docker("ps", "-aq", "--filter", "volume=" + v["volume"])
                                           for v in self.data["nfs_endpoints"].values()):
                 raise Problem("Recycle and detach both workspaces before first registering the shared pool")
+        if candidate:
+            return pilot_module("candidate_water").configure(self, policy, alert_socket)
+        if self.data["format"] != 5:
             self.pool_command("preflight", policy)
             # Pin the required guard before enabling the guest. A failed setup is
             # closed to admissions and can only be retried with the same policy.
@@ -481,6 +485,8 @@ class Registry:
         if policy is None:
             return {"configured": False, "write_allowed": True}
         try:
+            if self.data.get("candidate_owners"):
+                return pilot_module("candidate_water").command(self, action, policy)
             return self.pool_command(action, policy)
         except (OSError, ValueError, TypeError, KeyError, Problem, subprocess.SubprocessError) as error:
             raise Problem("workspace_disk_monitor_unavailable") from error
@@ -1229,9 +1235,9 @@ def main():
     nfs.add_argument("--phase", required=True, choices=("src", "dst"))
     nfs.add_argument("--bindings", type=Path, required=True)
     nfs.add_argument("--readiness-seconds", type=int)
-    water = commands.add_parser("set-disk-watermark", help="Register the shared ext4 pool and enable its storage monitor")
-    water.add_argument("--filesystem-uuid", required=True)
-    water.add_argument("--alert-socket", help="Deliver disk transitions to this Unix HTTP receiver on the storage guest")
+    water = commands.add_parser("set-disk-watermark", help="Configure free-space monitoring for the registered ext4 storage")
+    water.add_argument("--filesystem-uuid", required=True, help="Host backing filesystem UUID for deploy-m6, guest pool UUID for dev-m1")
+    water.add_argument("--alert-socket", help="Unix HTTP receiver path on the deploy-m6 host or the dev-m1 storage guest")
     water.add_argument("--low-mib", required=True, type=int)
     water.add_argument("--recover-mib", required=True, type=int)
     status = commands.add_parser("disk-watermark", help="Measure the pool or read persisted operator evidence")

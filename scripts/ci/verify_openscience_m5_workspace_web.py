@@ -34,7 +34,7 @@ def provision_code(guest):
             "ci/openscience_m5_guest_lifecycle.py",
         )
     ]
-    paths.extend(OPS / name for name in ("quota.py", "quota-guest.py", "quota_nfs.py"))
+    paths.extend(OPS / name for name in ("quota.py", "quota-guest.py", "quota_nfs.py", "candidate_gate.py", "water_pool.py"))
     with tempfile.TemporaryFile() as stream:
         with tarfile.open(fileobj=stream, mode="w") as archive:
             for path in paths:

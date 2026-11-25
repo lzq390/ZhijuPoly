@@ -95,7 +95,7 @@ def candidate_medium(endpoint):
     return pin
 
 
-def host_free_mib(pin):
+def host_space(pin):
     # Measure on the open backing image, even when Docker and the quota guest live on different disks.
     fd = os.open(pin["file"], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
@@ -105,9 +105,14 @@ def host_free_mib(pin):
                 or (device, info.st_ino) != (pin["device"], pin["inode"])):
             raise ValueError("Deployment storage medium differs from its registered host image")
         space = os.fstatvfs(fd)
-        return space.f_bavail * space.f_frsize // 1024**2
+        return space.f_bavail * space.f_frsize, space.f_blocks * space.f_frsize
     finally:
         os.close(fd)
+
+
+def host_free_mib(pin):
+    available, _ = host_space(pin)
+    return available // 1024**2
 
 
 def guest_client(endpoint):

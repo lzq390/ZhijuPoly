@@ -1,4 +1,4 @@
-"""Ordered delivery of a storage guest's immutable watermark events to its configured local receiver."""
+"""Ordered delivery of immutable watermark events to the configured local receiver."""
 
 from datetime import datetime, timezone
 import fcntl
@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import socket
 import sys
-import time
+from threading import Event
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from openscience_per_user_dev import write_atomic  # noqa: E402
@@ -26,7 +26,12 @@ def save(root, record):
     )
 
 
-def register(root, path, filesystem_uuid):
+def event_id(filesystem_uuid, sequence, deployment=None):
+    prefix = f"{deployment}:" if deployment is not None else ""
+    return f"{prefix}{filesystem_uuid}:{sequence}"
+
+
+def register(root, path, filesystem_uuid, *, deployment=None):
     """The monitor lock protects first registration. Re-running configure preserves the last receipt."""
     if (
         not isinstance(path, str)
@@ -39,27 +44,37 @@ def register(root, path, filesystem_uuid):
     config = root / "receiver.json"
     if config.exists():
         record = read(config)
-        if (record["socket"], record["filesystem_uuid"]) != (path, filesystem_uuid):
-            raise ValueError("Existing receiver belongs to another socket or pool")
+        if (record["socket"], record["filesystem_uuid"], record.get("deployment")) != (
+            path,
+            filesystem_uuid,
+            deployment,
+        ):
+            raise ValueError(
+                "Existing receiver belongs to another socket, pool or deployment"
+            )
         next_sequence(record)
         return
     state_file = root / "state.json"
     current = read(state_file) if state_file.exists() else {}
-    if current and current["filesystem_uuid"] != filesystem_uuid:
-        raise ValueError("Receiver pool differs from the monitored pool")
+    if current and (current["filesystem_uuid"], current.get("deployment")) != (
+        filesystem_uuid,
+        deployment,
+    ):
+        raise ValueError("Receiver pool or deployment differs from the monitored pool")
     # Include an outstanding incident if the operator subscribes after it was raised.
     first = current.get("sequence", 0) + (
         0 if current.get("state") in ("low", "unavailable") else 1
     )
-    save(
-        root,
-        {
-            "socket": path,
-            "filesystem_uuid": filesystem_uuid,
-            "first_sequence": first,
-            "last_receipt": None,
-        },
-    )
+    record = {
+        "socket": path,
+        "filesystem_uuid": filesystem_uuid,
+        "first_sequence": first,
+        "last_receipt": None,
+        "receipts": [],
+    }
+    if deployment is not None:
+        record["deployment"] = deployment
+    save(root, record)
 
 
 def next_sequence(record, latest=None):
@@ -72,7 +87,8 @@ def next_sequence(record, latest=None):
         if (
             type(ack) is not int
             or ack < seq
-            or receipt["id"] != f"{record['filesystem_uuid']}:{ack}"
+            or receipt["id"]
+            != event_id(record["filesystem_uuid"], ack, record.get("deployment"))
         ):
             raise ValueError("Invalid watermark receiver receipt")
         seq = ack + 1
@@ -93,7 +109,7 @@ def retain(root, sequence):
 
 
 def post(path, event):
-    # No DNS, proxy, redirects or TCP. The operator supplies a receiver on this guest.
+    # No DNS, proxy, redirects or TCP. The operator supplies a local receiver.
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
         peer.settimeout(2)
         peer.connect(path)
@@ -126,8 +142,11 @@ def send_next(root, history):
         record = read(root / "receiver.json")
         state = read(root / "state.json")
         fs = record["filesystem_uuid"]
-        if state["filesystem_uuid"] != fs:
-            raise ValueError("Receiver pool differs from the recorded observation")
+        deployment = record.get("deployment")
+        if (state["filesystem_uuid"], state.get("deployment")) != (fs, deployment):
+            raise ValueError(
+                "Receiver pool or deployment differs from the recorded observation"
+            )
         seq = next_sequence(record, state["sequence"])
         if record["last_receipt"] and seq - 1 <= state["sequence"] - history:
             # Also finish a prune interrupted immediately after committing its receipt.
@@ -135,27 +154,38 @@ def send_next(root, history):
         if seq > state["sequence"]:
             return False
         event = read(root / "alerts" / f"{seq:012d}.json")
-        if (event["id"], event["filesystem_uuid"], event["sequence"]) != (
-            f"{fs}:{seq}",
-            fs,
-            seq,
+        if (
+            event["id"] != event_id(fs, seq, deployment)
+            or event["filesystem_uuid"] != fs
+            or event["sequence"] != seq
+            or event.get("deployment") != deployment
         ):
             raise ValueError("Watermark feed contains a different event")
         post(record["socket"], event)
-        record["last_receipt"] = {
+        # Older configurations only recorded their last acknowledgement. Preserve
+        # it, without fabricating receipts for earlier events. Commit history and
+        # cursor together so a retry after interruption uses the same event ID.
+        previous = record["last_receipt"]
+        receipts = record.get("receipts", [previous] if previous else [])
+        receipt = {
             "id": event["id"],
             "sequence": seq,
+            "notification": event["notification"],
             "at": datetime.now(timezone.utc).isoformat(),
         }
+        record["last_receipt"] = receipt
+        record["receipts"] = (receipts + [receipt])[-history:]
         save(root, record)
         return True
 
 
-def serve(root, history, cadence):
+def serve(root, history, cadence, *, stop=None):
+    if stop is None:
+        stop = Event()
     last_error = None
-    while True:
+    while not stop.is_set():
         try:
-            sent = send_next(root, history)
+            sent = (root / "receiver.json").exists() and send_next(root, history)
             if last_error:
                 print("Watermark receiver resumed", file=sys.stderr, flush=True)
             last_error = None
@@ -174,4 +204,4 @@ def serve(root, history, cadence):
                     "Watermark delivery pending:", message, file=sys.stderr, flush=True
                 )
             last_error = message
-        time.sleep(cadence)
+        stop.wait(cadence)

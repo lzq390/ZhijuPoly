@@ -114,12 +114,23 @@ def low_water(policy, previous, free):
     )
 
 
-def observe(root, policy, pool, *, stopped=False):
+def observe(root, policy, pool, *, stopped=False, refresh=False):
     """Serialize monitor polls with synchronous write and start admission. The caller holds monitor.lock."""
     state_file = root / "state.json"
     previous = read(state_file) if state_file.exists() else {}
-    if previous and previous["filesystem_uuid"] != policy["filesystem_uuid"]:
-        raise ValueError("Watermark state belongs to a different filesystem")
+    identity = {}
+    if policy.get("environment") == "deploy-m6":
+        identity = {
+            "environment": policy["environment"],
+            "deployment": policy["claim"]["deployment"],
+        }
+    if previous and (
+        previous["filesystem_uuid"] != policy["filesystem_uuid"]
+        or previous.get("deployment") != identity.get("deployment")
+    ):
+        raise ValueError(
+            "Watermark state belongs to a different filesystem or deployment"
+        )
     deliver(root, previous.get("last_transition"))
     old = previous.get("state")
     sample = None
@@ -134,7 +145,9 @@ def observe(root, policy, pool, *, stopped=False):
         low = low_water(policy, old, sample["available_bytes"])
         state = "low" if low else "normal"
         target = "block" if low else "open"
-        if any(v["group_gate"] != target for v in sample["workspaces"].values()):
+        if refresh or any(
+            v["group_gate"] != target for v in sample["workspaces"].values()
+        ):
             sample = checked_sample(policy, pool.gate(target, policy))
             # Background I/O can consume the recovered margin while the two
             # kernel limits are opening. Check the returned physical sample.
@@ -165,7 +178,9 @@ def observe(root, policy, pool, *, stopped=False):
     if old != state and (old is not None or state != "normal"):
         seq += 1
         last = dict(
-            id=f"{policy['filesystem_uuid']}:{seq}",
+            id=water_alerts.event_id(
+                policy["filesystem_uuid"], seq, identity.get("deployment")
+            ),
             sequence=seq,
             previous=old,
             state=state,
@@ -180,6 +195,7 @@ def observe(root, policy, pool, *, stopped=False):
             recover_bytes=policy["recover_bytes"],
             filesystem_uuid=policy["filesystem_uuid"],
             reason=reason,
+            **identity,
         )
     current = dict(
         configured=True,
@@ -196,6 +212,7 @@ def observe(root, policy, pool, *, stopped=False):
         total_bytes=sample["total_bytes"] if sample else None,
         available_bytes=sample["available_bytes"] if sample else None,
         workspaces=sample["workspaces"] if sample else {},
+        **identity,
     )
     if gate_errors:
         current["gate_errors"] = gate_errors
@@ -204,6 +221,39 @@ def observe(root, policy, pool, *, stopped=False):
     publish(state_file, current)
     deliver(root, last)
     return current
+
+
+def alerts_status(root):
+    """Read the operator feed while the caller holds the monitor lock."""
+    snapshot = read(root / "state.json")
+    seq = snapshot["sequence"]
+    try:
+        receiver = read(root / "receiver.json")
+    except FileNotFoundError:
+        receiver = None
+    pending = 0
+    if receiver is not None:
+        if (receiver["filesystem_uuid"], receiver.get("deployment")) != (
+            snapshot["filesystem_uuid"],
+            snapshot.get("deployment"),
+        ):
+            raise ValueError(
+                "Receiver and event feed belong to different pools or deployments"
+            )
+        pending = seq - water_alerts.next_sequence(receiver, seq) + 1
+        last = receiver["last_receipt"]
+        receiver.setdefault("receipts", [last] if last else [])
+    return {
+        "configured": True,
+        "filesystem_uuid": snapshot["filesystem_uuid"],
+        "alerts": [
+            read(root / "alerts" / f"{n:012d}.json")
+            for n in range(max(1, seq - HISTORY + 1), seq + 1)
+        ],
+        "subscribed": receiver is not None,
+        "receiver": receiver,
+        "pending": pending,
+    }
 
 
 def stop_guard(root, policy, pool, *, shutting_down):
@@ -375,26 +425,7 @@ def main():
         raise ValueError("No matching installed global pool policy")
     with locked(ROOT):
         if args.action == "alerts":
-            snapshot = read(ROOT / "state.json")
-            seq = snapshot["sequence"]
-            spool = ROOT / "alerts"
-            receiver = (
-                read(ROOT / "receiver.json")
-                if (ROOT / "receiver.json").exists()
-                else None
-            )
-            result = {
-                "configured": True,
-                "filesystem_uuid": policy["filesystem_uuid"],
-                "alerts": [
-                    read(spool / f"{n:012d}.json")
-                    for n in range(max(1, seq - HISTORY + 1), seq + 1)
-                ],
-                "receiver": receiver,
-                "pending": seq - water_alerts.next_sequence(receiver, seq) + 1
-                if receiver
-                else 0,
-            }
+            result = alerts_status(ROOT)
         elif args.action == "observed":
             result = read(ROOT / "state.json")
         else:

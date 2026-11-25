@@ -11,7 +11,7 @@ import stat
 import subprocess
 import sys
 import threading
-from openscience_per_user_dev import DEFAULT_READY_SECONDS, Registry
+from openscience_per_user_dev import DEFAULT_READY_SECONDS, Registry, pilot_module
 from openscience_m5_offline_file import web_cleanup
 
 
@@ -132,15 +132,24 @@ def serve(root, interval):
             stopping = threading.Event()
             for signum in (signal.SIGINT, signal.SIGTERM):
                 signal.signal(signum, lambda *_: stopping.set())
-            worker = threading.Thread(target=reaper, args=(root, interval, stopping))
+            workers = [threading.Thread(target=reaper, args=(root, interval, stopping))]
+            if Registry(root).data.get("candidate_owners"):
+                host = pilot_module("candidate_water")
+                workers.extend([threading.Thread(target=host.poll, args=(root, stopping)),
+                                threading.Thread(target=host.water_monitor.water_alerts.serve,
+                                                 args=(root / "host-watermark", host.water_monitor.HISTORY,
+                                                       host.water_monitor.CADENCE_SECONDS), kwargs={"stop": stopping})])
             try:
-                worker.start()
+                for worker in workers:
+                    worker.start()
                 print(f"M1 supervisor listening on {address}", flush=True)
                 while not stopping.is_set():
                     server.handle_request()
             finally:
                 stopping.set()
-                worker.join()
+                for worker in workers:
+                    if worker.ident is not None:
+                        worker.join()
                 address.unlink(missing_ok=True)
 
 

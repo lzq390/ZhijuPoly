@@ -156,8 +156,90 @@ class WatermarkTest(unittest.TestCase):
                     list(range(1, 9)),
                 )
             self.assertEqual([e["sequence"] for e in self.events()], [6, 7, 8])
+            status = monitor.alerts_status(self.root)
+            self.assertTrue(status["subscribed"])
+            self.assertEqual(status["pending"], 0)
+            self.assertEqual(
+                [r["id"] for r in status["receiver"]["receipts"]],
+                [e["id"] for e in self.events()],
+            )
             with self.assertRaises(ValueError):
                 water_alerts.register(self.root, str(self.root / "other.sock"), fs)
+
+    def test_shared_host_filesystem_namespaces_receipts_and_refreshes_kernel_gates(
+        self,
+    ):
+        deployment = str(uuid4())
+        self.policy.update(environment="deploy-m6")
+        self.claim["deployment"] = deployment
+        fs = self.policy["filesystem_uuid"]
+        sock = str(self.root / "receiver.sock")
+        with patch.object(self.pool, "gate", wraps=self.pool.gate) as gate:
+            self.assertTrue(self.observed(refresh=True)["write_allowed"])
+            gate.assert_called_once_with("open", self.policy)
+        self.pool.free = 50
+        self.observed()
+        unsubscribed = monitor.alerts_status(self.root)
+        self.assertFalse(unsubscribed["subscribed"])
+        self.assertIsNone(unsubscribed["receiver"])
+        self.assertEqual(unsubscribed["alerts"][0]["environment"], "deploy-m6")
+        with self.assertRaisesRegex(ValueError, "deployment"):
+            water_alerts.register(self.root, sock, fs, deployment=str(uuid4()))
+        water_alerts.register(self.root, sock, fs, deployment=deployment)
+        self.pool.free = 300
+        self.observed()
+        pending = monitor.alerts_status(self.root)
+        self.assertEqual(pending["pending"], 2)
+        self.assertEqual(pending["receiver"]["receipts"], [])
+        with patch.object(water_alerts, "post") as post:
+            self.assertTrue(water_alerts.send_next(self.root, 64))
+            self.assertTrue(water_alerts.send_next(self.root, 64))
+            self.assertFalse(water_alerts.send_next(self.root, 64))
+        acknowledged = monitor.alerts_status(self.root)
+        self.assertEqual(acknowledged["pending"], 0)
+        ids = [f"{deployment}:{fs}:{s}" for s in (1, 2)]
+        self.assertEqual([call.args[1]["id"] for call in post.call_args_list], ids)
+        self.assertEqual([e["id"] for e in acknowledged["alerts"]], ids)
+        receipts = acknowledged["receiver"]["receipts"]
+        self.assertEqual([r["id"] for r in receipts], ids)
+        self.assertEqual([r["notification"] for r in receipts], ["firing", "resolved"])
+        self.assertEqual(receipts[-1], acknowledged["receiver"]["last_receipt"])
+        self.claim["deployment"] = str(uuid4())
+        with self.assertRaisesRegex(ValueError, "deployment"):
+            self.observed()
+
+    def test_upgraded_receiver_preserves_only_its_recorded_acknowledgements(self):
+        fs = self.policy["filesystem_uuid"]
+        water_alerts.register(self.root, str(self.root / "receiver.sock"), fs)
+        self.pool.free = 50
+        self.observed()
+        self.pool.free = 300
+        self.observed()
+        self.pool.free = 50
+        self.observed()
+        record = water_alerts.read(self.root / "receiver.json")
+        del record["receipts"]
+        previous = {"id": f"{fs}:2", "sequence": 2, "at": "2026-11-25T00:00:00+00:00"}
+        record["last_receipt"] = previous
+        water_alerts.save(self.root, record)
+        self.assertEqual(
+            monitor.alerts_status(self.root)["receiver"]["receipts"], [previous]
+        )
+        with patch.object(water_alerts, "post"):
+            self.assertTrue(water_alerts.send_next(self.root, 64))
+        receipts = monitor.alerts_status(self.root)["receiver"]["receipts"]
+        self.assertEqual(len(receipts), 2)
+        self.assertEqual(receipts[0], previous)
+        self.assertEqual(receipts[1]["id"], f"{fs}:3")
+
+    def test_relay_idles_without_a_subscription_and_stops_on_request(self):
+        stop = Mock()
+        stop.is_set.side_effect = [False, True]
+        with patch.object(water_alerts, "send_next") as send:
+            water_alerts.serve(self.root, 64, 2, stop=stop)
+        send.assert_not_called()
+        stop.wait.assert_called_once_with(2)
+        self.assertFalse((self.root / "receiver.json").exists())
 
     def test_damaged_receipt_keeps_monitor_running_and_retains_pending_files(self):
         water_alerts.register(
