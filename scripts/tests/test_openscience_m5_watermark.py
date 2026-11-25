@@ -16,6 +16,7 @@ sys.path[:0] = [str(SCRIPTS), str(SCRIPTS.parent / "ops/openscience-per-user-dev
 import openscience_per_user_dev as m1  # noqa: E402
 import openscience_per_user_service as service  # noqa: E402
 
+import water_alerts  # noqa: E402
 import water_monitor as monitor  # noqa: E402
 import water_pool  # noqa: E402
 
@@ -119,6 +120,136 @@ class WatermarkTest(unittest.TestCase):
             self.assertIsNone(result["available_bytes"])
         self.assertEqual(self.observed()["state"], "normal")
         self.assertEqual(self.pool.modes, dict.fromkeys("ab", "open"))
+
+    def test_receiver_outage_preserves_backlog_across_retention_and_detects_missing_event(
+        self,
+    ):
+        self.observed()
+        fs = self.policy["filesystem_uuid"]
+        socket = str(self.root / "receiver.sock")
+        with patch.object(monitor, "HISTORY", 3):
+            water_alerts.register(self.root, socket, fs)
+            for i in range(8):
+                self.pool.free = 50 if i % 2 == 0 else 300
+                self.observed()
+            self.assertEqual([e["sequence"] for e in self.events()], list(range(1, 9)))
+            gap = self.root / "alerts" / "000000000001.json"
+            gap.rename(self.root / "displaced")
+            with (
+                self.assertRaises(FileNotFoundError),
+                patch.object(water_alerts, "post") as post,
+            ):
+                water_alerts.send_next(self.root, 3)
+            post.assert_not_called()
+            self.assertIsNone(
+                water_alerts.read(self.root / "receiver.json")["last_receipt"]
+            )
+            (self.root / "displaced").rename(gap)
+            with patch.object(water_alerts, "post") as post:
+                for i in range(8):
+                    self.assertTrue(water_alerts.send_next(self.root, 3))
+                    # Reapplying configuration must preserve the cursor.
+                    water_alerts.register(self.root, socket, fs)
+                self.assertFalse(water_alerts.send_next(self.root, 3))
+                self.assertEqual(
+                    [call.args[1]["sequence"] for call in post.call_args_list],
+                    list(range(1, 9)),
+                )
+            self.assertEqual([e["sequence"] for e in self.events()], [6, 7, 8])
+            with self.assertRaises(ValueError):
+                water_alerts.register(self.root, str(self.root / "other.sock"), fs)
+
+    def test_damaged_receipt_keeps_monitor_running_and_retains_pending_files(self):
+        water_alerts.register(
+            self.root, str(self.root / "receiver.sock"), self.policy["filesystem_uuid"]
+        )
+        with patch.object(monitor, "HISTORY", 1):
+            self.pool.free = 50
+            self.observed()
+            dest = self.root / "receiver.json"
+            record = water_alerts.read(dest)
+            record["last_receipt"] = {"id": "other", "sequence": 512}
+            water_alerts.save(self.root, record)
+            self.pool.free = 300
+            self.assertTrue(self.observed()["write_allowed"])
+            with self.assertRaisesRegex(
+                ValueError, "Invalid watermark receiver receipt"
+            ):
+                water_alerts.send_next(self.root, 1)
+            self.assertEqual([e["sequence"] for e in self.events()], [1, 2])
+
+    def test_older_or_missing_feed_cannot_appear_caught_up(self):
+        fs = self.policy["filesystem_uuid"]
+        water_alerts.register(self.root, str(self.root / "receiver.sock"), fs)
+        self.pool.free = 50
+        self.observed()
+        with patch.object(water_alerts, "post"):
+            self.assertTrue(water_alerts.send_next(self.root, 64))
+        stale = self.root / "state.json"
+        snapshot = water_alerts.read(stale)
+        snapshot["sequence"] = 0
+        monitor.publish(stale, snapshot)
+        with self.assertRaisesRegex(ValueError, "predates"):
+            water_alerts.send_next(self.root, 64)
+        stale.unlink()
+        with self.assertRaises(FileNotFoundError):
+            water_alerts.send_next(self.root, 64)
+        self.assertEqual(
+            water_alerts.read(self.root / "receiver.json")["last_receipt"]["id"],
+            fs + ":1",
+        )
+
+    def test_unrelated_success_response_does_not_advance_cursor(self):
+        from http.server import BaseHTTPRequestHandler
+        import socketserver
+        from threading import Thread
+
+        class WrongReceipt(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"id":"another-event"}')
+
+            def log_message(self, *args):
+                pass
+
+        sock = str(self.root / "receiver.sock")
+        water_alerts.register(self.root, sock, self.policy["filesystem_uuid"])
+        self.pool.free = 50
+        self.observed()
+        with socketserver.UnixStreamServer(sock, WrongReceipt) as receiver:
+            worker = Thread(target=receiver.handle_request, daemon=True)
+            worker.start()
+            with self.assertRaisesRegex(ValueError, "acknowledge"):
+                water_alerts.send_next(self.root, 64)
+            worker.join(timeout=3)
+        self.assertIsNone(
+            water_alerts.read(self.root / "receiver.json")["last_receipt"]
+        )
+
+    def test_registration_includes_active_incident_and_retries_after_unsaved_ack(self):
+        self.observed()
+        self.pool.free = 50
+        active = self.observed()["last_transition"]
+        water_alerts.register(
+            self.root, str(self.root / "receiver.sock"), self.policy["filesystem_uuid"]
+        )
+        self.assertEqual(
+            water_alerts.read(self.root / "receiver.json")["first_sequence"],
+            active["sequence"],
+        )
+        with patch.object(water_alerts, "post") as post:
+            with (
+                patch.object(water_alerts, "save", side_effect=OSError("interrupted")),
+                self.assertRaises(OSError),
+            ):
+                water_alerts.send_next(self.root, 64)
+            self.assertTrue(water_alerts.send_next(self.root, 64))
+            self.assertFalse(water_alerts.send_next(self.root, 64))
+            self.assertEqual(
+                [call.args[1]["id"] for call in post.call_args_list], [active["id"]] * 2
+            )
 
     def test_interrupted_alert_publish_replays_exactly_one_event(self):
         self.observed()
@@ -334,7 +465,16 @@ class WatermarkTest(unittest.TestCase):
             self.assertEqual(
                 reg.configure_watermark(disk, 96, 160), {"state": "normal"}
             )
-            self.assertEqual(send.call_args.args[0], "configure")
+            self.assertEqual(
+                send.call_args.args, ("configure", reg.data["disk_watermark"])
+            )
+            reg.configure_watermark(disk, 96, 160, "/run/receiver.sock")
+            send.assert_called_with(
+                "configure",
+                reg.data["disk_watermark"],
+                "--alert-socket",
+                "/run/receiver.sock",
+            )
 
     def test_stop_guards_kernel_before_reading_broken_state_and_avoids_false_shutdown_alarm(
         self,

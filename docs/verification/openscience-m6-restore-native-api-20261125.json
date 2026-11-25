@@ -1,0 +1,132 @@
+{
+  "archives": {
+    "a": {
+      "directories": 24,
+      "file_bytes": 69707,
+      "files": 23,
+      "tree_sha256": "f0246bc84883760d3d47e84c3dbd083f7a4aaba601de7e6004d4bd8035d584b5"
+    },
+    "b": {
+      "directories": 24,
+      "file_bytes": 69706,
+      "files": 23,
+      "tree_sha256": "a13cddcbddcc34738570c22e1be333c9ca0f1e199c67c35456b52193c09c331e"
+    }
+  },
+  "data": {
+    "a": {
+      "attachment": "attachment-a.txt",
+      "attachment_sha256": "768e8b6a4f321637551613a1aac073aad046a54f075f7efb729268010a45cc62",
+      "other_attachment_absent": true,
+      "other_session_http": 404,
+      "project": "native-restored-project",
+      "session_id": "ses_defb733c8ffeXhmL9bNTFknOKl",
+      "transcript_sha256": "772193bbe9dbc87b85e20b25b16999ca23f895c44d4e49e1a8124b3c1c50d3d1"
+    },
+    "b": {
+      "attachment": "attachment-b.txt",
+      "attachment_sha256": "954df6a289b948c7cdfd286a527cc34d4027062f4f166ecac73e4d4b96192a1c",
+      "other_attachment_absent": true,
+      "other_session_http": 404,
+      "project": "native-restored-project",
+      "session_id": "ses_defb7347fffe6uNDID8DC2xyYB",
+      "transcript_sha256": "bc18a2edcb3099b58f78a4a7124da5aea8216acbc88a04fe912bc19e5c622ac2"
+    }
+  },
+  "deployment": "5f2c2915b83d47d5bddf0d69a46bef38",
+  "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+  "phase": "verify",
+  "rehearsal_sha256": "5d6ef9e8b92bed5de7ac1732d62004dac527cad71b8539e800b6bc226f963cc9",
+  "remaining_disposable_resources": 0,
+  "run_id": "M6-ba72fae702664549a5eb6f2680e83181",
+  "runtime": {
+    "a": {
+      "container_id": "2563d61dc4cf24c6dc3bacd8a63e24bc919642cdd66fa478054ce22c0c8212aa",
+      "environment": "dev-m1",
+      "generation": 1,
+      "gid": 58161656,
+      "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+      "started_at": "2026-11-25T01:27:25.836789756Z",
+      "uid": 58161656,
+      "user_id": "test-user-a",
+      "volume": "nexpoly-m1-5f2c2915b83d-463fc2f89367468bb7fc6e048d522c9e-data",
+      "volume_root_mode": "0700"
+    },
+    "b": {
+      "container_id": "dd9d4c83eed88ed61d847ffdd1254b5191908f6aa659e122c40191be4379789d",
+      "environment": "dev-m1",
+      "generation": 1,
+      "gid": 43620582,
+      "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+      "started_at": "2026-11-25T01:27:33.64489055Z",
+      "uid": 43620582,
+      "user_id": "test-user-b",
+      "volume": "nexpoly-m1-5f2c2915b83d-3c137e9c236d4998bed842786c0f4548-data",
+      "volume_root_mode": "0700"
+    }
+  },
+  "source": {
+    "archives": {
+      "a": {
+        "directories": 22,
+        "file_bytes": 3964,
+        "files": 19,
+        "tree_sha256": "fcc717598ab2360324383cfeb7b54de02c388dd8508e63934de5cdb717da4f41"
+      },
+      "b": {
+        "directories": 22,
+        "file_bytes": 3963,
+        "files": 19,
+        "tree_sha256": "b21b9f9ddbe8bf23d832e6b50c5674b5d247e6fa08e51efcd36a4de2f0214269"
+      }
+    },
+    "data": {
+      "a": {
+        "attachment": "attachment-a.txt",
+        "attachment_sha256": "768e8b6a4f321637551613a1aac073aad046a54f075f7efb729268010a45cc62",
+        "other_attachment_absent": true,
+        "other_session_http": 404,
+        "project": "native-restored-project",
+        "session_id": "ses_defb733c8ffeXhmL9bNTFknOKl",
+        "transcript_sha256": "772193bbe9dbc87b85e20b25b16999ca23f895c44d4e49e1a8124b3c1c50d3d1"
+      },
+      "b": {
+        "attachment": "attachment-b.txt",
+        "attachment_sha256": "954df6a289b948c7cdfd286a527cc34d4027062f4f166ecac73e4d4b96192a1c",
+        "other_attachment_absent": true,
+        "other_session_http": 404,
+        "project": "native-restored-project",
+        "session_id": "ses_defb7347fffe6uNDID8DC2xyYB",
+        "transcript_sha256": "bc18a2edcb3099b58f78a4a7124da5aea8216acbc88a04fe912bc19e5c622ac2"
+      }
+    },
+    "deployment": "d2d2fdc972414471b865b6e66168d782",
+    "runtime": {
+      "a": {
+        "container_id": "e677622b8324296fe7bf629d1545d5fdc91ae348e1d37d47ece077e813f24933",
+        "environment": "dev-m1",
+        "generation": 1,
+        "gid": 58161656,
+        "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+        "started_at": "2026-11-25T01:18:37.706676059Z",
+        "uid": 58161656,
+        "user_id": "test-user-a",
+        "volume": "nexpoly-m1-d2d2fdc97241-463fc2f89367468bb7fc6e048d522c9e-data",
+        "volume_root_mode": "0700"
+      },
+      "b": {
+        "container_id": "ab61545801d41f21a0dd6b63f96014eca774fb610b39769f2a0ab1476c8b1c63",
+        "environment": "dev-m1",
+        "generation": 1,
+        "gid": 43620582,
+        "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+        "started_at": "2026-11-25T01:18:46.694161409Z",
+        "uid": 43620582,
+        "user_id": "test-user-b",
+        "volume": "nexpoly-m1-d2d2fdc97241-3c137e9c236d4998bed842786c0f4548-data",
+        "volume_root_mode": "0700"
+      }
+    }
+  },
+  "status": "passed"
+}

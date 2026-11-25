@@ -19,11 +19,13 @@ sys.path.insert(0, str(OPS.parents[1] / "scripts"))
 from openscience_per_user_dev import write_atomic  # noqa: E402
 import quota_nfs  # noqa: E402
 import water_pool  # noqa: E402
+import water_alerts  # noqa: E402
 
 ROOT = Path("/var/lib/nexpoly-m5-watermark")
 SERVICE = "m5-global-disk.service"
 CADENCE_SECONDS = 2
 HISTORY = 64
+RELAY_STATUS = "Supports ordered watermark delivery"
 
 
 def read(path):
@@ -101,7 +103,7 @@ def deliver(root, event):
             file=sys.stderr,
             flush=True,
         )
-    if seq > HISTORY:
+    if seq > HISTORY and not water_alerts.retain(root, seq - HISTORY):
         (spool / f"{seq - HISTORY:012d}.json").unlink(missing_ok=True)
 
 
@@ -250,8 +252,28 @@ WantedBy=multi-user.target
         f"[Unit]\nRequires={SERVICE}\nAfter={SERVICE}\n".encode(),
         0o644,
     )
+    relay = ROOT / "receiver.json"
+    if relay.exists():
+        write_atomic(
+            units / "m5-disk-alert-relay.service",
+            f"""[Unit]
+Description=Deliver development OpenScience disk watermark notifications
+After={SERVICE}
+[Service]
+ExecStart=/usr/bin/python3 -IB {script} forward-alerts
+Restart=on-failure
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
+""".encode(),
+            0o644,
+        )
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now", SERVICE], check=True)
+    if relay.exists():
+        subprocess.run(
+            ["systemctl", "enable", "--now", "m5-disk-alert-relay.service"], check=True
+        )
 
 
 def main():
@@ -264,6 +286,9 @@ def main():
         p.add_argument("filesystem_uuid")
         p.add_argument("low_bytes", type=int)
         p.add_argument("recover_bytes", type=int)
+        if name == "configure":
+            p.add_argument("--alert-socket")
+    commands.add_parser("forward-alerts")
     commands.add_parser("serve")
     commands.add_parser("stopped")
     args = parser.parse_args()
@@ -273,6 +298,9 @@ def main():
             "The storage monitor requires the private guest control plane"
         )
     cfg = ROOT / "policy.json"
+    if args.action == "forward-alerts":
+        water_alerts.serve(ROOT, HISTORY, CADENCE_SECONDS)
+        return
     if args.action in ("serve", "stopped"):
         policy = read(cfg)
         owner(policy)
@@ -295,7 +323,8 @@ def main():
                 addr = os.environ["NOTIFY_SOCKET"]
                 with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
                     notify.sendto(
-                        b"READY=1", ("\0" + addr[1:]) if addr.startswith("@") else addr
+                        f"READY=1\nSTATUS={RELAY_STATUS}".encode(),
+                        ("\0" + addr[1:]) if addr.startswith("@") else addr,
                     )
                 first = False
             time.sleep(CADENCE_SECONDS)
@@ -319,19 +348,52 @@ def main():
             raise ValueError(
                 "Watermark state and alerts require storage outside the protected pool"
             )
+        if (
+            args.alert_socket
+            and subprocess.run(
+                ["systemctl", "is-active", "--quiet", SERVICE]
+            ).returncode
+            == 0
+        ):
+            status = subprocess.check_output(
+                ["systemctl", "show", "-p", "StatusText", "--value", SERVICE], text=True
+            ).strip()
+            if status != RELAY_STATUS:
+                raise ValueError(
+                    "Restart the updated monitor during storage maintenance before subscribing a receiver"
+                )
         with locked(ROOT):
             if cfg.exists() and read(cfg) != policy:
                 raise ValueError("Concurrent storage policy registration differs")
             publish(cfg, policy)
+            if args.alert_socket is not None:
+                water_alerts.register(
+                    ROOT, args.alert_socket, policy["filesystem_uuid"]
+                )
         setup_service()
     if read(cfg) != policy:
         raise ValueError("No matching installed global pool policy")
     with locked(ROOT):
         if args.action == "alerts":
+            snapshot = read(ROOT / "state.json")
+            seq = snapshot["sequence"]
+            spool = ROOT / "alerts"
+            receiver = (
+                read(ROOT / "receiver.json")
+                if (ROOT / "receiver.json").exists()
+                else None
+            )
             result = {
                 "configured": True,
                 "filesystem_uuid": policy["filesystem_uuid"],
-                "alerts": [read(p) for p in sorted((ROOT / "alerts").glob("*.json"))],
+                "alerts": [
+                    read(spool / f"{n:012d}.json")
+                    for n in range(max(1, seq - HISTORY + 1), seq + 1)
+                ],
+                "receiver": receiver,
+                "pending": seq - water_alerts.next_sequence(receiver, seq) + 1
+                if receiver
+                else 0,
             }
         elif args.action == "observed":
             result = read(ROOT / "state.json")

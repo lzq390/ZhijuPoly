@@ -114,7 +114,7 @@ def guest_kernel(base, work, inputs, modules):
             subprocess.run(["zstd", "-dc", str(module)], stdout=output, check=True)
 
 
-def private_drives(base, work, inputs, modules):
+def private_drives(base, work, inputs, modules, data_disks=None):
     # Supplying explicit disk formats and a known backing image also prevents probing unrelated files.
     if not base.is_file() or file_digest(base) != image_lock()["sha256"]:
         raise ValueError(
@@ -134,9 +134,12 @@ def private_drives(base, work, inputs, modules):
         str(base.resolve()),
         str(disk),
     )
-    for serial in (*DATA_DISKS, BACKUP_DISK):
+    sizes = (
+        {name: DISK_BYTES for name in DATA_DISKS} if data_disks is None else data_disks
+    )
+    for serial, size in {**sizes, BACKUP_DISK: BACKUP_BYTES}.items():
         with (work / (serial + ".raw")).open("xb") as f:
-            f.truncate(BACKUP_BYTES if serial == BACKUP_DISK else DISK_BYTES)
+            f.truncate(size)
 
     (work / "user-data").write_text(BOOT)
     (work / "meta-data").write_text(
@@ -163,8 +166,8 @@ def private_drives(base, work, inputs, modules):
     )
 
 
-def run_vm(base, work, inputs, modules=DEFAULT_MODULES):
-    private_drives(base, work, inputs, modules)
+def run_vm(base, work, inputs, modules=DEFAULT_MODULES, *, data_disks=None):
+    private_drives(base, work, inputs, modules, data_disks)
     args = [
         "qemu-system-x86_64",
         "-no-user-config",
@@ -209,7 +212,7 @@ def run_vm(base, work, inputs, modules=DEFAULT_MODULES):
         "-drive",
         "file=inputs.iso,format=raw,if=virtio,readonly=on",
     ]
-    for serial in (*DATA_DISKS, BACKUP_DISK):
+    for serial in (*(DATA_DISKS if data_disks is None else data_disks), BACKUP_DISK):
         args += [
             "-drive",
             f"if=none,file={serial}.raw,format=raw,id={serial}",
@@ -263,7 +266,11 @@ def run_vm(base, work, inputs, modules=DEFAULT_MODULES):
             "virtual_cpus": 2,
             "network_adapters": 0,
             "host_directory_shares": 0,
-            "test_device_bytes": DISK_BYTES,
+            **(
+                {"test_device_bytes": DISK_BYTES}
+                if data_disks is None
+                else {"data_disks_bytes": data_disks}
+            ),
             "backup_device_bytes": BACKUP_BYTES,
             "elapsed_seconds": round(monotonic() - start, 2),
         },

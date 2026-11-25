@@ -277,7 +277,7 @@ if hashlib.sha256(data).hexdigest() != sys.argv[2]:
     raise ValueError('Guest helper checksum differs')
 write_atomic(p, data, 0o755)
 """
-    for name in ("water_pool.py", "water_monitor.py"):
+    for name in ("water_pool.py", "water_alerts.py", "water_monitor.py"):
         data = (OPS / name).read_bytes()
         reader.run(
             "python3",

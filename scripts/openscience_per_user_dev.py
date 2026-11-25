@@ -359,14 +359,14 @@ class Registry:
                 or not 0 < policy["low_bytes"] < policy["recover_bytes"]):
             raise Problem("Invalid global disk watermark policy")
 
-    def pool_command(self, action, policy):
+    def pool_command(self, action, policy, *options):
         nfs = pilot_module("quota_nfs")
         endpoint = self.data["nfs_endpoints"]["dev-m1/test-user-a"]
         claim = self.data["native_claim"]
         raw = nfs.guest_client(endpoint).run(
             "python3", "-IB", "/opt/nexpoly/ops/openscience-per-user-dev/water_monitor.py", action,
             claim["deployment"], claim["registry_sha256"], policy["filesystem_uuid"],
-            policy["low_bytes"], policy["recover_bytes"], capture_output=True,
+            policy["low_bytes"], policy["recover_bytes"], *options, capture_output=True,
             timeout=120 if action == "configure" else 25,
         ).stdout
         row = json.loads(raw)
@@ -381,7 +381,7 @@ class Registry:
             raise Problem("Invalid global disk guard observation")
         return row
 
-    def configure_watermark(self, fs_uuid, low_mib, recover_mib):
+    def configure_watermark(self, fs_uuid, low_mib, recover_mib, alert_socket=None):
         self.check_format()
         if self.data["format"] not in (4, 5):
             raise Problem("Only the claimed native development quota volumes support the shared pool")
@@ -398,7 +398,8 @@ class Registry:
             # closed to admissions and can only be retried with the same policy.
             self.data.update(format=5, disk_watermark=policy)
             self.save()
-        return self.pool_command("configure", policy)
+        options = ("--alert-socket", alert_socket) if alert_socket is not None else ()
+        return self.pool_command("configure", policy, *options)
 
     def disk_watermark(self, action="sample"):
         self.check_format()
@@ -1132,6 +1133,7 @@ def main():
     nfs.add_argument("--readiness-seconds", type=int)
     water = commands.add_parser("set-disk-watermark", help="Register the shared ext4 pool and enable its storage monitor")
     water.add_argument("--filesystem-uuid", required=True)
+    water.add_argument("--alert-socket", help="Deliver disk transitions to this Unix HTTP receiver on the storage guest")
     water.add_argument("--low-mib", required=True, type=int)
     water.add_argument("--recover-mib", required=True, type=int)
     status = commands.add_parser("disk-watermark", help="Measure the pool or read persisted operator evidence")
@@ -1162,7 +1164,7 @@ def main():
                 output = registry.register_quota_storage(json.loads(args.bindings.read_bytes()), args.readiness_seconds,
                                                         manifest=args.manifest, phase=args.phase)
             elif args.command == "set-disk-watermark":
-                output = registry.configure_watermark(args.filesystem_uuid, args.low_mib, args.recover_mib)
+                output = registry.configure_watermark(args.filesystem_uuid, args.low_mib, args.recover_mib, args.alert_socket)
             elif args.command == "disk-watermark":
                 action = "observed" if args.observed else "alerts" if args.alerts else "sample"
                 output = registry.disk_watermark(action)

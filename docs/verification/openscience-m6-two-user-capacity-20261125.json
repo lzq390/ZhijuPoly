@@ -1,0 +1,268 @@
+{
+  "status": "passed",
+  "started_at": "2026-11-25T01:13:46.502415+00:00",
+  "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+  "scope": "fresh disposable registry, two private volumes, per-workspace synthetic model",
+  "timing": "concurrent operator ensure to API-ready including manager lock wait, nearest-rank quantiles",
+  "policy_mib": {
+    "workspace-memory-mib": 4288,
+    "host-memory-floor-mib": 16384,
+    "volume-free-floor-mib": 32768
+  },
+  "max_active": 2,
+  "reserved_per_pair_mib": 2144,
+  "refusals": [
+    {
+      "reason": "workspace_memory",
+      "policy_mib": {
+        "workspace-memory-mib": 4287,
+        "host-memory-floor-mib": 16384,
+        "volume-free-floor-mib": 32768
+      },
+      "manager_at_refusal": {
+        "required_mib": 4288,
+        "limit_mib": 4287
+      },
+      "running_a_private_read_status": 200,
+      "a_generation_preserved": true,
+      "resources_unchanged": true
+    },
+    {
+      "reason": "host_memory",
+      "policy_mib": {
+        "workspace-memory-mib": 4288,
+        "host-memory-floor-mib": 257522,
+        "volume-free-floor-mib": 32768
+      },
+      "manager_at_refusal": {
+        "available_mib": 190939,
+        "required_mib": 261810
+      },
+      "running_a_private_read_status": 200,
+      "a_generation_preserved": true,
+      "resources_unchanged": true
+    },
+    {
+      "reason": "volume_free",
+      "policy_mib": {
+        "workspace-memory-mib": 4288,
+        "host-memory-floor-mib": 16384,
+        "volume-free-floor-mib": 1800516
+      },
+      "manager_at_refusal": {
+        "available_mib": 89544,
+        "required_mib": 1804612
+      },
+      "running_a_private_read_status": 200,
+      "a_generation_preserved": true,
+      "resources_unchanged": true
+    },
+    {
+      "reason": "instance_count",
+      "policy_mib": {
+        "workspace-memory-mib": 4288,
+        "host-memory-floor-mib": 16384,
+        "volume-free-floor-mib": 32768
+      },
+      "manager_at_refusal": {
+        "required": 3,
+        "limit": 2
+      },
+      "running_a_private_read_status": 200,
+      "a_generation_preserved": true,
+      "resources_unchanged": true
+    }
+  ],
+  "paired_rounds": [
+    {
+      "round": 1,
+      "host_after_workload": {
+        "total_bytes": 270029295616,
+        "available_bytes": 198451326976
+      },
+      "users": {
+        "test-user-a": {
+          "submit_to_ready_seconds": 7.031,
+          "backend": {
+            "memory_current_bytes": 260497408,
+            "memory_peak_bytes": 272211968,
+            "memory_limit_bytes": 2147483648,
+            "oom_events": 0,
+            "oom_kills": 0
+          },
+          "sidecar": {
+            "memory_current_bytes": 25174016,
+            "memory_peak_bytes": 40476672,
+            "memory_limit_bytes": 100663296,
+            "oom_events": 0,
+            "oom_kills": 0
+          },
+          "disk": {
+            "total_bytes": 1887976378368,
+            "available_bytes": 93835915264,
+            "private_volume_allocated_bytes": 757760
+          }
+        },
+        "test-user-b": {
+          "submit_to_ready_seconds": 13.824,
+          "backend": {
+            "memory_current_bytes": 260374528,
+            "memory_peak_bytes": 267042816,
+            "memory_limit_bytes": 2147483648,
+            "oom_events": 0,
+            "oom_kills": 0
+          },
+          "sidecar": {
+            "memory_current_bytes": 25161728,
+            "memory_peak_bytes": 40058880,
+            "memory_limit_bytes": 100663296,
+            "oom_events": 0,
+            "oom_kills": 0
+          },
+          "disk": {
+            "total_bytes": 1887976378368,
+            "available_bytes": 93835919360,
+            "private_volume_allocated_bytes": 757760
+          }
+        }
+      }
+    },
+    {
+      "round": 2,
+      "host_after_workload": {
+        "total_bytes": 270029295616,
+        "available_bytes": 198103261184
+      },
+      "users": {
+        "test-user-a": {
+          "submit_to_ready_seconds": 6.851,
+          "backend": {
+            "memory_current_bytes": 255156224,
+            "memory_peak_bytes": 264663040,
+            "memory_limit_bytes": 2147483648,
+            "oom_events": 0,
+            "oom_kills": 0
+          },
+          "sidecar": {
+            "memory_current_bytes": 25190400,
+            "memory_peak_bytes": 40398848,
+            "memory_limit_bytes": 100663296,
+            "oom_events": 0,
+            "oom_kills": 0
+          },
+          "disk": {
+            "total_bytes": 1887976378368,
+            "available_bytes": 93828354048,
+            "private_volume_allocated_bytes": 823296
+          }
+        },
+        "test-user-b": {
+          "submit_to_ready_seconds": 13.572,
+          "backend": {
+            "memory_current_bytes": 260952064,
+            "memory_peak_bytes": 268247040,
+            "memory_limit_bytes": 2147483648,
+            "oom_events": 0,
+            "oom_kills": 0
+          },
+          "sidecar": {
+            "memory_current_bytes": 25169920,
+            "memory_peak_bytes": 40542208,
+            "memory_limit_bytes": 100663296,
+            "oom_events": 0,
+            "oom_kills": 0
+          },
+          "disk": {
+            "total_bytes": 1887976378368,
+            "available_bytes": 93828362240,
+            "private_volume_allocated_bytes": 823296
+          }
+        }
+      }
+    },
+    {
+      "round": 3,
+      "host_after_workload": {
+        "total_bytes": 270029295616,
+        "available_bytes": 198275407872
+      },
+      "users": {
+        "test-user-a": {
+          "submit_to_ready_seconds": 6.954,
+          "backend": {
+            "memory_current_bytes": 257843200,
+            "memory_peak_bytes": 269840384,
+            "memory_limit_bytes": 2147483648,
+            "oom_events": 0,
+            "oom_kills": 0
+          },
+          "sidecar": {
+            "memory_current_bytes": 25153536,
+            "memory_peak_bytes": 40161280,
+            "memory_limit_bytes": 100663296,
+            "oom_events": 0,
+            "oom_kills": 0
+          },
+          "disk": {
+            "total_bytes": 1887976378368,
+            "available_bytes": 93821214720,
+            "private_volume_allocated_bytes": 888832
+          }
+        },
+        "test-user-b": {
+          "submit_to_ready_seconds": 13.5,
+          "backend": {
+            "memory_current_bytes": 250830848,
+            "memory_peak_bytes": 262356992,
+            "memory_limit_bytes": 2147483648,
+            "oom_events": 0,
+            "oom_kills": 0
+          },
+          "sidecar": {
+            "memory_current_bytes": 25157632,
+            "memory_peak_bytes": 40337408,
+            "memory_limit_bytes": 100663296,
+            "oom_events": 0,
+            "oom_kills": 0
+          },
+          "disk": {
+            "total_bytes": 1887976378368,
+            "available_bytes": 93821214720,
+            "private_volume_allocated_bytes": 888832
+          }
+        }
+      }
+    }
+  ],
+  "host_before_refusal": {
+    "total_bytes": 270029295616,
+    "available_bytes": 200406745088
+  },
+  "volume_filesystem_before_refusal": {
+    "total_bytes": 1887976378368,
+    "available_bytes": 94106152960,
+    "private_volume_allocated_bytes": 135168
+  },
+  "new_volume_start_seconds": {
+    "test-user-a": 9.148,
+    "test-user-b": 9.223
+  },
+  "recycle_releases_slot": true,
+  "summary": {
+    "samples": 6,
+    "p50_submit_to_ready_seconds": 7.031,
+    "p95_submit_to_ready_seconds": 13.824,
+    "cold_ready_target_seconds": 30,
+    "two_user_p95_within_target": true,
+    "max_backend_cgroup_peak_bytes": 272211968,
+    "max_sidecar_cgroup_peak_bytes": 40542208,
+    "max_user_volume_allocated_bytes": 888832,
+    "oom_events": 0,
+    "oom_kills": 0
+  },
+  "remaining": {
+    "containers": 0,
+    "volumes": 0
+  },
+  "ended_at": "2026-11-25T01:17:33.687638+00:00"
+}
