@@ -1,6 +1,7 @@
 """Serve the M1 development supervisor on a private Unix socket and reap idle instances."""
 
 import argparse
+from contextlib import contextmanager
 import fcntl
 import json
 import os
@@ -19,16 +20,36 @@ MANAGER = Path(__file__).with_name("openscience_per_user_dev.py")
 WORKSPACE_KEYS = {"operation", "environment", "user_id"}
 OPERATIONS = {"ensure", "status", "stop", "touch", "begin", "end", "check-write"}
 MAX_REQUEST = 8192
-# Life-cycle work is serialized in the registry; disk samples are serialized in
-# the guest. Queue peers before forking, with a separate worker for each.
-LIFECYCLE_WORKER = threading.Lock()
+# One owner's life-cycle work is serialized here and in the registry. Owners share
+# only the registry's short admission section, so one cold start does not hold
+# another owner's requests. Disk samples are serialized in the guest.
+LIFECYCLE_SLOTS = threading.BoundedSemaphore(4)
 WRITE_CHECK_WORKER = threading.Lock()
+_WORKSPACE_WORKERS = {}
+_WORKSPACE_WORKERS_GUARD = threading.Lock()
 CLEANUP_WORKERS = threading.BoundedSemaphore(2)
 
 
 def ensure_timeout_seconds(root):
     # Admission, Docker setup and checked teardown share the original 120s allowance.
     return 150 + Registry(root).readiness_seconds() - DEFAULT_READY_SECONDS
+
+
+@contextmanager
+def workspace_worker(environment, user_id):
+    """Queue one owner's requests before forking; bound the manager processes."""
+    key = (environment, user_id)
+    with _WORKSPACE_WORKERS_GUARD:
+        entry = _WORKSPACE_WORKERS.setdefault(key, [threading.Lock(), 0])
+        entry[1] += 1
+    try:
+        with entry[0], LIFECYCLE_SLOTS:
+            yield
+    finally:
+        with _WORKSPACE_WORKERS_GUARD:
+            entry[1] -= 1
+            if not entry[1]:
+                del _WORKSPACE_WORKERS[key]
 
 
 def manager(root, *args):
@@ -70,7 +91,10 @@ def dispatch(root, request):
     args = ["recycle" if op == "stop" else op, "--environment", request["environment"], "--user-id", request["user_id"]]
     if op == "end":
         args.extend(["--lease", request["lease"]])
-    with (WRITE_CHECK_WORKER if op == "check-write" else LIFECYCLE_WORKER):
+    if op == "check-write":
+        with WRITE_CHECK_WORKER:
+            return manager(root, *args)
+    with workspace_worker(request["environment"], request["user_id"]):
         return manager(root, *args)
 
 

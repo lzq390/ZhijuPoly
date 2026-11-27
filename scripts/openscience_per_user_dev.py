@@ -42,6 +42,10 @@ QUOTA_BACKEND = "ext4-user-quota"
 NFS_BACKEND = "nfs-ext4-user-quota"
 PILOT_USERS = {"test-user-a", "test-user-b"}
 DEPLOY_ENV = "deploy-m6"
+# Operations that read or change one workspace's processes or registry row.
+LIFECYCLE_OPERATIONS = frozenset({"ensure", "status", "restart", "recycle", "reap", "touch", "begin", "end", "list",
+                                  "offline-file"})
+WORKSPACE_LOCKS = "workspace-locks"
 DEFAULT_READY_SECONDS = 30
 DEFAULT_CAPACITY = {"workspace_memory_mib": 2 * PAIR_MEMORY_MIB, "host_memory_floor_mib": 16384,
                     "volume_free_floor_mib": 32768}
@@ -306,12 +310,19 @@ def write_atomic(path, contents, mode):
 
 
 class Registry:
-    def __init__(self, root):
+    def __init__(self, root, locks=None):
         self.root = root
         self.file = root / "registry.json"
         self.data = json.loads(self.file.read_text()) if self.file.exists() else None
+        self.locks = locks
+
+    @property
+    def unlocked(self):
+        return self.locks is not None and self.locks.released
 
     def save(self):
+        if self.unlocked:
+            raise Problem("Registry changes require the lifecycle lock")
         write_atomic(self.file, json.dumps(self.data, sort_keys=True).encode() + b"\n", 0o600)
 
     def initialize(self, args):
@@ -335,7 +346,7 @@ class Registry:
                     or bool(owner_file) != ("candidate_owners" in self.data)):
                 raise Problem("Development registry already initialized with different settings")
         else:
-            existing = {p.name for p in self.root.iterdir()} - {"supervisor.lock", "lifecycle.lock"}
+            existing = {p.name for p in self.root.iterdir()} - {"supervisor.lock", "lifecycle.lock", WORKSPACE_LOCKS}
             if existing - FIXTURE_HASHES.keys():
                 raise Problem("A new M1 registry requires a dedicated empty state directory")
             for name, expected in FIXTURE_HASHES.items():
@@ -617,13 +628,18 @@ class Registry:
         for binding in self.bindings():
             if binding.row["id"] == candidate or binding.row["id"] not in residents:
                 continue
-            backend = binding.resource("backend")
-            if backend and backend["state"] not in stopped:
-                continue
-            fixture = binding.resource("fixture")
-            if (backend or fixture) and (not fixture or fixture["state"] in stopped | {"running"}):
-                binding.remove_pair()
-                changed = True
+            # A starting owner waits for readiness outside the lifecycle lock but keeps
+            # its workspace lock. Its created pair stays charged and is never reclaimed.
+            with workspace_lock(self.root, binding.env, binding.user, blocking=False) as owned:
+                if not owned:
+                    continue
+                backend = binding.resource("backend")
+                if backend and backend["state"] not in stopped:
+                    continue
+                fixture = binding.resource("fixture")
+                if (backend or fixture) and (not fixture or fixture["state"] in stopped | {"running"}):
+                    binding.remove_pair()
+                    changed = True
         return self.resident_ids() if changed else residents
 
     def check_capacity(self, workspace, count, limits):
@@ -1006,7 +1022,8 @@ class Workspace:
             except (Problem, OSError, ValueError, KeyError, subprocess.SubprocessError):
                 details["diagnostics_incomplete"] = True
             self.row["last_readiness_failure"] = details
-            self.registry.save()
+            if not self.registry.unlocked:
+                self.registry.save()
             raise Problem("Workspace readiness failed: " + json.dumps(details, sort_keys=True)) from error
 
     def state(self, reason=None):
@@ -1041,7 +1058,7 @@ class Workspace:
             shutil.rmtree(self.runtime)
         return True
 
-    def ensure(self):
+    def ensure(self, *, unlocked_readiness=False):
         self.verify_template_files()
         backend, fixture = self.resource("backend"), self.resource("fixture")
         if backend and fixture and backend["state"] == fixture["state"] == "running":
@@ -1079,16 +1096,52 @@ class Workspace:
             self.create_pair()
             backend, fixture = self.resource("backend"), self.resource("fixture")
             self.verify_pair(backend, fixture)
-            self.ready(fixture, backend)
+            if not unlocked_readiness:
+                self.ready(fixture, backend)
         except Exception:
-            self.remove_pair()
-            self.row["failed_starts"] += 1
-            self.row["retry_after"] = time.time() + min(60, 2 ** min(6, self.row["failed_starts"]))
-            self.registry.save()
+            self.start_failed()
             raise
+        if unlocked_readiness:
+            return self.finish_start_unlocked(fixture, backend)
+        self.start_succeeded()
+        return self.state()
+
+    def start_failed(self):
+        self.remove_pair()
+        self.row["failed_starts"] += 1
+        self.row["retry_after"] = time.time() + min(60, 2 ** min(6, self.row["failed_starts"]))
+        self.registry.save()
+
+    def start_succeeded(self):
         self.row.update(last_activity=time.time(), failed_starts=0, retry_after=0)
         self.registry.save()
-        return self.state()
+
+    def finish_start_unlocked(self, fixture, backend):
+        """Wait for a created pair without holding the cross-workspace lifecycle lock.
+
+        Admission, storage checks and container creation stay serialized. The created
+        pair is already a Docker resident, so other admissions charge it. This owner's
+        workspace lock still excludes its other lifecycle work and offline file access,
+        and the shared supervisor lock still excludes configuration and backups.
+        """
+        identity = (self.row["id"], self.row["generation"])
+        failure = None
+        with self.registry.locks.lifecycle_released():
+            try:
+                self.ready(fixture, backend)
+            except Exception as error:  # Recorded below under the lifecycle lock.
+                failure = error
+        # Other owners saved the registry meanwhile; apply this result to a fresh copy.
+        current = Registry(self.registry.root, self.registry.locks).workspace(self.env, self.user)
+        if (current.row["id"], current.row["generation"]) != identity:
+            raise Problem("Workspace registration changed while its backend started") from failure
+        if failure is not None:
+            if "last_readiness_failure" in self.row:
+                current.row["last_readiness_failure"] = self.row["last_readiness_failure"]
+            current.start_failed()
+            raise failure
+        current.start_succeeded()
+        return current.state()
 
     def activity(self, backend, idle_only):
         if self.row["leases"]:
@@ -1184,8 +1237,58 @@ class Workspace:
         return result
 
 
+class RegistryLocks:
+    """Lock order: one workspace, then the shared supervisor lock, then lifecycle.
+
+    A process that holds the lifecycle lock already holds the supervisor lock and
+    never waits for it, so lifecycle work cannot deadlock with configuration changes.
+    """
+
+    def __init__(self, serial):
+        self.serial = serial
+        self.released = False
+
+    @property
+    def lifecycle_held(self):
+        return self.serial is not None and not self.released
+
+    @contextmanager
+    def lifecycle_released(self):
+        if not self.lifecycle_held:
+            raise Problem("The lifecycle lock is not held")
+        fcntl.flock(self.serial, fcntl.LOCK_UN)
+        self.released = True
+        try:
+            yield
+        finally:
+            fcntl.flock(self.serial, fcntl.LOCK_EX)
+            self.released = False
+
+
 @contextmanager
-def locked_registry(root, create, *, operation=None):
+def workspace_lock(root, env, user, *, blocking=True):
+    """Serialize one owner's lifecycle work; yields whether the lock is held."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", env) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}", user):
+        raise Problem("Expected a stable user identifier")
+    directory = root / WORKSPACE_LOCKS
+    directory.mkdir(mode=0o700, exist_ok=True)
+    if directory.is_symlink() or not directory.is_dir():
+        raise Problem("Workspace lock directory is unsafe")
+    name = hashlib.sha256((env + "/" + user).encode()).hexdigest()[:32] + ".lock"
+    descriptor = os.open(directory / name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def locked_registry(root, create, *, operation=None, workspace=None):
     if root.is_symlink():
         raise Problem("Registry must reside in a private directory")
     root = root.resolve()
@@ -1199,16 +1302,62 @@ def locked_registry(root, create, *, operation=None):
     # check-write only reads the atomically published registry and samples the guest
     # under its monitor lock. It can overlap lifecycle work, but must see a stable
     # storage policy. Configuration changes and offline backups still take LOCK_EX.
-    lifecycle = operation in {"ensure", "status", "restart", "recycle", "reap", "touch", "begin", "end", "list",
-                              "offline-file"}
+    lifecycle = operation in LIFECYCLE_OPERATIONS
+    if workspace is not None and not lifecycle:
+        raise Problem("Only lifecycle operations select a workspace")
     with ExitStack() as stack:
+        if workspace is not None:
+            stack.enter_context(workspace_lock(root, *workspace))
+        lock = stack.enter_context((root / "supervisor.lock").open("a"))
+        fcntl.flock(lock, fcntl.LOCK_SH if lifecycle or operation == "check-write" else fcntl.LOCK_EX)
+        serial = None
         if lifecycle:
             # Keep mutations, capacity admission and container creation serialized.
             serial = stack.enter_context((root / "lifecycle.lock").open("a"))
             fcntl.flock(serial, fcntl.LOCK_EX)
-        lock = stack.enter_context((root / "supervisor.lock").open("a"))
-        fcntl.flock(lock, fcntl.LOCK_SH if lifecycle or operation == "check-write" else fcntl.LOCK_EX)
-        yield Registry(root)
+        yield Registry(root, RegistryLocks(serial))
+
+
+def execute(args):
+    # One owner's lifecycle commands are serialized; other owners only share admission.
+    selected = None
+    if args.command in LIFECYCLE_OPERATIONS and hasattr(args, "user_id"):
+        selected = (args.environment, args.user_id)
+    with locked_registry(args.state_dir, args.command == "init", operation=args.command,
+                         workspace=selected) as registry:
+        if args.command == "init":
+            output = registry.initialize(args)
+        elif args.command == "list":
+            output = {"workspaces": [binding.state() for binding in registry.bindings()]}
+        elif args.command == "set-image":
+            output = registry.set_image(args.image)
+        elif args.command == "register-quota-storage":
+            output = registry.register_quota_storage(json.loads(args.bindings.read_bytes()), args.readiness_seconds)
+        elif args.command == "register-quota-nfs":
+            output = registry.register_quota_storage(json.loads(args.bindings.read_bytes()), args.readiness_seconds,
+                                                    manifest=args.manifest, phase=args.phase)
+        elif args.command == "set-disk-watermark":
+            output = registry.configure_watermark(args.filesystem_uuid, args.low_mib, args.recover_mib, args.alert_socket)
+        elif args.command == "disk-watermark":
+            action = "observed" if args.observed else "alerts" if args.alerts else "sample"
+            output = registry.disk_watermark(action)
+        elif args.command == "set-capacity":
+            output = registry.set_capacity(args.workspace_memory_mib, args.host_memory_floor_mib,
+                                           args.volume_free_floor_mib)
+        else:
+            project = registry.workspace(args.environment, args.user_id, create=args.command == "ensure")
+            if args.command == "ensure":
+                output = project.ensure(unlocked_readiness=True)
+            elif args.command == "check-write":
+                result = registry.check_disk_admission()
+                output = {"write_allowed": result["write_allowed"], "configured": result["configured"]}
+            elif args.command == "status":
+                output = project.state()
+            elif args.command in ("reap", "recycle", "restart"):
+                output = project.drain(args.command)
+            else:
+                output = project.business(args.command, getattr(args, "lease", None))
+    return output
 
 
 def main():
@@ -1255,39 +1404,7 @@ def main():
     os.umask(0o077)
     try:
         local_engine()
-        with locked_registry(args.state_dir, args.command == "init", operation=args.command) as registry:
-            if args.command == "init":
-                output = registry.initialize(args)
-            elif args.command == "list":
-                output = {"workspaces": [binding.state() for binding in registry.bindings()]}
-            elif args.command == "set-image":
-                output = registry.set_image(args.image)
-            elif args.command == "register-quota-storage":
-                output = registry.register_quota_storage(json.loads(args.bindings.read_bytes()), args.readiness_seconds)
-            elif args.command == "register-quota-nfs":
-                output = registry.register_quota_storage(json.loads(args.bindings.read_bytes()), args.readiness_seconds,
-                                                        manifest=args.manifest, phase=args.phase)
-            elif args.command == "set-disk-watermark":
-                output = registry.configure_watermark(args.filesystem_uuid, args.low_mib, args.recover_mib, args.alert_socket)
-            elif args.command == "disk-watermark":
-                action = "observed" if args.observed else "alerts" if args.alerts else "sample"
-                output = registry.disk_watermark(action)
-            elif args.command == "set-capacity":
-                output = registry.set_capacity(args.workspace_memory_mib, args.host_memory_floor_mib,
-                                               args.volume_free_floor_mib)
-            else:
-                project = registry.workspace(args.environment, args.user_id, create=args.command == "ensure")
-                if args.command == "ensure":
-                    output = project.ensure()
-                elif args.command == "check-write":
-                    result = registry.check_disk_admission()
-                    output = {"write_allowed": result["write_allowed"], "configured": result["configured"]}
-                elif args.command == "status":
-                    output = project.state()
-                elif args.command in ("reap", "recycle", "restart"):
-                    output = project.drain(args.command)
-                else:
-                    output = project.business(args.command, getattr(args, "lease", None))
+        output = execute(args)
         print(json.dumps(output))
     except (OSError, ValueError, subprocess.SubprocessError, Problem) as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)

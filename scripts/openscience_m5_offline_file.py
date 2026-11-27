@@ -117,7 +117,8 @@ def web_cleanup(root, user, action, data, until_ms, *, environment="dev-m1"):
     if type(until_ms) is not int or not 0 < until_ms - time.time() * 1000 <= 30_000:
         raise ValueError("cleanup_expired")
     try:
-        with manager.locked_registry(root, False, operation="offline-file") as registry:
+        with manager.locked_registry(root, False, operation="offline-file",
+                                     workspace=(environment, user)) as registry:
             if time.time() * 1000 >= until_ms:
                 raise ValueError("cleanup_expired")
             ws = registry.workspace(environment, user)
@@ -157,7 +158,8 @@ def main():
     manager.local_engine()
     # Hold the lifecycle reservation throughout the operation. Other running
     # users can still submit read-only disk admission checks for their writes.
-    with manager.locked_registry(args.state_dir, False, operation="offline-file") as registry:
+    with manager.locked_registry(args.state_dir, False, operation="offline-file",
+                                 workspace=(args.environment, args.user_id)) as registry:
         ws = registry.workspace(args.environment, args.user_id)
         if args.action == "delete":
             if not re.fullmatch("[a-f0-9]{64}", args.confirm):
