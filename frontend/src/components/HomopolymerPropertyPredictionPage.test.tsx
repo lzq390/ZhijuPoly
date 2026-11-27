@@ -472,7 +472,7 @@ describe("HomopolymerPropertyPredictionPage", () => {
 
   it("AI 助手在辅助栏打开，与使用说明共用一个辅助栏", () => {
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
-    const ai = screen.getByRole("button", { name: /^AI 助手\s*，\s*未开放$/ });
+    const ai = screen.getByRole("button", { name: "AI 助手" });
     const help = screen.getByRole("button", { name: "使用说明" });
 
     fireEvent.click(ai);
@@ -496,7 +496,7 @@ describe("HomopolymerPropertyPredictionPage", () => {
     render(<HomopolymerPropertyPredictionPage structure={makeStructure()} />);
     run();
     await waitFor(() => expect(within(resultsTable()).getByText("123")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: /^AI 助手\s*，\s*未开放$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "AI 助手" }));
     const panel = screen.getByRole("tabpanel", { name: "AI 助手" });
 
     expect(within(panel).getByLabelText("AI 可读取的页面内容").textContent).toContain("1 项预测结果");

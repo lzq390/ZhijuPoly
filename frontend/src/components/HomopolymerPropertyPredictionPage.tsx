@@ -250,7 +250,6 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
               id: "assistant",
               label: "AI 助手",
               icon: <Sparkles aria-hidden="true" />,
-              status: "未开放",
               pressed: dockOpen && dockTab === "assistant",
               controls: dockId,
               buttonRef: assistantButtonRef,

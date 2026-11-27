@@ -1691,20 +1691,6 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- module dock placement ---------- */
-/* Below 1800px the dock floats instead of pushing. The platform default floats it over the right
-   edge, which here is the task panel: the help section that explains the results, and the assistant
-   that discusses them, would hide the very results. While the panel sits beside the canvas (≥ 900px
-   workbench), the dock floats just left of the panel instead, over the canvas. The offset repeats
-   the panel column's own clamp, whose 42% is of the same width (the frame is the grid). */
-@media (min-width: 900px) and (max-width: 1799px) {
-  @container np-sw-workbench (min-width: 900px) {
-    .np-structure-workbench.np-homopolymer-prediction .np-hp-frame > .np-module-dock {
-      right: calc(clamp(var(--np-hp-panel-min), 42%, var(--np-hp-panel-max)) + 8px);
-    }
-  }
-}
-
 /* ---------- help (module dock): quick start, a sticky index, then one card per topic ---------- */
 .np-homopolymer-prediction .np-module-dock__body:has(> .np-hp-help) {
   background: var(--np-hp-tint);
@@ -2531,11 +2517,10 @@ body:has(.np-homopolymer-prediction .Ketcher-root) > .MuiPopover-root :is([data-
   font-size: 11.5px;
 }
 
-/* Selected tiles stay white: the channel colour lives only in the filled check (and the group
-   badge), so nine selected tiles no longer outshout the run button and the results. */
 .np-homopolymer-prediction .np-hp-chip.is-selected {
   color: var(--np-hp-ink);
-  box-shadow: inset 0 0 0 1px var(--np-hp-tick);
+  background: color-mix(in srgb, var(--np-hp-channel) 7%, #fff);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--np-hp-channel) 42%, transparent);
 }
 
 .np-homopolymer-prediction .np-hp-chip.is-selected .np-hp-chip__check {
