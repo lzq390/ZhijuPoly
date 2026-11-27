@@ -1,0 +1,121 @@
+{
+  "applied_at": "2026-11-27T07:59:07.993641+00:00",
+  "read_back_at": "2026-11-27T07:59:13.687670+00:00",
+  "site_deployment": "3dd2a8ca68b74095a47ff958657f4c58",
+  "registry_deployment": "18eefdc362ce467ba5f71180cbc9e2ea",
+  "configured_max_active": 2,
+  "per_active_workspace_mib": 2144,
+  "before": {
+    "host_memory_floor_mib": 16384,
+    "volume_free_floor_mib": 32768,
+    "workspace_memory_mib": 4288
+  },
+  "after": {
+    "host_memory_floor_mib": 16384,
+    "volume_free_floor_mib": 32768,
+    "workspace_memory_mib": 2144
+  },
+  "effective_max_active": 1,
+  "agent_site_running": true,
+  "observed_water_state": "normal",
+  "observed_write_allowed": true,
+  "source_volume_bindings_verified": true,
+  "source_workspace_states": {
+    "a": "recycled",
+    "b": "recycled"
+  },
+  "registry_only_capacity_changed": true,
+  "two_commitments_guard_readback": "workspace_capacity: workspace_memory (required_mib=4288, limit_mib=2144)",
+  "two_commitments_check": "The manager evaluated its persisted live admission policy for two workspaces without starting containers.",
+  "operator_restriction_configured_at_budget_change": false,
+  "operator_allowlist": {
+    "applied_at": "2026-11-27T08:05:59.338044+00:00",
+    "independent_readback_at": "2026-11-27T08:05:59.765832+00:00",
+    "binding_count": 2,
+    "enabled": {
+      "deploy-user-a": true,
+      "deploy-user-b": false
+    },
+    "environment_enabled": true,
+    "b_unrevoked_handoffs": 0
+  },
+  "opening_browser": {
+    "kind": "automated_operator_browser_check",
+    "browser": "153.0.8010.12",
+    "status": "passed",
+    "started_at": "2026-11-27T08:06:16.046Z",
+    "completed_at": "2026-11-27T08:06:51.060Z",
+    "distinct_sessions": true,
+    "a": {
+      "platform_login": 200,
+      "ticket_http": 200,
+      "workspace_rendered": true,
+      "reads": {
+        "health_http": 200,
+        "healthy": true,
+        "notebook_http": 200,
+        "notebook_sha256": "d1538c9505ef47be52255bf7255c8e1c4cb6904ccf42ad07d426b31c228df1f8"
+      },
+      "logout_http": 204
+    },
+    "b": {
+      "platform_login": 200,
+      "ticket_http": 403,
+      "workspace_denied": true,
+      "logout_http": 204
+    },
+    "blocked_writes": 0
+  },
+  "observation": {
+    "phase": "operator",
+    "status_at_open": "observing",
+    "start": "2026-11-27T08:06:51.060000+00:00",
+    "deadline": "2026-11-28T08:06:51.060000+00:00",
+    "duration_hours": 24,
+    "automatic_stage_promotion": false,
+    "candidate_login": "deploy-user-a",
+    "control_login": "deploy-user-b",
+    "duty_contact_recorded_in_host_private_register": true
+  },
+  "protected_volumes": {
+    "matched_previous_capacity_record_at": "2026-11-27T08:09:19.443364+00:00",
+    "source_volumes": 2,
+    "recovery_volumes": 2,
+    "matched_fields": [
+      "user_id",
+      "uid",
+      "gid",
+      "workspace",
+      "volume",
+      "filesystem_uuid",
+      "inode"
+    ]
+  },
+  "sampling_at_open": {
+    "timer": "nexpoly-m6-operator-20261127-day.timer",
+    "enabled": true,
+    "active": true,
+    "user_linger": true,
+    "sampling_interval_seconds": 300,
+    "service_result": "success",
+    "early_status": {
+      "start": "2026-11-27T08:06:51.060000+00:00",
+      "deadline": "2026-11-28T08:06:51.060000+00:00",
+      "samples": 3,
+      "last": "2026-11-27T08:11:51.422323+00:00",
+      "latest_problems": [],
+      "anomaly_count": 0,
+      "last_anomaly": null,
+      "receipt": null
+    },
+    "scheduled_samples": 288,
+    "first_scheduled": "2026-11-27T08:11:51.060000+00:00",
+    "last_scheduled": "2026-11-28T08:06:51.060000+00:00",
+    "installed_sha256": {
+      "observe.py": "04a91bed4e8901c783a0245bc9dc33a417f6bc4bf7c53bcffd31bcac8ff02cba",
+      "nexpoly-m6-operator-20261127-day.timer": "8d3cafcf1f9982429d56b3ee2150fe717d1bed845fed973656b71ec23d36a879",
+      "nexpoly-m6-operator-20261127-day.service": "fc1bbf5d2292ff7b5592f390a0dae0e53d42b13a36a6a3b8b08cb326aadf619c"
+    },
+    "first_timer_trigger_local": "Fri 2026-11-27 16:11:51 CST"
+  }
+}
