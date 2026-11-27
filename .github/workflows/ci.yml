@@ -515,6 +515,11 @@ jobs:
             python -m pytest scripts/tests/test_user_isolation_release_contract.py scripts/tests/test_monomer_usage_hooks.py scripts/tests/test_production_worker_cohort.py --assert=plain --tb=short
           fi
 
+      - name: Run OpenScience M2/M3 authority integration
+        if: matrix.shard == 0
+        timeout-minutes: 10
+        run: scripts/ci/test_openscience_m2m3_authority.sh
+
       - name: Run native retrosynthesis HTTP and MCP SDK contract
         if: matrix.shard == 0
         env:

@@ -179,6 +179,22 @@ OPENSCIENCE_RELEASE_CONTROLLER_PATH = (
     REPOSITORY_ROOT / "scripts" / "openscience_ui_release.py"
 )
 
+OPENSCIENCE_AUTHORITY_SCRIPT_PATH = (
+    REPOSITORY_ROOT / "scripts" / "ci" / "test_openscience_m2m3_authority.sh"
+)
+OPENSCIENCE_AUTHORITY_STEP = (
+    "      - name: Run OpenScience M2/M3 authority integration\n"
+    "        if: matrix.shard == 0\n"
+    "        timeout-minutes: 10\n"
+    "        run: scripts/ci/test_openscience_m2m3_authority.sh"
+)
+OPENSCIENCE_AUTHORITY_SCRIPT_MARKERS = (
+    "OPENSCIENCE_M2_INTEGRATION=1",
+    "OPENSCIENCE_M3_AUTH_TEST=1",
+    "test_one_time_ticket_and_device_specific_revocation",
+    "test_real_login_delegation_scope_replay_expiration_and_logout",
+    'for outcome in ("skipped", "failure", "error"):',
+)
 PINNED_ACTION = re.compile(
     r"^\s*-?\s*uses:\s*[^\s@]+@([0-9a-f]{40})(?:\s*#.*)?$"
 )
@@ -1734,6 +1750,33 @@ def validate_confirmed_mcp_images(ci_text: str, failures: list[str]) -> None:
         ("actual runtime tests", "Run gateway SDK and audience tests inside its real base runtime"),
         ("runtime asset permissions", "Verify derived UI assets under the runtime UID"),
     ), label="MCP derived image CI", failures=failures)
+
+
+def validate_openscience_authority_integration(
+    ci_text: str, script_text: str, failures: list[str]
+) -> None:
+    """M2/M3 isolation cases are skip-gated by design, so CI must run them explicitly."""
+    backend = workflow_job_body(ci_text, "backend-tests", failures)
+    if backend is not None:
+        steps = [
+            step.rstrip()
+            for step in workflow_step_blocks(backend)
+            if step.startswith("      - name: Run OpenScience M2/M3 authority integration\n")
+        ]
+        if steps != [OPENSCIENCE_AUTHORITY_STEP]:
+            failures.append(
+                "backend shard 0 must run the exact OpenScience M2/M3 authority integration step"
+            )
+    if ci_text.count("scripts/ci/test_openscience_m2m3_authority.sh") != 1:
+        failures.append("ci.yml must run the OpenScience M2/M3 authority integration exactly once")
+    for marker in OPENSCIENCE_AUTHORITY_SCRIPT_MARKERS:
+        if script_text.count(marker) != 1:
+            failures.append(
+                "OpenScience M2/M3 authority integration must run both suites "
+                f"and reject skipped cases: {marker}"
+            )
+    if "|| true" in script_text or "pytest.skip" in script_text:
+        failures.append("OpenScience M2/M3 authority integration cannot ignore failures or skips")
 
 
 def validate_polymer_md_script_tests(ci_text: str, failures: list[str]) -> None:
@@ -3415,6 +3458,15 @@ def main() -> int:
     validate_independent_mcp_tests(ci_text, failures)
     validate_confirmed_mcp_images(ci_text, failures)
     validate_polymer_md_script_tests(ci_text, failures)
+    if (
+        OPENSCIENCE_AUTHORITY_SCRIPT_PATH.is_symlink()
+        or not OPENSCIENCE_AUTHORITY_SCRIPT_PATH.is_file()
+    ):
+        failures.append("OpenScience M2/M3 authority integration script is missing or unsafe")
+        openscience_authority_script = ""
+    else:
+        openscience_authority_script = OPENSCIENCE_AUTHORITY_SCRIPT_PATH.read_text(encoding="utf-8")
+    validate_openscience_authority_integration(ci_text, openscience_authority_script, failures)
     validate_gpu_session_compose_policy(ci_text, failures)
     validate_exact_b_job(ci_text, failures)
     validate_isolation_image_smoke(ci_text, failures)
