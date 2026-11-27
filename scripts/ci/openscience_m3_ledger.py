@@ -133,6 +133,18 @@ def main():
             and len(set(owners.values())) == len(set(workspaces.values())) == 2,
             "Candidate database bindings differ from the enrolled owners",
         )
+    if "capacity_calls" in spec:
+        require(environment == "deploy-m6", "Expected the capacity candidate")
+        before, calls = spec["baseline"], spec["capacity_calls"]
+        require(before["deployment"] == spec["deployment"] and 1 <= len(calls) <= 2, "Invalid capacity round")
+        require(all(c["user_id"] in owners.values() for c in calls), "Unregistered capacity account")
+        counts, records = query(pg, other_counts_sql(owners) + CALLS_SQL, {
+            "since": before["at"], "sessions": [c["workspace_session"] for c in calls],
+            "observed": {c["user_id"]: {"tg_c": c["predicted_tg_c"]} for c in calls},
+        }, database)
+        require(counts["other_owners"] == before["other_owners"], "Unrelated account activity during the round")
+        print(json.dumps(records))
+        return
     if "users" not in spec:
         (snapshot,) = query(pg, other_counts_sql(owners), {}, database)
         print(json.dumps({"deployment": spec["deployment"], **snapshot}))

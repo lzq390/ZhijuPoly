@@ -1,0 +1,1258 @@
+{
+  "measured_at": "2026-11-27T07:51:08.414631+00:00",
+  "production_9011_accessed": false,
+  "preflight": {
+    "observed_at": "2026-11-27T07:13:49.760626+00:00",
+    "deployment": "18eefdc362ce467ba5f71180cbc9e2ea",
+    "site_deployment": "3dd2a8ca68b74095a47ff958657f4c58",
+    "workspace_image": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+    "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+    "model_image": "sha256:886fc49f0ad7a4a4922e9f820886a9b0f7e76829f6dfbc84a41b02fbd9a68961",
+    "max_active": 2,
+    "reference_residents": [],
+    "readiness_watchdog_seconds": 120,
+    "idle_seconds": 1800,
+    "admission_budget_mib": {
+      "host_memory_floor_mib": 16384,
+      "volume_free_floor_mib": 32768,
+      "workspace_memory_mib": 4288
+    },
+    "reserved_mib_per_user": 2144,
+    "reserved_disk_mib_per_user": 2048,
+    "enrolled_users": 2,
+    "host_mem_available_mib": 185358,
+    "docker_volume_free_bytes": 91790999552,
+    "workspace_backing_free_bytes": 259034202112,
+    "backup_backing_free_bytes": 91791138816,
+    "backup_guest_free_bytes": 5177860096,
+    "watermark_bytes": {
+      "low": 34359738368,
+      "recover": 38654705664
+    },
+    "factors_active_count": {
+      "max_active": 2,
+      "enrolled_accounts": 2,
+      "workspace_memory": 2,
+      "host_memory": 78,
+      "docker_and_workspace_storage": 26
+    },
+    "admissible_active": 2
+  },
+  "reference_stack_commit": "296506ab2689e5656599f34310bc5b843de10723",
+  "scope": {
+    "workload": "November workspace, candidate gateway, isolated real property predictor, two different synthetic polymers, deterministic tool-selection model",
+    "accounts": "Fresh platform users, quota-backed source-host candidate; independent ordinary three-user registry for +1 count check",
+    "idle_sweep_seconds": 30,
+    "source_idle_seconds": 1800,
+    "test_idle_seconds": 90,
+    "cold_backend_timing": "Concurrent supervisor ensure to ready response, including queuing, health and project probes. Nearest-rank P95.",
+    "cold_browser_timing": "Separate genuinely cold browser runs; elapsed time from ticket request to visible workbench or confirmed health. Each run ends with natural idle reclamation."
+  },
+  "clone": {
+    "image": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+    "capacity": {
+      "host_memory_floor_mib": 16384,
+      "volume_free_floor_mib": 32768,
+      "workspace_memory_mib": 4288
+    },
+    "max_active": 2,
+    "readiness_seconds": 120,
+    "disk_watermark": {
+      "filesystem_uuid": "17741123-97c1-49e5-af93-b53272bf051a",
+      "low_bytes": 34359738368,
+      "recover_bytes": 38654705664
+    },
+    "format": 5,
+    "idle_seconds": 90,
+    "deployment": "72971af9116a441a8c2e9afaafe12339",
+    "native_claim": {
+      "deployment": "72971af9116a441a8c2e9afaafe12339",
+      "filesystem_uuids": {
+        "a": "4b391032-4429-4242-bc3c-21150689b1a0",
+        "b": "0c11c14e-b764-43de-80fc-0afe4bbff827"
+      },
+      "phase": "src",
+      "registry_sha256": "2156388f20fe21ee1e9f8412a67ff5bbb3a71e7a323c7b692cdb835a822f02b6"
+    },
+    "owners": {
+      "a": {
+        "environment": "deploy-m6",
+        "gid": 8920849,
+        "uid": 8920849,
+        "user_id": "a9da8b01-da37-419e-ac9e-2878a58ed6bf",
+        "workspace": "246fdec89c944941a86cd78e688ff875"
+      },
+      "b": {
+        "environment": "deploy-m6",
+        "gid": 10334866,
+        "uid": 10334866,
+        "user_id": "e1970921-f1ad-47a6-b38e-b34f963aeeb8",
+        "workspace": "dce0c103edeb4244b0abfcebbe92610e"
+      }
+    },
+    "original_oncall_bound": false,
+    "initial_water": {
+      "configured": true,
+      "state": "normal",
+      "write_allowed": true,
+      "sampled_at": "2026-11-27T07:17:32.499941+00:00",
+      "poll_interval_seconds": 2,
+      "sequence": 0,
+      "last_transition": null,
+      "reason": null,
+      "filesystem_uuid": "17741123-97c1-49e5-af93-b53272bf051a",
+      "low_bytes": 34359738368,
+      "recover_bytes": 38654705664,
+      "total_bytes": 3779302981632,
+      "available_bytes": 258782879744,
+      "workspaces": {
+        "a": {
+          "uid": 8920849,
+          "filesystem_uuid": "4b391032-4429-4242-bc3c-21150689b1a0",
+          "user_hard_bytes": 2000000000,
+          "group_gate": "open",
+          "group_hard_kib": 0,
+          "group_hard_inodes": 0,
+          "group_used_bytes": 40960,
+          "group_used_inodes": 10
+        },
+        "b": {
+          "uid": 10334866,
+          "filesystem_uuid": "0c11c14e-b764-43de-80fc-0afe4bbff827",
+          "user_hard_bytes": 2000000000,
+          "group_gate": "open",
+          "group_hard_kib": 0,
+          "group_hard_inodes": 0,
+          "group_used_bytes": 40960,
+          "group_used_inodes": 10
+        }
+      },
+      "environment": "deploy-m6",
+      "deployment": "72971af9116a441a8c2e9afaafe12339"
+    }
+  },
+  "capacity_runs": {
+    "2": {
+      "started_at": "2026-11-27T07:17:33.797395+00:00",
+      "status": "p95_exceeded",
+      "image": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+      "workspace_deployment": "72971af9116a441a8c2e9afaafe12339",
+      "site_deployment": "1c44de771aae40bfb9c485d9b55db793",
+      "owners": {
+        "a": "a9da8b01-da37-419e-ac9e-2878a58ed6bf",
+        "b": "e1970921-f1ad-47a6-b38e-b34f963aeeb8"
+      },
+      "active_under_test": 2,
+      "idle_seconds": 90,
+      "admission": {
+        "host_memory_floor_mib": 16384,
+        "volume_free_floor_mib": 32768,
+        "workspace_memory_mib": 4288
+      },
+      "max_active": 2,
+      "target_ready_seconds": 30,
+      "backend_probe_timeout_seconds": 120,
+      "timing": "simultaneous ensure dispatch through private supervisor to success (/global/health and /project/current), including queue",
+      "backup_guest_before": {
+        "total_bytes": 5196382208,
+        "available_bytes": 5179523072
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "started_at": "2026-11-27T07:17:43.765782+00:00",
+          "metrics": {
+            "samples": 420,
+            "nominal_interval_seconds": 0.65,
+            "max_simultaneous_workspace_bytes": 519012352,
+            "max_simultaneous_workspace_working_set_bytes": 518590464,
+            "max_simultaneous_workspace_and_shared_container_bytes": 864800768,
+            "min_host_available_bytes": 191586385920,
+            "min_disk_available_bytes": {
+              "docker": 91226714112,
+              "target": 258780385280,
+              "backup_host": 91226714112
+            },
+            "cgroups": {
+              "07de452e7c90145d414b1c4ee0d55f25dcf6d600a3b4672e63226d169e2f0168": {
+                "role": "shared",
+                "peak_bytes": 319041536,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "bf6e7c4c50e0801fdeaa6b88724058703d2cb5b1637c4863ecc2c38385e8359f": {
+                "role": "shared",
+                "peak_bytes": 26456064,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "d3c1c90e220dcfeeef786558e5594e4515b6e3b781a610187def8eb227f03500": {
+                "role": "shared",
+                "peak_bytes": 115957760,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "f4440d259988c0b0422eabd487699de4ee67d79d94c9fd5ad8e8c68542cef680": {
+                "role": "fixture",
+                "peak_bytes": 36958208,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "d1ae021bed650de58f6924ee701526de112db167113638fed684deaa703a080c": {
+                "role": "backend",
+                "peak_bytes": 250441728,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "23f29eb0aca120dcd100378c44569130124e832a2debf2ad43f92063dd02cec4": {
+                "role": "fixture",
+                "peak_bytes": 36786176,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "ebbc1b8bc4d814c35840bfc9c4823368429c695cdfba089810e59ab92e690e20": {
+                "role": "backend",
+                "peak_bytes": 243572736,
+                "oom": 0,
+                "oom_kill": 0
+              }
+            },
+            "workspace_docker_oom_events": []
+          },
+          "users": {
+            "a": {
+              "user_id": "a9da8b01-da37-419e-ac9e-2878a58ed6bf",
+              "container_id": "ebbc1b8bc4d814c35840bfc9c4823368429c695cdfba089810e59ab92e690e20",
+              "volume": "nexpoly-m5-ae3862cde5cc-src-a",
+              "uid": 8920849,
+              "generation": 1,
+              "submit_to_ready_seconds": 46.403,
+              "volume_fs": {
+                "total_bytes": 3094347776,
+                "available_bytes": 3077570560,
+                "private_volume_allocated_bytes": 126976
+              }
+            },
+            "b": {
+              "user_id": "e1970921-f1ad-47a6-b38e-b34f963aeeb8",
+              "container_id": "d1ae021bed650de58f6924ee701526de112db167113638fed684deaa703a080c",
+              "volume": "nexpoly-m5-ae3862cde5cc-src-b",
+              "uid": 10334866,
+              "generation": 1,
+              "submit_to_ready_seconds": 22.36,
+              "volume_fs": {
+                "total_bytes": 3094347776,
+                "available_bytes": 3077570560,
+                "private_volume_allocated_bytes": 126976
+              }
+            }
+          },
+          "browser": {
+            "start": "2026-11-27T07:18:33.034Z",
+            "status": "passed",
+            "deployment": "1c44de771aae40bfb9c485d9b55db793",
+            "registry_deployment": "72971af9116a441a8c2e9afaafe12339",
+            "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+            "browser": "153.0.8010.12",
+            "run": "56899da2-0d18-44c4-a8d2-f323bc827632",
+            "calls": [
+              {
+                "owner": "a",
+                "user_id": "a9da8b01-da37-419e-ac9e-2878a58ed6bf",
+                "workspace_session": "ses_de420ba47ffeEunEeISyz49qRN",
+                "workspace_id": "246fdec89c944941a86cd78e688ff875",
+                "started": "2026-11-27T07:19:19.628Z",
+                "finished": "2026-11-27T07:19:45.877Z",
+                "call_id": "call_ac3741365b6f494e85b9a03eb7a5dc4f",
+                "predicted_tg_c": 70.4328,
+                "operation_id": "a692b69e-8a83-45c8-8a96-5fc195faed43",
+                "native_http": 200,
+                "usage_operation_id": "d6559441-f023-4547-84fe-ee3c9c498c71",
+                "successful_settlements": 1,
+                "completed_native_tasks": 1,
+                "stored_result_matches_browser": true
+              },
+              {
+                "owner": "b",
+                "user_id": "e1970921-f1ad-47a6-b38e-b34f963aeeb8",
+                "workspace_session": "ses_de4208aa2ffeDINy9Z6xmE1AWW",
+                "workspace_id": "dce0c103edeb4244b0abfcebbe92610e",
+                "started": "2026-11-27T07:19:19.629Z",
+                "finished": "2026-11-27T07:19:35.924Z",
+                "call_id": "call_ba98dc22ab084ccea60eebe2dd171a22",
+                "predicted_tg_c": 74.6038,
+                "operation_id": "1125d5ff-d0bb-4e66-999b-0997dbe9a02d",
+                "native_http": 200,
+                "usage_operation_id": "fe02e255-2e7a-406c-ba69-a8509e9a67a2",
+                "successful_settlements": 1,
+                "completed_native_tasks": 1,
+                "stored_result_matches_browser": true
+              }
+            ],
+            "handoffs": [
+              {
+                "owner": "a",
+                "login_to_workspace_rendered_ms": 19872,
+                "ticket_to_rendered_ms": 15134,
+                "ticket_to_verified_health_ms": 15230
+              },
+              {
+                "owner": "b",
+                "login_to_workspace_rendered_ms": 37271,
+                "ticket_to_rendered_ms": 32502,
+                "ticket_to_verified_health_ms": 32594
+              }
+            ],
+            "initial_workspace": "running",
+            "unrelated_owner_delta": 0,
+            "end": "2026-11-27T07:19:47.888Z"
+          },
+          "collection": {
+            "all_reclaimed_seconds_after_clients_closed": 169.172,
+            "reclaimed_container_ids": [
+              "23f29eb0aca120dcd100378c44569130124e832a2debf2ad43f92063dd02cec4",
+              "d1ae021bed650de58f6924ee701526de112db167113638fed684deaa703a080c",
+              "ebbc1b8bc4d814c35840bfc9c4823368429c695cdfba089810e59ab92e690e20",
+              "f4440d259988c0b0422eabd487699de4ee67d79d94c9fd5ad8e8c68542cef680"
+            ],
+            "recycled_accounts": 2
+          },
+          "ended_at": "2026-11-27T07:22:38.004508+00:00"
+        },
+        {
+          "round": 2,
+          "started_at": "2026-11-27T07:22:43.506703+00:00",
+          "metrics": {
+            "samples": 401,
+            "nominal_interval_seconds": 0.65,
+            "max_simultaneous_workspace_bytes": 518688768,
+            "max_simultaneous_workspace_working_set_bytes": 518352896,
+            "max_simultaneous_workspace_and_shared_container_bytes": 981487616,
+            "min_host_available_bytes": 192590536704,
+            "min_disk_available_bytes": {
+              "docker": 91205152768,
+              "target": 258778279936,
+              "backup_host": 91205152768
+            },
+            "cgroups": {
+              "07de452e7c90145d414b1c4ee0d55f25dcf6d600a3b4672e63226d169e2f0168": {
+                "role": "shared",
+                "peak_bytes": 357515264,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "bf6e7c4c50e0801fdeaa6b88724058703d2cb5b1637c4863ecc2c38385e8359f": {
+                "role": "shared",
+                "peak_bytes": 26456064,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "d3c1c90e220dcfeeef786558e5594e4515b6e3b781a610187def8eb227f03500": {
+                "role": "shared",
+                "peak_bytes": 131510272,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "f3fced6f03d7ad63ac41379f80d074c871627f69edf4efff696086ed46f3216e": {
+                "role": "fixture",
+                "peak_bytes": 36913152,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "bd54b72bc57cb815a8770c99dd12dd1416c2e7a459488bffcb1cfa6f4f75bb4b": {
+                "role": "backend",
+                "peak_bytes": 248901632,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "04732e0e0615e8e71a1c34983b761a2e5d15fa428f6484e6ac3774f3f2882047": {
+                "role": "backend",
+                "peak_bytes": 243818496,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "2ab4f677005c5abb5333fb74828cde42df676e8501704e8aec05a8e7c9626196": {
+                "role": "fixture",
+                "peak_bytes": 36777984,
+                "oom": 0,
+                "oom_kill": 0
+              }
+            },
+            "workspace_docker_oom_events": []
+          },
+          "users": {
+            "a": {
+              "user_id": "a9da8b01-da37-419e-ac9e-2878a58ed6bf",
+              "container_id": "04732e0e0615e8e71a1c34983b761a2e5d15fa428f6484e6ac3774f3f2882047",
+              "volume": "nexpoly-m5-ae3862cde5cc-src-a",
+              "uid": 8920849,
+              "generation": 2,
+              "submit_to_ready_seconds": 48.161,
+              "volume_fs": {
+                "total_bytes": 3094347776,
+                "available_bytes": 3077570560,
+                "private_volume_allocated_bytes": 233472
+              }
+            },
+            "b": {
+              "user_id": "e1970921-f1ad-47a6-b38e-b34f963aeeb8",
+              "container_id": "bd54b72bc57cb815a8770c99dd12dd1416c2e7a459488bffcb1cfa6f4f75bb4b",
+              "volume": "nexpoly-m5-ae3862cde5cc-src-b",
+              "uid": 10334866,
+              "generation": 2,
+              "submit_to_ready_seconds": 21.957,
+              "volume_fs": {
+                "total_bytes": 3094347776,
+                "available_bytes": 3077570560,
+                "private_volume_allocated_bytes": 233472
+              }
+            }
+          },
+          "browser": {
+            "start": "2026-11-27T07:23:35.046Z",
+            "status": "passed",
+            "deployment": "1c44de771aae40bfb9c485d9b55db793",
+            "registry_deployment": "72971af9116a441a8c2e9afaafe12339",
+            "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+            "browser": "153.0.8010.12",
+            "run": "43e49223-22e6-4997-9a18-a1fc067bc740",
+            "calls": [
+              {
+                "owner": "a",
+                "user_id": "a9da8b01-da37-419e-ac9e-2878a58ed6bf",
+                "workspace_session": "ses_de41c4b41ffezhd8xjPSw7Ewxu",
+                "workspace_id": "246fdec89c944941a86cd78e688ff875",
+                "started": "2026-11-27T07:24:09.123Z",
+                "finished": "2026-11-27T07:24:26.322Z",
+                "call_id": "call_73fa500996284c8cbd6c996e994ee007",
+                "predicted_tg_c": 70.4328,
+                "operation_id": "8181d0bd-5bcf-4c4c-9d0c-dad93a7bc9b6",
+                "native_http": 200,
+                "usage_operation_id": "910cbba9-2d24-4b95-81ad-843ef9479af0",
+                "successful_settlements": 1,
+                "completed_native_tasks": 1,
+                "stored_result_matches_browser": true
+              },
+              {
+                "owner": "b",
+                "user_id": "e1970921-f1ad-47a6-b38e-b34f963aeeb8",
+                "workspace_session": "ses_de41c1f01ffe0T5O0VtwVctIaO",
+                "workspace_id": "dce0c103edeb4244b0abfcebbe92610e",
+                "started": "2026-11-27T07:24:09.123Z",
+                "finished": "2026-11-27T07:24:36.422Z",
+                "call_id": "call_8ff238afeabf4463b535aba82fbe9670",
+                "predicted_tg_c": 74.6038,
+                "operation_id": "def29b64-3f37-4428-9fcf-2cd4dd313e08",
+                "native_http": 200,
+                "usage_operation_id": "4c620c2d-9201-4679-a6f5-1ab65c80295b",
+                "successful_settlements": 1,
+                "completed_native_tasks": 1,
+                "stored_result_matches_browser": true
+              }
+            ],
+            "handoffs": [
+              {
+                "owner": "a",
+                "login_to_workspace_rendered_ms": 15665,
+                "ticket_to_rendered_ms": 13215,
+                "ticket_to_verified_health_ms": 13407
+              },
+              {
+                "owner": "b",
+                "login_to_workspace_rendered_ms": 22991,
+                "ticket_to_rendered_ms": 20554,
+                "ticket_to_verified_health_ms": 20622
+              }
+            ],
+            "initial_workspace": "running",
+            "unrelated_owner_delta": 0,
+            "end": "2026-11-27T07:24:38.575Z"
+          },
+          "collection": {
+            "all_reclaimed_seconds_after_clients_closed": 164.484,
+            "reclaimed_container_ids": [
+              "04732e0e0615e8e71a1c34983b761a2e5d15fa428f6484e6ac3774f3f2882047",
+              "2ab4f677005c5abb5333fb74828cde42df676e8501704e8aec05a8e7c9626196",
+              "bd54b72bc57cb815a8770c99dd12dd1416c2e7a459488bffcb1cfa6f4f75bb4b",
+              "f3fced6f03d7ad63ac41379f80d074c871627f69edf4efff696086ed46f3216e"
+            ],
+            "recycled_accounts": 2
+          },
+          "ended_at": "2026-11-27T07:27:24.005497+00:00"
+        }
+      ],
+      "memory_overload": {
+        "reason": "workspace_capacity: workspace_memory (required_mib=4288, limit_mib=4287)",
+        "refusal_seconds": 5.333,
+        "online_read_write": true,
+        "same_online_backend": true,
+        "resident_containers": 2,
+        "online_browser": {
+          "start": "2026-11-27T07:28:15.317Z",
+          "status": "passed",
+          "deployment": "1c44de771aae40bfb9c485d9b55db793",
+          "registry_deployment": "72971af9116a441a8c2e9afaafe12339",
+          "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+          "browser": "153.0.8010.12",
+          "run": "2fea4177-d59d-43ac-8373-83a68066e2f5",
+          "calls": [
+            {
+              "owner": "a",
+              "user_id": "a9da8b01-da37-419e-ac9e-2878a58ed6bf",
+              "workspace_session": "ses_de4180e4dffe7Kg7hlX3fs4fUe",
+              "workspace_id": "246fdec89c944941a86cd78e688ff875",
+              "started": "2026-11-27T07:28:35.501Z",
+              "finished": "2026-11-27T07:28:53.494Z",
+              "call_id": "call_b43e00e34ab34ddab787a0eaf5c85505",
+              "predicted_tg_c": 70.4328,
+              "operation_id": "fab784c1-e914-4616-ab30-69a89eaed5f5",
+              "native_http": 200,
+              "usage_operation_id": "dda9d044-ce77-42f9-b0ad-ff0731237edf",
+              "successful_settlements": 1,
+              "completed_native_tasks": 1,
+              "stored_result_matches_browser": true
+            }
+          ],
+          "handoffs": [
+            {
+              "owner": "a",
+              "login_to_workspace_rendered_ms": 9882,
+              "ticket_to_rendered_ms": 7984,
+              "ticket_to_verified_health_ms": 8131
+            }
+          ],
+          "initial_workspace": "running",
+          "unrelated_owner_delta": 0,
+          "end": "2026-11-27T07:28:55.691Z"
+        },
+        "probe_elapsed_seconds": 54.93
+      },
+      "final_idle_reap": {
+        "all_reclaimed_seconds_after_clients_closed": 106.35,
+        "reclaimed_container_ids": [
+          "5376ee5a46499ef2a44f4ac9c201ff93e42566bd2f83a0374cb7c40153323a49",
+          "c29cf373fa3fdbcbd369f9e9f8e18ab230d01dffda690e0b979169701ded8fc7"
+        ],
+        "recycled_accounts": 2
+      },
+      "backup_guest_after": {
+        "total_bytes": 5196382208,
+        "available_bytes": 5179523072
+      },
+      "final_policy": {
+        "host_memory_floor_mib": 16384,
+        "volume_free_floor_mib": 32768,
+        "workspace_memory_mib": 4288
+      },
+      "remaining_workspace_containers": [],
+      "summary": {
+        "cold_samples": 4,
+        "p50_seconds": 22.36,
+        "p95_seconds": 48.161,
+        "max_simultaneous_workspaces_bytes": 519012352,
+        "max_workspace_and_shared_bytes": 981487616,
+        "oom_events": 0,
+        "oom_kills": 0,
+        "docker_oom_events": 0,
+        "shared_oom_observed": false,
+        "disk_floor_met": true,
+        "host_memory_floor_met": true,
+        "backup_physical_reserve_met": true,
+        "guest_backup_free_bytes": 5179523072
+      },
+      "ended_at": "2026-11-27T07:30:51.377593+00:00"
+    },
+    "1": {
+      "started_at": "2026-11-27T07:30:51.607809+00:00",
+      "status": "passed",
+      "image": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+      "workspace_deployment": "72971af9116a441a8c2e9afaafe12339",
+      "site_deployment": "1c44de771aae40bfb9c485d9b55db793",
+      "owners": {
+        "a": "a9da8b01-da37-419e-ac9e-2878a58ed6bf",
+        "b": "e1970921-f1ad-47a6-b38e-b34f963aeeb8"
+      },
+      "active_under_test": 1,
+      "idle_seconds": 90,
+      "admission": {
+        "host_memory_floor_mib": 16384,
+        "volume_free_floor_mib": 32768,
+        "workspace_memory_mib": 4288
+      },
+      "max_active": 2,
+      "target_ready_seconds": 30,
+      "backend_probe_timeout_seconds": 120,
+      "timing": "simultaneous ensure dispatch through private supervisor to success (/global/health and /project/current), including queue",
+      "backup_guest_before": {
+        "total_bytes": 5196382208,
+        "available_bytes": 5179523072
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "started_at": "2026-11-27T07:30:57.606269+00:00",
+          "metrics": {
+            "samples": 286,
+            "nominal_interval_seconds": 0.65,
+            "max_simultaneous_workspace_bytes": 273903616,
+            "max_simultaneous_workspace_working_set_bytes": 273879040,
+            "max_simultaneous_workspace_and_shared_container_bytes": 680075264,
+            "min_host_available_bytes": 193168961536,
+            "min_disk_available_bytes": {
+              "docker": 91227246592,
+              "target": 258776895488,
+              "backup_host": 91227246592
+            },
+            "cgroups": {
+              "07de452e7c90145d414b1c4ee0d55f25dcf6d600a3b4672e63226d169e2f0168": {
+                "role": "shared",
+                "peak_bytes": 357515264,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "bf6e7c4c50e0801fdeaa6b88724058703d2cb5b1637c4863ecc2c38385e8359f": {
+                "role": "shared",
+                "peak_bytes": 26456064,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "d3c1c90e220dcfeeef786558e5594e4515b6e3b781a610187def8eb227f03500": {
+                "role": "shared",
+                "peak_bytes": 131510272,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "59726b476cf071ba1d5f7f7269695b615c7628c52c580f698130ce746fbfe63e": {
+                "role": "fixture",
+                "peak_bytes": 36712448,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "7c75dabbb82008bc2584e544ca7df4a2ecf95b22820e784b7117d8fdf377ce05": {
+                "role": "backend",
+                "peak_bytes": 249585664,
+                "oom": 0,
+                "oom_kill": 0
+              }
+            },
+            "workspace_docker_oom_events": []
+          },
+          "users": {
+            "a": {
+              "user_id": "a9da8b01-da37-419e-ac9e-2878a58ed6bf",
+              "container_id": "7c75dabbb82008bc2584e544ca7df4a2ecf95b22820e784b7117d8fdf377ce05",
+              "volume": "nexpoly-m5-ae3862cde5cc-src-a",
+              "uid": 8920849,
+              "generation": 4,
+              "submit_to_ready_seconds": 22.066,
+              "volume_fs": {
+                "total_bytes": 3094347776,
+                "available_bytes": 3077570560,
+                "private_volume_allocated_bytes": 417792
+              }
+            }
+          },
+          "browser": {
+            "start": "2026-11-27T07:31:22.279Z",
+            "status": "passed",
+            "deployment": "1c44de771aae40bfb9c485d9b55db793",
+            "registry_deployment": "72971af9116a441a8c2e9afaafe12339",
+            "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+            "browser": "153.0.8010.12",
+            "run": "ebddf994-166e-4c0c-b700-16e0eea6bb80",
+            "calls": [
+              {
+                "owner": "a",
+                "user_id": "a9da8b01-da37-419e-ac9e-2878a58ed6bf",
+                "workspace_session": "ses_de4152005ffegFQ0GfxxgBZ65w",
+                "workspace_id": "246fdec89c944941a86cd78e688ff875",
+                "started": "2026-11-27T07:31:47.576Z",
+                "finished": "2026-11-27T07:32:04.186Z",
+                "call_id": "call_2e8a28b88e4f435eb01aa9f1d4cf396c",
+                "predicted_tg_c": 70.4328,
+                "operation_id": "b2f8a675-a749-4cf6-974d-f682d20f475d",
+                "native_http": 200,
+                "usage_operation_id": "0ac04aa4-9e81-4d85-807f-129c2571052d",
+                "successful_settlements": 1,
+                "completed_native_tasks": 1,
+                "stored_result_matches_browser": true
+              }
+            ],
+            "handoffs": [
+              {
+                "owner": "a",
+                "login_to_workspace_rendered_ms": 18692,
+                "ticket_to_rendered_ms": 16800,
+                "ticket_to_verified_health_ms": 16817
+              }
+            ],
+            "initial_workspace": "running",
+            "unrelated_owner_delta": 0,
+            "end": "2026-11-27T07:32:06.172Z"
+          },
+          "collection": {
+            "all_reclaimed_seconds_after_clients_closed": 130.338,
+            "reclaimed_container_ids": [
+              "59726b476cf071ba1d5f7f7269695b615c7628c52c580f698130ce746fbfe63e",
+              "7c75dabbb82008bc2584e544ca7df4a2ecf95b22820e784b7117d8fdf377ce05"
+            ],
+            "recycled_accounts": 2
+          },
+          "ended_at": "2026-11-27T07:34:17.004432+00:00"
+        },
+        {
+          "round": 2,
+          "started_at": "2026-11-27T07:34:22.125126+00:00",
+          "metrics": {
+            "samples": 293,
+            "nominal_interval_seconds": 0.65,
+            "max_simultaneous_workspace_bytes": 267284480,
+            "max_simultaneous_workspace_working_set_bytes": 267272192,
+            "max_simultaneous_workspace_and_shared_container_bytes": 676990976,
+            "min_host_available_bytes": 193135308800,
+            "min_disk_available_bytes": {
+              "docker": 91226824704,
+              "target": 258775867392,
+              "backup_host": 91226824704
+            },
+            "cgroups": {
+              "07de452e7c90145d414b1c4ee0d55f25dcf6d600a3b4672e63226d169e2f0168": {
+                "role": "shared",
+                "peak_bytes": 357515264,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "bf6e7c4c50e0801fdeaa6b88724058703d2cb5b1637c4863ecc2c38385e8359f": {
+                "role": "shared",
+                "peak_bytes": 26456064,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "d3c1c90e220dcfeeef786558e5594e4515b6e3b781a610187def8eb227f03500": {
+                "role": "shared",
+                "peak_bytes": 131510272,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "bd8cd50157a761d1e01ac5c5af9ebeeece89ab0b184278c9053fc5a2e6cdca62": {
+                "role": "backend",
+                "peak_bytes": 248958976,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "cc9b9d6687791e76523663755fbf2c400dc76cf43312ff0d2902a23c1373e1b4": {
+                "role": "fixture",
+                "peak_bytes": 36741120,
+                "oom": 0,
+                "oom_kill": 0
+              }
+            },
+            "workspace_docker_oom_events": []
+          },
+          "users": {
+            "b": {
+              "user_id": "e1970921-f1ad-47a6-b38e-b34f963aeeb8",
+              "container_id": "bd8cd50157a761d1e01ac5c5af9ebeeece89ab0b184278c9053fc5a2e6cdca62",
+              "volume": "nexpoly-m5-ae3862cde5cc-src-b",
+              "uid": 10334866,
+              "generation": 3,
+              "submit_to_ready_seconds": 23.458,
+              "volume_fs": {
+                "total_bytes": 3094347776,
+                "available_bytes": 3077570560,
+                "private_volume_allocated_bytes": 323584
+              }
+            }
+          },
+          "browser": {
+            "start": "2026-11-27T07:34:48.077Z",
+            "status": "passed",
+            "deployment": "1c44de771aae40bfb9c485d9b55db793",
+            "registry_deployment": "72971af9116a441a8c2e9afaafe12339",
+            "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+            "browser": "153.0.8010.12",
+            "run": "e94647d6-d5f0-4d7b-a20b-a6c694e0f1c9",
+            "calls": [
+              {
+                "owner": "b",
+                "user_id": "e1970921-f1ad-47a6-b38e-b34f963aeeb8",
+                "workspace_session": "ses_de411e804ffeb7sHnJvfFIyX8q",
+                "workspace_id": "dce0c103edeb4244b0abfcebbe92610e",
+                "started": "2026-11-27T07:35:18.576Z",
+                "finished": "2026-11-27T07:35:34.674Z",
+                "call_id": "call_81c2925e8fef43f69d8ac0378c73e2f7",
+                "predicted_tg_c": 74.6038,
+                "operation_id": "95b8b50a-5199-4b13-a6b8-49e557325daf",
+                "native_http": 200,
+                "usage_operation_id": "e213aec6-fc7c-4898-92e9-58c7069fc89e",
+                "successful_settlements": 1,
+                "completed_native_tasks": 1,
+                "stored_result_matches_browser": true
+              }
+            ],
+            "handoffs": [
+              {
+                "owner": "b",
+                "login_to_workspace_rendered_ms": 23898,
+                "ticket_to_rendered_ms": 21932,
+                "ticket_to_verified_health_ms": 22011
+              }
+            ],
+            "initial_workspace": "running",
+            "unrelated_owner_delta": 0,
+            "end": "2026-11-27T07:35:36.627Z"
+          },
+          "collection": {
+            "all_reclaimed_seconds_after_clients_closed": 129.227,
+            "reclaimed_container_ids": [
+              "bd8cd50157a761d1e01ac5c5af9ebeeece89ab0b184278c9053fc5a2e6cdca62",
+              "cc9b9d6687791e76523663755fbf2c400dc76cf43312ff0d2902a23c1373e1b4"
+            ],
+            "recycled_accounts": 2
+          },
+          "ended_at": "2026-11-27T07:37:46.005149+00:00"
+        }
+      ],
+      "backup_guest_after": {
+        "total_bytes": 5196382208,
+        "available_bytes": 5179523072
+      },
+      "final_policy": {
+        "host_memory_floor_mib": 16384,
+        "volume_free_floor_mib": 32768,
+        "workspace_memory_mib": 4288
+      },
+      "remaining_workspace_containers": [],
+      "summary": {
+        "cold_samples": 2,
+        "p50_seconds": 22.066,
+        "p95_seconds": 23.458,
+        "max_simultaneous_workspaces_bytes": 273903616,
+        "max_workspace_and_shared_bytes": 680075264,
+        "oom_events": 0,
+        "oom_kills": 0,
+        "docker_oom_events": 0,
+        "shared_oom_observed": false,
+        "disk_floor_met": true,
+        "host_memory_floor_met": true,
+        "backup_physical_reserve_met": true,
+        "guest_backup_free_bytes": 5179523072
+      },
+      "ended_at": "2026-11-27T07:37:46.770470+00:00"
+    }
+  },
+  "full_count_check": {
+    "started": "2026-11-27T07:12:59.329996+00:00",
+    "status": "passed",
+    "user_ids": [
+      "a179db63-d5c3-4089-a9f4-4b304df74405",
+      "9e2251c7-7fb9-4e68-9031-ae80badb6a69",
+      "c8b10181-f2fa-4edb-a340-85f870a3c4c2"
+    ],
+    "image": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+    "policy_mib": {
+      "host_memory_floor_mib": 16384,
+      "volume_free_floor_mib": 32768,
+      "workspace_memory_mib": 4288
+    },
+    "max_active": 2,
+    "reference_deployment": "18eefdc362ce467ba5f71180cbc9e2ea",
+    "storage": "new local Docker volumes",
+    "deployment": "d7213ec5648a42daa477741349a77096",
+    "refused": "workspace_capacity: instance_count (required=3, limit=2)",
+    "users_after_refusal": [
+      {
+        "user_id": "a179db63-d5c3-4089-a9f4-4b304df74405",
+        "uid": 29464693,
+        "workspace": "f7bb013a17ab442d8bd769e1f3d1bec0",
+        "volume": "nexpoly-m1-d7213ec5648a-f7bb013a17ab442d8bd769e1f3d1bec0-data",
+        "container_id": "cb536aa8a74ee29856935d3472279153ad4a5eb6797f0c9274bb9d02d26ac090",
+        "generation": 1
+      },
+      {
+        "user_id": "9e2251c7-7fb9-4e68-9031-ae80badb6a69",
+        "uid": 73095602,
+        "workspace": "9a9aa599dba14848859ef7dc838954c5",
+        "volume": "nexpoly-m1-d7213ec5648a-9a9aa599dba14848859ef7dc838954c5-data",
+        "container_id": "a1427e86006a93b6bc796084643040b8b99ff2c82cf9d3eabbda8e552b15aac0",
+        "generation": 1
+      }
+    ],
+    "third_volume": "nexpoly-m1-d7213ec5648a-18d1c3abea544614bfb04e8332f220f2-data",
+    "third_generation_after_retry": 2,
+    "third_private_file_recovered": true,
+    "both_residents_read_write": true,
+    "resources_unchanged_at_refusal": true,
+    "resources_after_cleanup": {
+      "containers": [],
+      "volumes": []
+    },
+    "ended": "2026-11-27T07:14:22.669478+00:00"
+  },
+  "cold_browser_runs": {
+    "browser-cold": {
+      "browser": {
+        "start": "2026-11-27T07:37:58.801Z",
+        "status": "passed",
+        "deployment": "1c44de771aae40bfb9c485d9b55db793",
+        "registry_deployment": "72971af9116a441a8c2e9afaafe12339",
+        "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+        "browser": "153.0.8010.12",
+        "run": "33f0d381-413d-484e-bb74-1ab63aecf179",
+        "calls": [
+          {
+            "owner": "a",
+            "user_id": "a9da8b01-da37-419e-ac9e-2878a58ed6bf",
+            "workspace_session": "ses_de40ef4cdffeVYCWf7yc2UQzh5",
+            "workspace_id": "246fdec89c944941a86cd78e688ff875",
+            "started": "2026-11-27T07:39:11.906Z",
+            "finished": "2026-11-27T07:39:28.593Z",
+            "call_id": "call_17d83e5f53be4cab9aebaefede7fa464",
+            "predicted_tg_c": 70.4328,
+            "operation_id": "ff7e0d1b-2cd5-4467-9e9e-7406c0329b9e",
+            "native_http": 200,
+            "usage_operation_id": "0309e51f-0024-4ae9-8ccb-d5634dc299de",
+            "successful_settlements": 1,
+            "completed_native_tasks": 1,
+            "stored_result_matches_browser": true
+          },
+          {
+            "owner": "b",
+            "user_id": "e1970921-f1ad-47a6-b38e-b34f963aeeb8",
+            "workspace_session": "ses_de40e5832ffebbDmTYw6BboU2M",
+            "workspace_id": "dce0c103edeb4244b0abfcebbe92610e",
+            "started": "2026-11-27T07:39:11.907Z",
+            "finished": "2026-11-27T07:39:39.028Z",
+            "call_id": "call_b719dc8119234b07a8cca8cdab67d600",
+            "predicted_tg_c": 74.6038,
+            "operation_id": "11601406-dd72-4d08-8f3a-01f09962ee8b",
+            "native_http": 200,
+            "usage_operation_id": "91295871-752c-4365-abac-d1b6dab500a9",
+            "successful_settlements": 1,
+            "completed_native_tasks": 1,
+            "stored_result_matches_browser": true
+          }
+        ],
+        "handoffs": [
+          {
+            "owner": "a",
+            "login_to_workspace_rendered_ms": 24096,
+            "ticket_to_rendered_ms": 21725,
+            "ticket_to_verified_health_ms": 21742
+          },
+          {
+            "owner": "b",
+            "login_to_workspace_rendered_ms": 58958,
+            "ticket_to_rendered_ms": 56552,
+            "ticket_to_verified_health_ms": 56567
+          }
+        ],
+        "initial_workspace": "cold",
+        "unrelated_owner_delta": 0,
+        "end": "2026-11-27T07:39:41.002Z"
+      },
+      "automatic_reap": {
+        "all_reclaimed_seconds_after_clients_closed": 185.301,
+        "reclaimed_container_ids": [
+          "45345ca80cedc1cf1b0abc6f534c4c190eae802b61ebea81e3fe3d600ea07687",
+          "6f91fc624c1b873df2c089dc59f00c6eefcefc7aa27e36c507606a3ebc4e479f",
+          "791948328b6e6606a1a3c8dd522a8c4db97e3f728814fba57ed49476e337217b",
+          "e3ac1a7132a3999616873e0dd67a2fcb801c06f0a7d09de634086e7ce6c1e52c"
+        ],
+        "recycled_accounts": 2
+      }
+    },
+    "browser-cold-a": {
+      "browser": {
+        "start": "2026-11-27T07:42:52.370Z",
+        "status": "passed",
+        "deployment": "1c44de771aae40bfb9c485d9b55db793",
+        "registry_deployment": "72971af9116a441a8c2e9afaafe12339",
+        "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+        "browser": "153.0.8010.12",
+        "run": "dd3cc245-acb0-4039-9b7e-98d42f5aebc2",
+        "calls": [
+          {
+            "owner": "a",
+            "user_id": "a9da8b01-da37-419e-ac9e-2878a58ed6bf",
+            "workspace_session": "ses_de40a7ac9ffebwHQdtNOtr6wRk",
+            "workspace_id": "246fdec89c944941a86cd78e688ff875",
+            "started": "2026-11-27T07:43:25.194Z",
+            "finished": "2026-11-27T07:43:47.786Z",
+            "call_id": "call_6e6eb230cb7c49c2b316f610740a9e80",
+            "predicted_tg_c": 70.4328,
+            "operation_id": "51b2800e-1f73-4a14-aab1-8a27599fe2d0",
+            "native_http": 200,
+            "usage_operation_id": "389c3885-dabf-4363-ab3c-be4c810e37aa",
+            "successful_settlements": 1,
+            "completed_native_tasks": 1,
+            "stored_result_matches_browser": true
+          }
+        ],
+        "handoffs": [
+          {
+            "owner": "a",
+            "login_to_workspace_rendered_ms": 23963,
+            "ticket_to_rendered_ms": 22018,
+            "ticket_to_verified_health_ms": 22035
+          }
+        ],
+        "initial_workspace": "cold",
+        "unrelated_owner_delta": 0,
+        "end": "2026-11-27T07:43:49.746Z"
+      },
+      "automatic_reap": {
+        "all_reclaimed_seconds_after_clients_closed": 150.615,
+        "reclaimed_container_ids": [
+          "d2cf572d350df27d4401d34d99d61e1cb9e6cbf8454244751565238de9569df9",
+          "f0ad2007b467496ad6f90ab05bcd724643b8f8ba3fb9be326fe5203c2185333a"
+        ],
+        "recycled_accounts": 2
+      }
+    },
+    "browser-cold-b": {
+      "browser": {
+        "start": "2026-11-27T07:46:26.373Z",
+        "status": "passed",
+        "deployment": "1c44de771aae40bfb9c485d9b55db793",
+        "registry_deployment": "72971af9116a441a8c2e9afaafe12339",
+        "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+        "browser": "153.0.8010.12",
+        "run": "9d1b5029-2419-4bcd-ba56-92125b7d787e",
+        "calls": [
+          {
+            "owner": "b",
+            "user_id": "e1970921-f1ad-47a6-b38e-b34f963aeeb8",
+            "workspace_session": "ses_de40736f0ffeQ0g0r0yj9yasWv",
+            "workspace_id": "dce0c103edeb4244b0abfcebbe92610e",
+            "started": "2026-11-27T07:46:59.164Z",
+            "finished": "2026-11-27T07:47:21.836Z",
+            "call_id": "call_f09a4b7ae74c49b6ba7ac82fbcb6fd03",
+            "predicted_tg_c": 74.6038,
+            "operation_id": "d9297970-8f8c-4e7c-a8d4-c66e2ed101d7",
+            "native_http": 200,
+            "usage_operation_id": "5ed8c8c3-2243-4b17-887d-8472b12e2b87",
+            "successful_settlements": 1,
+            "completed_native_tasks": 1,
+            "stored_result_matches_browser": true
+          }
+        ],
+        "handoffs": [
+          {
+            "owner": "b",
+            "login_to_workspace_rendered_ms": 23937,
+            "ticket_to_rendered_ms": 21985,
+            "ticket_to_verified_health_ms": 22173
+          }
+        ],
+        "initial_workspace": "cold",
+        "unrelated_owner_delta": 0,
+        "end": "2026-11-27T07:47:23.895Z"
+      },
+      "automatic_reap": {
+        "all_reclaimed_seconds_after_clients_closed": 148.156,
+        "reclaimed_container_ids": [
+          "52d5a971b9c57f5da73c4a8f06c62d126efa0af03d286cb54293028b11e7e513",
+          "e833968754eb00cc30e57028189c28aae328ad1de9ff4cfa21285bdf97e52c3a"
+        ],
+        "recycled_accounts": 2
+      }
+    }
+  },
+  "distinct_settled_native_tool_calls": 11,
+  "before_disks": {
+    "observed_at": "2026-11-27T07:16:36.403121+00:00",
+    "host_workspace_backing": {
+      "filesystem_device": "259:0",
+      "filesystem_uuid": "17741123-97c1-49e5-af93-b53272bf051a",
+      "ordinary_free_bytes": 258842390528,
+      "total_bytes": 3779302981632
+    },
+    "host_archive_backing": {
+      "filesystem_device": "259:4",
+      "filesystem_uuid": "1040a101-9b75-4623-9dc9-35ce8a80355f",
+      "ordinary_free_bytes": 91582218240,
+      "total_bytes": 1887976378368
+    },
+    "guest_filesystems": {
+      "a": {
+        "ordinary_free_bytes": 3077263360,
+        "total_bytes": 3094126592
+      },
+      "b": {
+        "ordinary_free_bytes": 3077263360,
+        "total_bytes": 3094126592
+      },
+      "archive": {
+        "ordinary_free_bytes": 5179523072,
+        "total_bytes": 5196382208
+      }
+    }
+  },
+  "after_disks": {
+    "observed_at": "2026-11-27T07:50:20.955403+00:00",
+    "host_workspace_backing": {
+      "filesystem_device": "259:0",
+      "filesystem_uuid": "17741123-97c1-49e5-af93-b53272bf051a",
+      "ordinary_free_bytes": 258772852736,
+      "total_bytes": 3779302981632
+    },
+    "host_archive_backing": {
+      "filesystem_device": "259:4",
+      "filesystem_uuid": "1040a101-9b75-4623-9dc9-35ce8a80355f",
+      "ordinary_free_bytes": 91158609920,
+      "total_bytes": 1887976378368
+    },
+    "guest_filesystems": {
+      "a": {
+        "ordinary_free_bytes": 3076620288,
+        "total_bytes": 3094126592
+      },
+      "b": {
+        "ordinary_free_bytes": 3076714496,
+        "total_bytes": 3094126592
+      },
+      "archive": {
+        "ordinary_free_bytes": 5179523072,
+        "total_bytes": 5196382208
+      }
+    }
+  },
+  "storage_guest_process": {
+    "scope": "storage guest process on the capacity clone; peak RSS since guest boot, separate from cgroups",
+    "date_start": "2026-11-27T07:19:22.241148+00:00",
+    "max_rss_bytes": 2110906368,
+    "last_sample": "2026-11-27T07:51:05.277607+00:00"
+  },
+  "protected_source_and_recovery_before_and_after": {
+    "source": {
+      "site_deployment": "3dd2a8ca68b74095a47ff958657f4c58",
+      "registry_deployment": "18eefdc362ce467ba5f71180cbc9e2ea",
+      "registry_claim": "src",
+      "owners": {
+        "a": {
+          "uid": 21920475,
+          "gid": 21920475,
+          "user_id": "ba404642-b217-433b-b9fd-197a19052ebd",
+          "workspace": "9fab349023044d6cad03bfa7e6da1d1a",
+          "volume": "nexpoly-m5-c4e5734f0b8d-src-a",
+          "filesystem_uuid": "d3d749f2-21b9-4e74-95cc-1942ee0a3b22",
+          "inode": 33555867
+        },
+        "b": {
+          "uid": 11718917,
+          "gid": 11718917,
+          "user_id": "9a523765-6bee-4dd3-af85-c2da61cfc778",
+          "workspace": "88dbb1094ce543779c99a061bb7b9cf8",
+          "volume": "nexpoly-m5-c4e5734f0b8d-src-b",
+          "filesystem_uuid": "149a5529-30a2-4110-b542-3b3e74cfafbb",
+          "inode": 33555868
+        }
+      }
+    },
+    "recovery": {
+      "site_deployment": "c231bb61c43d4316a5e1c5cdd6e42ba7",
+      "registry_deployment": "b49fb94b6f6445a4b2e9bbca0d105aa0",
+      "registry_claim": "dst",
+      "owners": {
+        "a": {
+          "uid": 21920475,
+          "gid": 21920475,
+          "user_id": "ba404642-b217-433b-b9fd-197a19052ebd",
+          "workspace": "9fab349023044d6cad03bfa7e6da1d1a",
+          "volume": "nexpoly-m5-1ddb6fbec334-dst-a",
+          "filesystem_uuid": "3d5eaa76-fd65-48fc-8b8c-f57bdb8a3d09",
+          "inode": 107877337
+        },
+        "b": {
+          "uid": 11718917,
+          "gid": 11718917,
+          "user_id": "9a523765-6bee-4dd3-af85-c2da61cfc778",
+          "workspace": "88dbb1094ce543779c99a061bb7b9cf8",
+          "volume": "nexpoly-m5-1ddb6fbec334-dst-b",
+          "filesystem_uuid": "f39a2077-2edb-4be1-a705-428463575bc1",
+          "inode": 107877338
+        }
+      }
+    }
+  },
+  "independent_site_shutdown": {
+    "stopped": "2026-11-27T07:50:03.265016+00:00",
+    "site_deployment": "1c44de771aae40bfb9c485d9b55db793",
+    "workspace_deployment": "72971af9116a441a8c2e9afaafe12339",
+    "workspace_holders": 0,
+    "site_containers": 0
+  },
+  "independent_storage_shutdown": {
+    "completed_at": "2026-11-27T07:51:07.996659+00:00",
+    "vm_stopped": true,
+    "relay_stopped": true,
+    "candidate_site_stopped": true,
+    "protected_equal": true,
+    "new_disk_inodes": {
+      "m5-a": 33557538,
+      "m5-b": 33557539,
+      "m5-restore-a": 17127679,
+      "m5-restore-b": 17127697,
+      "m5-backup": 17127698
+    },
+    "detached_new_volumes": {
+      "dst-a": "nexpoly-m5-ae3862cde5cc-dst-a",
+      "dst-b": "nexpoly-m5-ae3862cde5cc-dst-b",
+      "src-a": "nexpoly-m5-ae3862cde5cc-src-a",
+      "src-b": "nexpoly-m5-ae3862cde5cc-src-b"
+    }
+  },
+  "source_services": {
+    "pg": {
+      "before": {
+        "id": "7fac75a1dc166af652f967fb0de1c1b78a31264b09c600a55a14ca7e3d446a3a",
+        "image": "sha256:eb4759788a2182f08257135e61a34f2cfc3c2914079f3465d64ee62350f4d081",
+        "started": "2026-11-27T06:55:59.139697522Z",
+        "oom_killed": false,
+        "restarts": 0
+      },
+      "same_after": true
+    },
+    "api": {
+      "before": {
+        "id": "edaad7647c0dd8146a546a433c7cf2cf45ff899e1cfbe33643f11577d2bfc46e",
+        "image": "sha256:886fc49f0ad7a4a4922e9f820886a9b0f7e76829f6dfbc84a41b02fbd9a68961",
+        "started": "2026-11-27T06:56:06.782756059Z",
+        "oom_killed": false,
+        "restarts": 0
+      },
+      "same_after": true
+    },
+    "gateway": {
+      "before": {
+        "id": "6b9a88d633db6337ad731247b7b20d75ea50c4aedac226fe85d79f928da8f584",
+        "image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+        "started": "2026-11-27T06:56:05.964137039Z",
+        "oom_killed": false,
+        "restarts": 0
+      },
+      "same_after": true
+    },
+    "model": {
+      "before": {
+        "id": "06e6654cbc49e3cc12109953dd1de2d3b50ca2d7390c5404d05c49d90b16e364",
+        "image": "sha256:886fc49f0ad7a4a4922e9f820886a9b0f7e76829f6dfbc84a41b02fbd9a68961",
+        "started": "2026-11-27T06:56:00.79729327Z",
+        "oom_killed": false,
+        "restarts": 0
+      },
+      "same_after": true
+    }
+  },
+  "host_oom_counter": {
+    "first_at": "2026-11-27T07:18:16.810231+00:00",
+    "last_at": "2026-11-27T07:51:08.332572+00:00",
+    "before": 6,
+    "after": 6,
+    "same_boot": true
+  },
+  "backend_passed_widths": [
+    1
+  ]
+}
