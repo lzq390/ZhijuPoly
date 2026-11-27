@@ -10,16 +10,25 @@ export type PredictionRun = {
   finishedAt: Date;
 };
 
-const MINUS = "−";
+export const MINUS = "−";
+
+/** Shown numbers use the typographic minus (U+2212), so a negative value and a negative change
+    carry the same sign in one row. Exports keep the ASCII hyphen so spreadsheets read them as numbers. */
+export function withDisplayMinus(text: string) {
+  return text.startsWith("-") ? `${MINUS}${text.slice(1)}` : text;
+}
 
 /** Display precision follows magnitude; exports keep the raw model value. */
 export function formatPredictionValue(value: number | undefined | null): string | null {
   if (value === undefined || value === null || !Number.isFinite(value)) return null;
   const magnitude = Math.abs(value);
-  if (magnitude >= 100) return value.toFixed(0);
-  if (magnitude >= 1) return String(Number(value.toFixed(1)));
   if (magnitude === 0) return "0";
-  return Number(value.toPrecision(2)).toString();
+  const text = magnitude >= 100
+    ? value.toFixed(0)
+    : magnitude >= 1
+      ? String(Number(value.toFixed(1)))
+      : Number(value.toPrecision(2)).toString();
+  return withDisplayMinus(text);
 }
 
 export function predictionValue(run: PredictionRun | null | undefined, property: PredictableProperty) {

@@ -1,4 +1,5 @@
 import type { PredictableProperty } from "../../types";
+import { withDisplayMinus } from "./predictionFormat";
 
 /**
  * Fixed display ranges for the readout scale beside each result. They are axes chosen to span
@@ -47,7 +48,7 @@ export function tickPercent(property: PredictableProperty, tick: number) {
 
 function formatBound(value: number) {
   if (Math.abs(value) >= 10_000) return `10${toSuperscript(Math.round(Math.log10(value)))}`;
-  return String(value);
+  return withDisplayMinus(String(value));
 }
 
 function toSuperscript(value: number) {

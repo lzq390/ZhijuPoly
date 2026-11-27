@@ -32,7 +32,8 @@ describe("readout scales", () => {
   });
 
   it("labels ranges in plain units", () => {
-    expect(scaleRangeLabel("Glass transition temperature", "°C")).toBe("-150 – 450 °C");
+    expect(scaleRangeLabel("Glass transition temperature", "°C")).toBe("−150 – 450 °C");
+    expect(scaleBounds("Glass transition temperature")).toEqual(["−150", "450"]);
     expect(scaleRangeLabel("O2 Permeability Barrer", "Barrer")).toBe("0.01 – 10⁴ Barrer，对数刻度");
     expect(scaleBounds("Elongation at break")).toEqual(["1", "1000"]);
   });

@@ -13,6 +13,7 @@ import {
   displaySmiles,
   formatPredictionValue,
   formatRunTime,
+  MINUS,
   predictionDelta,
   predictionTable,
   predictionValue,
@@ -349,7 +350,7 @@ function ResultTable({
             const previousFormatted = formatPredictionValue(previous);
             const direction = value !== null && previous !== null && value !== previous ? (value > previous ? " is-up" : " is-down") : "";
             const percent = value !== null && previous !== null && previous !== 0 && value !== previous
-              ? `${value > previous ? "+" : "−"}${Math.abs(((value - previous) / previous) * 100).toFixed(1)}%`
+              ? `${value > previous ? "+" : MINUS}${Math.abs(((value - previous) / previous) * 100).toFixed(1)}%`
               : undefined;
             return (
               <tr key={property}>

@@ -6,7 +6,10 @@ describe("predictionFormat", () => {
     expect(formatPredictionValue(101.34)).toBe("101");
     expect(formatPredictionValue(44.46)).toBe("44.5");
     expect(formatPredictionValue(0.0347)).toBe("0.035");
-    expect(formatPredictionValue(-36.24)).toBe("-36.2");
+    expect(formatPredictionValue(-36.24)).toBe("−36.2");
+    expect(formatPredictionValue(-130.4)).toBe("−130");
+    expect(formatPredictionValue(-0.0347)).toBe("−0.035");
+    expect(formatPredictionValue(-0)).toBe("0");
     expect(formatPredictionValue(undefined)).toBeNull();
     expect(formatPredictionValue(Number.NaN)).toBeNull();
   });
@@ -20,6 +23,15 @@ describe("predictionFormat", () => {
   it("只在显示时去掉 CXSMILES 扩展块", () => {
     expect(displaySmiles("*CC* |$star_e;;;star_e$|")).toBe("*CC*");
     expect(displaySmiles("CCO")).toBe("CCO");
+  });
+
+  it("导出保留 ASCII 负号，表格软件可按数字读取", () => {
+    const run = { id: 2, smiles: "*CC*", properties: ["Glass transition temperature" as const],
+      predictions: { "Glass transition temperature": -125.5 }, queryTimeMs: 1, finishedAt: new Date() };
+    const previous = { ...run, id: 1, predictions: { "Glass transition temperature": 10 } };
+    const csv = toCsv(predictionTable(run, previous));
+    expect(csv).toContain("°C,-125.5,10,-135.5,*CC*");
+    expect(csv).not.toContain("−");
   });
 
   it("CSV 保留原始值并转义逗号", () => {
