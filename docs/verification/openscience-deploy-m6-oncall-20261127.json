@@ -1,0 +1,190 @@
+{
+  "date": "2026-11-27",
+  "environment": "deploy-m6",
+  "result": "passed",
+  "site_deployment": "3dd2a8ca68b74095a47ff958657f4c58",
+  "workspace_deployment": "18eefdc362ce467ba5f71180cbc9e2ea",
+  "target_filesystem_uuid": "17741123-97c1-49e5-af93-b53272bf051a",
+  "target": "/data",
+  "trigger_method": "candidate threshold changes only",
+  "subscription": {
+    "latest_before": {
+      "receipts": []
+    },
+    "previous_sequence": 2,
+    "first_sequence": 3,
+    "pending_after": 0
+  },
+  "endpoint": {
+    "socket": "/run/user/1001/nexpoly-deploy-m6-oncall.sock",
+    "socket_mode": "0o600",
+    "database": "~/.local/state/nexpoly-m6-deploy-01/oncall/receipts.sqlite3",
+    "db_mode": "0o600",
+    "socket_unit_enabled": "enabled",
+    "socket_status": "active",
+    "service_status": "active",
+    "user_linger": "yes",
+    "installed_sha256": {
+      "oncall_receiver.py": "5ccac2ce1afd13bb5ad0cbe07634fe9a9b13da26487936e7ce65165ac0f4dc9b",
+      "nexpoly-deploy-m6-oncall.socket": "dc4e2c2193f370a5316534f8deb83c27c4e26790bd303aa9615f03bac6ed589a",
+      "nexpoly-deploy-m6-oncall.service": "ce7d2fad5006e16d522c661edc1a8da97f89e87d88048814df5d6a732371cea9"
+    }
+  },
+  "observations": {
+    "baseline": {
+      "sampled_at": "2026-11-27T01:19:04.151908+00:00",
+      "sequence": 2,
+      "state": "normal",
+      "write_allowed": true,
+      "available_bytes": 259991941120,
+      "low_bytes": 34359738368,
+      "recover_bytes": 38654705664,
+      "group_gates": {
+        "a": "open",
+        "b": "open"
+      }
+    },
+    "low": {
+      "sampled_at": "2026-11-27T01:19:23.411096+00:00",
+      "sequence": 3,
+      "state": "low",
+      "write_allowed": false,
+      "available_bytes": 259991793664,
+      "low_bytes": 261065015296,
+      "recover_bytes": 262138757120,
+      "group_gates": {
+        "a": "block",
+        "b": "block"
+      }
+    },
+    "restored": {
+      "sampled_at": "2026-11-27T01:19:33.259431+00:00",
+      "sequence": 4,
+      "state": "normal",
+      "write_allowed": true,
+      "available_bytes": 259991793664,
+      "low_bytes": 34359738368,
+      "recover_bytes": 38654705664,
+      "group_gates": {
+        "a": "open",
+        "b": "open"
+      }
+    }
+  },
+  "receipt_lookup": [
+    {
+      "event_id": "18eefdc362ce467ba5f71180cbc9e2ea:17741123-97c1-49e5-af93-b53272bf051a:3",
+      "notification": "firing",
+      "receiver_record": {
+        "receipt_id": "c837f5637af5429ba6bfb64a2d524424",
+        "received_at": "2026-11-27T01:19:24.361436+00:00",
+        "event": {
+          "at": "2026-11-27T01:19:23.411096+00:00",
+          "available_bytes": 259991793664,
+          "deployment": "18eefdc362ce467ba5f71180cbc9e2ea",
+          "environment": "deploy-m6",
+          "filesystem_uuid": "17741123-97c1-49e5-af93-b53272bf051a",
+          "id": "18eefdc362ce467ba5f71180cbc9e2ea:17741123-97c1-49e5-af93-b53272bf051a:3",
+          "low_bytes": 261065015296,
+          "notification": "firing",
+          "previous": "normal",
+          "reason": null,
+          "recover_bytes": 262138757120,
+          "sequence": 3,
+          "state": "low"
+        }
+      },
+      "relay_acknowledgement": {
+        "at": "2026-11-27T01:19:24.363783+00:00",
+        "id": "18eefdc362ce467ba5f71180cbc9e2ea:17741123-97c1-49e5-af93-b53272bf051a:3",
+        "notification": "firing",
+        "sequence": 3
+      },
+      "emit_to_receive_ms": 950.34
+    },
+    {
+      "event_id": "18eefdc362ce467ba5f71180cbc9e2ea:17741123-97c1-49e5-af93-b53272bf051a:4",
+      "notification": "resolved",
+      "receiver_record": {
+        "receipt_id": "6a8c0f0dd88d414385cfdc9c41bd7a5d",
+        "received_at": "2026-11-27T01:19:34.369956+00:00",
+        "event": {
+          "at": "2026-11-27T01:19:33.259431+00:00",
+          "available_bytes": 259991793664,
+          "deployment": "18eefdc362ce467ba5f71180cbc9e2ea",
+          "environment": "deploy-m6",
+          "filesystem_uuid": "17741123-97c1-49e5-af93-b53272bf051a",
+          "id": "18eefdc362ce467ba5f71180cbc9e2ea:17741123-97c1-49e5-af93-b53272bf051a:4",
+          "low_bytes": 34359738368,
+          "notification": "resolved",
+          "previous": "low",
+          "reason": null,
+          "recover_bytes": 38654705664,
+          "sequence": 4,
+          "state": "normal"
+        }
+      },
+      "relay_acknowledgement": {
+        "at": "2026-11-27T01:19:34.371471+00:00",
+        "id": "18eefdc362ce467ba5f71180cbc9e2ea:17741123-97c1-49e5-af93-b53272bf051a:4",
+        "notification": "resolved",
+        "sequence": 4
+      },
+      "emit_to_receive_ms": 1110.525
+    }
+  ],
+  "receiver_restart": {
+    "before": {
+      "MainPID": "1040579",
+      "InvocationID": "d8ba0cad4fe44220b45a51b9b69cdca2"
+    },
+    "after": {
+      "MainPID": "1051021",
+      "ActiveState": "active",
+      "SubState": "running",
+      "InvocationID": "27e8b3308e59472289bc7fafbf9f0695"
+    },
+    "readback_at": "2026-11-27T01:20:09.964168+00:00",
+    "same_receipt_ids_times_and_events": true
+  },
+  "sqlite_readback": {
+    "mode": "ro",
+    "matching_distinct_rows": 2
+  },
+  "journal_readback": {
+    "new_receipt_entries": 2
+  },
+  "preserved": {
+    "registry_sha256_before_and_after": {
+      "dev-m1": "83274cac893edfc08a000af90e1410bb2e4190b4413f5c4a5774d36cc44f4fff",
+      "dev-m6": "d64dc50c9b059732c3773ff4a2415654484fd64f953a996e84810fd5d7f0191a"
+    },
+    "volumes_present_without_holders_before_and_after": [
+      "nexpoly-m1-1baca0b5b957-1db5efe5f6f34ff689cb5e7ee9fd67db-data",
+      "nexpoly-m1-1baca0b5b957-8846706fa2064f0aa085ed23a7d62265-data",
+      "nexpoly-m1-67e4414ac390-3c137e9c236d4998bed842786c0f4548-data",
+      "nexpoly-m1-67e4414ac390-463fc2f89367468bb7fc6e048d522c9e-data",
+      "nexpoly-m2-auth-d126855addd046e8917632684f36be80",
+      "nexpoly-m5-b21744274102-dst-a",
+      "nexpoly-m5-b21744274102-dst-b",
+      "nexpoly-m5-b21744274102-src-a",
+      "nexpoly-m5-b21744274102-src-b"
+    ],
+    "candidate_source_bindings_before_and_after": {
+      "deploy-m6/9a523765-6bee-4dd3-af85-c2da61cfc778": {
+        "volume": "nexpoly-m5-c4e5734f0b8d-src-b",
+        "source_inode": 33555868,
+        "actual_inode": 33555868,
+        "uid": 11718917,
+        "generation": 4
+      },
+      "deploy-m6/ba404642-b217-433b-b9fd-197a19052ebd": {
+        "volume": "nexpoly-m5-c4e5734f0b8d-src-a",
+        "source_inode": 33555867,
+        "actual_inode": 33555867,
+        "uid": 21920475,
+        "generation": 5
+      }
+    }
+  }
+}

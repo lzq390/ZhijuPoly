@@ -1,0 +1,12 @@
+[Unit]
+Description=Store and query OpenScience deploy-m6 on-call disk alert receipts
+Requires=nexpoly-deploy-m6-oncall.socket
+After=nexpoly-deploy-m6-oncall.socket
+
+[Service]
+ExecStart=/usr/bin/python3 -IB %h/.local/state/nexpoly-m6-deploy-01/oncall/oncall_receiver.py serve
+UMask=0077
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=2
+SyslogIdentifier=nexpoly-deploy-m6-oncall
