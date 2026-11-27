@@ -80,6 +80,8 @@ def candidate_medium(endpoint):
     phase, role = endpoint["slot"].split("-")
     if phase == "src":
         root, device, serial = vm, "primary", "m5-" + role
+    elif config.get("restore_target") is True:
+        root, device, serial = vm, "primary", "m5-restore-" + role
     else:
         root, device, serial = Path(config["backup_dir"]), "backup", "m5-restore-" + role
     if config["format"] != "nexpoly-m5-isolated-browser-v1" or root != root.resolve(strict=True):

@@ -80,17 +80,17 @@ def secondary(path, primary):
     return separate_disks(device(primary), device(path))
 
 
-def disk_layout(work, archive):
+def disk_layout(work, archive, *, restore_target=False):
     layout = {}
     for serial in offline.DATA_DISKS:
-        directory = archive if archive and serial in SECONDARY_DISKS else work
+        directory = archive if archive and serial in SECONDARY_DISKS and not restore_target else work
         layout[serial] = (directory / (serial + ".raw"), offline.DISK_BYTES)
     layout[offline.BACKUP_DISK] = ((archive or work) / (offline.BACKUP_DISK + ".raw"),
                                    CANDIDATE_BACKUP_BYTES if archive else offline.BACKUP_BYTES)
     return layout
 
 
-def build(work, registry, packages, evidence, base, modules, owners=None, archive=None):
+def build(work, registry, packages, evidence, base, modules, owners=None, archive=None, *, restore_target=False):
     if (
         not base.is_file()
         or offline.file_digest(base) != offline.image_lock()["sha256"]
@@ -106,9 +106,12 @@ def build(work, registry, packages, evidence, base, modules, owners=None, archiv
             rows = validate_candidate_owners(json.load(handle))
         archive.mkdir(mode=0o700)
         secondary(archive, work)
-        require_space(available_bytes(archive), 2 * offline.DISK_BYTES + CANDIDATE_BACKUP_BYTES, 16 * offline.GIB)
+        secondary_bytes = CANDIDATE_BACKUP_BYTES + (0 if restore_target else 2 * offline.DISK_BYTES)
+        require_space(available_bytes(archive), secondary_bytes, 16 * offline.GIB)
         spec = {"version": 1, "environment": "deploy-m6", "hard_limit_bytes": 2_000_000_000,
                 "users": {r: {**row, "registered_generation": 0} for r, row in rows.items()}}
+        if restore_target:
+            spec["restore_target"] = True
         (inputs / "spec.json").write_text(json.dumps(spec, sort_keys=True))
     else:
         stage_inputs(inputs, registry, packages, evidence)
@@ -155,7 +158,7 @@ def build(work, registry, packages, evidence, base, modules, owners=None, archiv
         str(work / "system.qcow2"),
         "20G",
     )
-    for path, size in disk_layout(work, archive).values():
+    for path, size in disk_layout(work, archive, restore_target=restore_target).values():
         with path.open("xb") as handle:
             handle.truncate(size)
     (work / "user-data").write_text(BOOT)
@@ -184,11 +187,11 @@ def build(work, registry, packages, evidence, base, modules, owners=None, archiv
         str(work / "inputs.iso"),
         str(inputs),
     )
-    pin_existing(work, base, port, archive)
+    pin_existing(work, base, port, archive, restore_target=restore_target)
     launch(work, port)
 
 
-def pin_existing(work, base, port, archive=None):
+def pin_existing(work, base, port, archive=None, *, restore_target=False):
     data = {
         "format": "nexpoly-m5-isolated-browser-v1",
         "storage": DEDICATED,
@@ -199,11 +202,13 @@ def pin_existing(work, base, port, archive=None):
             for name in ("kernel", "initrd", "seed.iso", "inputs.iso")
         },
     }
+    if restore_target:
+        data["restore_target"] = True
     if archive:
         data["backup_dir"] = str(archive)
         disks = secondary(archive, work)
         data["host_disks"] = {role: row for role, row in zip(("primary", "backup"), disks)}
-        data["disk_inodes"] = {k: path.stat().st_ino for k, (path, size) in disk_layout(work, archive).items()}
+        data["disk_inodes"] = {k: path.stat().st_ino for k, (path, size) in disk_layout(work, archive, restore_target=restore_target).items()}
     pin = work / "vm.json"
     with storage_lock(work):
         if pin.exists() or pin.is_symlink():
@@ -257,7 +262,7 @@ def resume(work):
 
 def checked_layout(work, config):
     archive = Path(config["backup_dir"]) if "backup_dir" in config else None
-    layout = disk_layout(work, archive)
+    layout = disk_layout(work, archive, restore_target=config.get("restore_target") is True)
     if archive:
         disks = secondary(archive, work)
         if config["host_disks"] != dict(zip(("primary", "backup"), disks)):
@@ -391,11 +396,15 @@ def main():
     )
     parser.add_argument("--owners", type=Path, help="Private deploy-m6 account registration for a fresh candidate")
     parser.add_argument("--backup-dir", type=Path, help="New private directory on a different physical disk")
+    parser.add_argument("--restore-target", action="store_true",
+                        help="Prepare fresh dst filesystems on the workspace disk for imported backups")
     for key in ("registry", "packages", "evidence"):
         parser.add_argument("--" + key, type=Path)
     parser.add_argument("--base-image", type=Path, default=offline.default_image())
     parser.add_argument("--quota-modules", type=Path, default=offline.DEFAULT_MODULES)
     args = parser.parse_args()
+    if args.restore_target and (not args.owners or not args.backup_dir or args.resume):
+        parser.error("--restore-target requires fresh candidate owners and separate backup storage")
     os.umask(0o077)
     work = args.work.absolute()
     if args.resume:
@@ -417,6 +426,7 @@ def main():
         args.quota_modules,
         args.owners,
         args.backup_dir.absolute() if args.backup_dir else None,
+        restore_target=args.restore_target,
     )
 
 

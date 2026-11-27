@@ -710,8 +710,15 @@ def run_stack(args, stack):
         API_IMAGE,
         "python",
     ]
-    subprocess.run([*bootstrap, "/bootstrap-m2.py"], check=True)
-    subprocess.run([*bootstrap, "-m", "app.auth.openscience_seed"], check=True)
+    authority = None
+    if args.recovery_authority_vm:
+        from openscience_m6_recovery_authority import RecoveryAuthority
+        authority = RecoveryAuthority(stack, args.recovery_authority_vm, transport, cred, ROOT, API_IMAGE)
+    for command in ([*bootstrap, "/bootstrap-m2.py"], [*bootstrap, "-m", "app.auth.openscience_seed"]):
+        if authority:
+            authority.bootstrap(command)
+        else:
+            subprocess.run(command, check=True)
     if args.m3_gateway_image:
         subprocess.run(
             [
@@ -777,8 +784,7 @@ def run_stack(args, stack):
             )
             wait(replay.is_socket, "private M3 retry verifier")
             tool_config["gateway_socket"] = str(replay)
-    api = container(
-        stack,
+    api_args = [
         *common,
         *m3_api,
         *mount(cred / "router", "/m2key"),
@@ -793,7 +799,8 @@ def run_stack(args, stack):
         "/ipc/auth.sock",
         "--no-access-log",
         "--no-proxy-headers",
-    )
+    ]
+    api = authority.start_api(api_args) if authority else container(stack, *api_args)
     wait(lambda: (api_socket / "auth.sock").is_socket(), "M2 authority")
     before = json.loads(run(sys.executable, str(MANAGER), "--state-dir", str(args.registry), "list"))[
         "workspaces"
@@ -967,6 +974,8 @@ http {{
     }
     if environment == "deploy-m6":
         ready["members"] = members
+    if authority:
+        ready["api_engine"] = "recovery-authority-vm"
     if args.m5_quota_files:
         ready["quota_files"] = True
     if args.m6_operator_id is not None:
@@ -1076,7 +1085,10 @@ def main():
         default=Path("/data/lzq/models/Qwen2.5-7B"),
         help="Local immutable Qwen2.5-7B release verified by the development worker",
     )
+    parser.add_argument("--recovery-authority-vm", type=Path, help="Private loopback guest directory for the deploy-m6 recovery login API")
     args = parser.parse_args()
+    if args.recovery_authority_vm and (args.environment != "deploy-m6" or args.m4 or args.m3_gateway_image):
+        parser.error("The split recovery authority supports only the deploy-m6 workspace recovery site")
     args.candidate_browser = args.environment is not None or args.m6_operator_id is not None
     args.environment = args.environment or "dev-m1"
     if args.environment == "deploy-m6":

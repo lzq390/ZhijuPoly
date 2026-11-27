@@ -57,6 +57,12 @@ def main():
         marker.write_text(owner["workspace"])
         marker.chmod(0o444)
         guest.run_as(owner, seed, ws, secrets.token_bytes(64))
+    if spec.get("restore_target") is True:
+        for role, owner in users.items():
+            target = volumes["dst", role]
+            guest.check(not (target / "workspace").exists() and guest.quota.read(target, owner)["hard_bytes"] == 0,
+                        "Restore target must start empty")
+        return
     test = {"src": full_pair(volumes, users, "src")}
     snapshots = {r: guest.bundle.backup(volumes["src", r], users[r], guest.BACKUP / r,
                                           reserve_bytes=512 * guest.MIB) for r in users}

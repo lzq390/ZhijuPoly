@@ -98,6 +98,24 @@ class QuotaNfsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "storage medium"):
             nfs.host_free_mib(fresh.data["host_media"]["deploy-m6/" + account])
 
+    def test_cross_host_dst_volume_uses_primary_recovery_disk_and_pinned_inode(self):
+        backup = self.root / "backup"
+        backup.mkdir()
+        data = self.root / "m5-restore-a.raw"
+        data.touch()
+        config = {"format": "nexpoly-m5-isolated-browser-v1", "restore_target": True, "backup_dir": str(backup),
+                  "disk_inodes": {data.stem: data.stat().st_ino}, "host_disks": {"primary": "primary", "backup": "backup"}}
+        vm = self.root / "vm.json"
+        vm.write_text(json.dumps(config))
+        vm.chmod(0o600)
+        endpoint = {"slot": "dst-a", "ssh_config": str(self.ssh)}
+        with patch("openscience_m5_backup.physical_disk", return_value=("primary", "disk")):
+            self.assertEqual(nfs.candidate_medium(endpoint)["file"], str(data))
+            data.rename(self.root / "previous")
+            data.touch()
+            with self.assertRaisesRegex(ValueError, "storage medium"):
+                nfs.candidate_medium(endpoint)
+
     def volume(self):
         return ["local", {"type": "nfs", "device": ":/m5-src-a/workspace",
                           "o": "addr=127.0.0.1,port=38901,nfsvers=4.1,proto=tcp,resvport,hard,timeo=30,retrans=2"},
