@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>我的项目文件</title>
+  <script src="/_nexpoly/browser.js"></script>
+  <script defer src="/_nexpoly/cleanup.js"></script>
+  <style>
+    body {font: 1rem/1.55 system-ui,sans-serif; color:#1d2939; margin:1.5rem; max-width:56rem}
+    h1 {font-size:1.35rem} h2 {font-size:1.05rem} button {font:inherit; cursor:pointer; margin:.2rem .4rem .2rem 0}
+    ul {padding-left:1.3rem} pre {white-space:pre-wrap; overflow-wrap:anywhere; background:#f4f6f8; padding:.8rem}
+    p,li,button {overflow-wrap:anywhere} dialog {max-width:min(34rem,85vw)}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>我的项目文件</h1>
+    <p>工作区已回收。你可以查看文件，或删除不再需要的文件来释放空间。</p>
+    <p id="status" role="status" aria-live="polite"></p>
+    <section id="directory" aria-labelledby="folder">
+      <h2 id="folder">项目目录</h2>
+      <button id="up" hidden>上一级</button>
+      <ul id="entries"></ul>
+      <button id="earlier" hidden>上一页文件</button>
+      <button id="more" hidden>下一页文件</button>
+    </section>
+    <section id="preview" hidden aria-labelledby="filename">
+      <h2 id="filename"></h2><p id="range"></p><pre id="content"></pre>
+      <button id="previous" hidden>上一段</button><button id="next" hidden>下一段</button>
+      <button id="remove">删除此文件</button><button id="back">返回目录</button>
+    </section>
+    <dialog id="confirmation" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">确认删除文件</h2><p id="confirm-name"></p>
+      <button id="cancel" autofocus>取消</button><button id="confirm">确认删除</button>
+    </dialog>
+  </main>
+</body>
+</html>

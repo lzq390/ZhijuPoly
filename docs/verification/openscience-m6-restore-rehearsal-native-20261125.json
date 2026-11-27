@@ -1,0 +1,263 @@
+{
+  "status": "passed",
+  "environment": "dev-m1 synthetic identities",
+  "physical_hosts": 1,
+  "image_sha256": "04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94",
+  "kernel": "6.8.0-147-generic",
+  "accelerator": "tcg",
+  "source_disks_deleted_before_target_boot": true,
+  "transfer_sha256": "22dd858c6eb9a5022f78fbe5e04bacb609b43d90cfee19ac2f89bd5a6765bea5",
+  "users": {
+    "a": {
+      "environment": "dev-m1",
+      "user_id": "test-user-a",
+      "workspace": "463fc2f89367468bb7fc6e048d522c9e",
+      "uid": 58161656,
+      "gid": 58161656
+    },
+    "b": {
+      "environment": "dev-m1",
+      "user_id": "test-user-b",
+      "workspace": "3c137e9c236d4998bed842786c0f4548",
+      "uid": 43620582,
+      "gid": 43620582
+    }
+  },
+  "source": {
+    "accounts": {
+      "a": {
+        "accounting": true,
+        "enforced": true,
+        "facts": {
+          "files/projects/same-project/attachment.bin": {
+            "gid": 58161656,
+            "mode": 384,
+            "sha256": "e4d917cd52a6c36e786d0a41b98a0f6beace72eb7c56d1f01afe5a9369e472e5",
+            "uid": 58161656
+          },
+          "files/projects/same-project/notebook.txt": {
+            "gid": 58161656,
+            "mode": 384,
+            "sha256": "b9f3023bc2440b510462883e7d0425fce3fb838d034b32566afdbb33fdad91b5",
+            "uid": 58161656
+          },
+          "files/projects/same-project/reserved.bin": {
+            "gid": 58161656,
+            "mode": 384,
+            "reserved_ranges": [
+              [
+                65536,
+                262144
+              ]
+            ],
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "uid": 58161656
+          },
+          "records/projects/same-project/conversation.json": {
+            "gid": 58161656,
+            "mode": 384,
+            "sha256": "08141dc88f27b9d6072da4968689e3b306021697f3a6628ab125683fac7a900b",
+            "uid": 58161656
+          }
+        },
+        "foreign_read_errno": 13,
+        "foreign_write_errno": 13,
+        "fs_uuid": "6b578072-7330-4127-afe9-0593581b6f77",
+        "hard_bytes": 2000000000,
+        "inventory": {
+          "directories": 24,
+          "file_bytes": 69707,
+          "files": 23,
+          "tree_sha256": "f0246bc84883760d3d47e84c3dbd083f7a4aaba601de7e6004d4bd8035d584b5"
+        },
+        "manifest": "eed10d03925110be00c82120431a14fff2cf08f858906d3a122f16cf312153f7",
+        "uid": 58161656
+      },
+      "b": {
+        "accounting": true,
+        "enforced": true,
+        "facts": {
+          "files/projects/same-project/attachment.bin": {
+            "gid": 43620582,
+            "mode": 384,
+            "sha256": "765cade7de5c8fdd7b904129aafadabeb9408a351cdf1005988829c69c0d3d72",
+            "uid": 43620582
+          },
+          "files/projects/same-project/notebook.txt": {
+            "gid": 43620582,
+            "mode": 384,
+            "sha256": "fcd280f18f44cb7f07a18eeb0147d950c3c6fe9228021280d357109d6152d773",
+            "uid": 43620582
+          },
+          "files/projects/same-project/reserved.bin": {
+            "gid": 43620582,
+            "mode": 384,
+            "reserved_ranges": [
+              [
+                65536,
+                262144
+              ]
+            ],
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "uid": 43620582
+          },
+          "records/projects/same-project/conversation.json": {
+            "gid": 43620582,
+            "mode": 384,
+            "sha256": "f7ae10e422e22c0e378105fe2096efe3af714f08c6d1385b9946f2d77bbe267a",
+            "uid": 43620582
+          }
+        },
+        "foreign_read_errno": 13,
+        "foreign_write_errno": 13,
+        "fs_uuid": "2c93cc8b-adb8-496f-af35-959484ec953e",
+        "hard_bytes": 2000000000,
+        "inventory": {
+          "directories": 24,
+          "file_bytes": 69706,
+          "files": 23,
+          "tree_sha256": "a13cddcbddcc34738570c22e1be333c9ca0f1e199c67c35456b52193c09c331e"
+        },
+        "manifest": "2f57b419513686f056ab5bc672da52d4041d1c627eafd774bc24fc38fea447c6",
+        "uid": 43620582
+      }
+    },
+    "boot_id": "1f6a2961-82e3-4705-bdeb-4c47b1cbd89b",
+    "serials": [
+      "m6-input",
+      "m6-seed",
+      "m6-src-a",
+      "m6-src-b",
+      "m6-system",
+      "m6-transfer"
+    ],
+    "machine_uuid": "31d7f26e-4139-495e-97f1-2ed53c2233af",
+    "elapsed_seconds": 219.01,
+    "native_fixtures_sha256": {
+      "a": "f3b8fbd460ab30ff4e958eeda109d8edbe89d9553ba6b89da45f375dd1b57293",
+      "b": "aa3b88e6b1598e02b90cd1ebee427b30d336a379a94166762175508fc13d23ab"
+    }
+  },
+  "destination": {
+    "accounts": {
+      "a": {
+        "accounting": true,
+        "enforced": true,
+        "export_sha256": "349224744b76c763fcfd641ea49670f5f21883c77eade31832f38560aa0d8f36",
+        "facts": {
+          "files/projects/same-project/attachment.bin": {
+            "gid": 58161656,
+            "mode": 384,
+            "sha256": "e4d917cd52a6c36e786d0a41b98a0f6beace72eb7c56d1f01afe5a9369e472e5",
+            "uid": 58161656
+          },
+          "files/projects/same-project/notebook.txt": {
+            "gid": 58161656,
+            "mode": 384,
+            "sha256": "b9f3023bc2440b510462883e7d0425fce3fb838d034b32566afdbb33fdad91b5",
+            "uid": 58161656
+          },
+          "files/projects/same-project/reserved.bin": {
+            "gid": 58161656,
+            "mode": 384,
+            "reserved_ranges": [
+              [
+                65536,
+                262144
+              ]
+            ],
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "uid": 58161656
+          },
+          "records/projects/same-project/conversation.json": {
+            "gid": 58161656,
+            "mode": 384,
+            "sha256": "08141dc88f27b9d6072da4968689e3b306021697f3a6628ab125683fac7a900b",
+            "uid": 58161656
+          }
+        },
+        "foreign_package_refused": true,
+        "foreign_read_errno": 13,
+        "foreign_write_errno": 13,
+        "fs_uuid": "a57a5c70-551c-4c23-8fae-4f76d3c7b6d9",
+        "hard_bytes": 2000000000,
+        "inventory": {
+          "directories": 24,
+          "file_bytes": 69707,
+          "files": 23,
+          "tree_sha256": "f0246bc84883760d3d47e84c3dbd083f7a4aaba601de7e6004d4bd8035d584b5"
+        },
+        "new_write_bytes": 16,
+        "over_limit_errno": 122,
+        "restore_seconds": 1.385,
+        "uid": 58161656
+      },
+      "b": {
+        "accounting": true,
+        "enforced": true,
+        "export_sha256": "7bc1c6b41da4449ce15cee5a02994d71c0adedb8bb4ed4d95ad841e0105bcd18",
+        "facts": {
+          "files/projects/same-project/attachment.bin": {
+            "gid": 43620582,
+            "mode": 384,
+            "sha256": "765cade7de5c8fdd7b904129aafadabeb9408a351cdf1005988829c69c0d3d72",
+            "uid": 43620582
+          },
+          "files/projects/same-project/notebook.txt": {
+            "gid": 43620582,
+            "mode": 384,
+            "sha256": "fcd280f18f44cb7f07a18eeb0147d950c3c6fe9228021280d357109d6152d773",
+            "uid": 43620582
+          },
+          "files/projects/same-project/reserved.bin": {
+            "gid": 43620582,
+            "mode": 384,
+            "reserved_ranges": [
+              [
+                65536,
+                262144
+              ]
+            ],
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "uid": 43620582
+          },
+          "records/projects/same-project/conversation.json": {
+            "gid": 43620582,
+            "mode": 384,
+            "sha256": "f7ae10e422e22c0e378105fe2096efe3af714f08c6d1385b9946f2d77bbe267a",
+            "uid": 43620582
+          }
+        },
+        "foreign_package_refused": true,
+        "foreign_read_errno": 13,
+        "foreign_write_errno": 13,
+        "fs_uuid": "267992c3-e33e-4fd7-aed1-a29bcabca405",
+        "hard_bytes": 2000000000,
+        "inventory": {
+          "directories": 24,
+          "file_bytes": 69706,
+          "files": 23,
+          "tree_sha256": "a13cddcbddcc34738570c22e1be333c9ca0f1e199c67c35456b52193c09c331e"
+        },
+        "new_write_bytes": 16,
+        "over_limit_errno": 122,
+        "restore_seconds": 1.213,
+        "uid": 43620582
+      }
+    },
+    "boot_id": "d08129e0-2f85-444e-8429-63f0ec32d07c",
+    "serials": [
+      "m6-dst-a",
+      "m6-dst-b",
+      "m6-input",
+      "m6-seed",
+      "m6-system",
+      "m6-transfer"
+    ],
+    "machine_uuid": "2686262c-6b4f-406e-addc-c70a29f9b513",
+    "elapsed_seconds": 230.22
+  },
+  "start": "2026-11-25T01:19:46.909555+00:00",
+  "end": "2026-11-25T01:27:17.802708+00:00",
+  "temporary_disks_removed": true
+}

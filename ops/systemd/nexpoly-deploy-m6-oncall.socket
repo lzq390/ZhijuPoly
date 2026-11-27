@@ -1,0 +1,10 @@
+[Unit]
+Description=Private deploy-m6 operator alert socket
+
+[Socket]
+ListenStream=%t/nexpoly-deploy-m6-oncall.sock
+SocketMode=0600
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

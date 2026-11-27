@@ -1,0 +1,259 @@
+{
+  "environment": "dev-m1",
+  "explicit_unwritten_reservations": {
+    "files_after": {
+      "empty.bin": {
+        "allocated_bytes": 262144,
+        "gid": 58161656,
+        "logical_bytes": 0,
+        "mode": 384,
+        "uid": 58161656
+      },
+      "mixed.bin": {
+        "allocated_bytes": 200704,
+        "gid": 58161656,
+        "logical_bytes": 2097152,
+        "mode": 384,
+        "uid": 58161656
+      },
+      "posix.bin": {
+        "allocated_bytes": 8388608,
+        "gid": 58161656,
+        "logical_bytes": 8388608,
+        "mode": 384,
+        "uid": 58161656
+      }
+    },
+    "files_before": {
+      "empty.bin": {
+        "allocated_bytes": 262144,
+        "gid": 58161656,
+        "logical_bytes": 0,
+        "mode": 384,
+        "uid": 58161656
+      },
+      "mixed.bin": {
+        "allocated_bytes": 200704,
+        "gid": 58161656,
+        "logical_bytes": 2097152,
+        "mode": 384,
+        "uid": 58161656
+      },
+      "posix.bin": {
+        "allocated_bytes": 8388608,
+        "gid": 58161656,
+        "logical_bytes": 8388608,
+        "mode": 384,
+        "uid": 58161656
+      }
+    },
+    "restore_reserved_bytes": 8931328,
+    "tar_bytes": 30720,
+    "tree_sha256": "e8f2f5e3e6816f7936c39fdff2d612cfe45ec1bb33d118bd04a4065ce36a706a",
+    "user_hard_bytes": 2000000000,
+    "user_used_after": 8888320,
+    "user_used_before": 8888320
+  },
+  "failure_while_reopening": {
+    "a": {
+      "after_release_allocation_errno": {
+        "a": 0,
+        "b": 0
+      },
+      "available_bytes": 589058048,
+      "both_allocation_errno_after_open_failure": {
+        "a": 122,
+        "b": 122
+      },
+      "recovered_state": "normal",
+      "state": "unavailable"
+    },
+    "b": {
+      "after_release_allocation_errno": {
+        "a": 0,
+        "b": 0
+      },
+      "available_bytes": 589058048,
+      "both_allocation_errno_after_open_failure": {
+        "a": 122,
+        "b": 122
+      },
+      "recovered_state": "normal",
+      "state": "unavailable"
+    }
+  },
+  "legacy_archive_quota_recovery": {
+    "destination_hard_limit_before": 0,
+    "destination_kernel": {
+      "accounting": true,
+      "enforced": true,
+      "filesystem_type": "ext4",
+      "filesystem_uuid": "b71e5c76-fda9-4065-85c3-1b55e8ce3c55",
+      "hard_bytes": 8388608,
+      "hard_kib": 8192,
+      "uid": 58161656,
+      "used_bytes": 45056,
+      "volume_label": "m5quota-dst-a"
+    },
+    "legacy_zero_recovery": true,
+    "package_bytes": 25190400,
+    "restore_reserved_bytes": 25235456,
+    "restored": {
+      "allocated_bytes": 8192,
+      "gid": 58161656,
+      "logical_bytes": 25165835,
+      "mode": 384,
+      "uid": 58161656
+    },
+    "source": {
+      "allocated_bytes": 12288,
+      "gid": 58161656,
+      "logical_bytes": 25165835,
+      "mode": 384,
+      "uid": 58161656
+    },
+    "source_kernel": {
+      "accounting": true,
+      "enforced": true,
+      "filesystem_type": "ext4",
+      "filesystem_uuid": "d5822334-5032-4f32-9c52-57fd7fab9d08",
+      "hard_bytes": 8388608,
+      "hard_kib": 8192,
+      "uid": 58161656,
+      "used_bytes": 49152,
+      "volume_label": "m5quota-src-a"
+    },
+    "tree_sha256": "23cefaadf2e5f3df427059328ce135482b13d0cba1108aa8a081b9418624b2bc"
+  },
+  "low_watermark_set_failures": {
+    "a": {
+      "after_release_allocation_errno": {
+        "a": 0,
+        "b": 0
+      },
+      "after_release_state": "normal",
+      "both_allocation_errno_after_fault_cleared_while_low": {
+        "a": 122,
+        "b": 122
+      },
+      "fault": "injected EIO during Q_SETQUOTA",
+      "fault_readback": {
+        "a": "OSError"
+      },
+      "healthy_peer": "b",
+      "low_bytes_observed": 83881984,
+      "peer_allocation_errno": 122,
+      "peer_readable": true,
+      "status_during_fault": "unavailable",
+      "uid_hard_limits": {
+        "a": 2000000000,
+        "b": 2000000000
+      }
+    },
+    "b": {
+      "after_release_allocation_errno": {
+        "a": 0,
+        "b": 0
+      },
+      "after_release_state": "normal",
+      "both_allocation_errno_after_fault_cleared_while_low": {
+        "a": 122,
+        "b": 122
+      },
+      "fault": "injected EIO during Q_SETQUOTA",
+      "fault_readback": {
+        "b": "OSError"
+      },
+      "healthy_peer": "a",
+      "low_bytes_observed": 83881984,
+      "peer_allocation_errno": 122,
+      "peer_readable": true,
+      "status_during_fault": "unavailable",
+      "uid_hard_limits": {
+        "a": 2000000000,
+        "b": 2000000000
+      }
+    }
+  },
+  "retained_dev_cold_restart": {
+    "all_five_retained_raw_images_match_original_pins": true,
+    "all_four_quota_volumes_without_holders": true,
+    "boot_id_changed": true,
+    "checked_at_utc": "2026-11-23T08:00:03Z",
+    "guard": "normal",
+    "module_sha256": {
+      "ops/openscience-per-user-dev/water_monitor.py": "95b2a769ed181e32ef2dace45d1a1b989858dc36bcd879bd44da156fd7a0c96e",
+      "ops/openscience-per-user-dev/water_pool.py": "ed2fb637dd1ca97cb0e82b604aae6de54fd08da6b5b8c7cdae48154baf076232",
+      "scripts/openscience_m5_archive.py": "9310dc424020e9756c6f5ca286d2d3052e16932112d766325d697b5bcd059205",
+      "scripts/openscience_m5_backup.py": "dd9f2bc733462aa28129fc402a736d6b2f9c0943e7f6cee3ee9c3cc00cd8ef92",
+      "scripts/openscience_m5_quota_bundle.py": "64a4a78104c9261d7951fddf37df8b134a0a9a7e082c2c4784efec31faff27bb"
+    },
+    "original_registry_sha256": "83274cac893edfc08a000af90e1410bb2e4190b4413f5c4a5774d36cc44f4fff",
+    "qemu_exited": true,
+    "relay_port_closed": true,
+    "ssh_port_closed": true,
+    "unchanged_alert_sequence": 6,
+    "user_hard_bytes": {
+      "a": 2000000000,
+      "b": 2000000000
+    }
+  },
+  "sparse_file_round_trip": {
+    "destination_hard_limit_before": 0,
+    "destination_kernel": {
+      "accounting": true,
+      "enforced": true,
+      "filesystem_type": "ext4",
+      "filesystem_uuid": "f6680fa8-2c9f-457c-9208-4cc132783d3e",
+      "hard_bytes": 2000000000,
+      "hard_kib": 1953125,
+      "uid": 58161656,
+      "used_bytes": 49152,
+      "volume_label": "m5quota-dst-a"
+    },
+    "legacy": {
+      "a": {
+        "directories": 374,
+        "file_bytes": 545523,
+        "files": 1338,
+        "tree_sha256": "295e5f56d98c35dd7710973844e436b4cf5ed8d7abdb1cf901f2f12c1dcfac46"
+      },
+      "b": {
+        "directories": 301,
+        "file_bytes": 389523,
+        "files": 1037,
+        "tree_sha256": "84e24287f0115c30741ce7f8673d6a336efb06b316b7eff3cb6958e167fbb473"
+      }
+    },
+    "package_bytes": 30720,
+    "restore_reserved_bytes": 75776,
+    "restored": {
+      "allocated_bytes": 12288,
+      "gid": 58161656,
+      "logical_bytes": 2147483659,
+      "mode": 384,
+      "uid": 58161656
+    },
+    "source": {
+      "allocated_bytes": 12288,
+      "gid": 58161656,
+      "logical_bytes": 2147483659,
+      "mode": 384,
+      "uid": 58161656
+    },
+    "source_kernel": {
+      "accounting": true,
+      "enforced": true,
+      "filesystem_type": "ext4",
+      "filesystem_uuid": "346bdf76-16a0-4b5d-a1e8-a1b47b1d726b",
+      "hard_bytes": 2000000000,
+      "hard_kib": 1953125,
+      "uid": 58161656,
+      "used_bytes": 49152,
+      "volume_label": "m5quota-src-a"
+    },
+    "tree_sha256": "374464eac3e609c6433f6cea355d96ab8bb84dadcff78b085d28b328bde31b69"
+  },
+  "status": "passed",
+  "verification_storage": "disposable copy-on-write clone of the parked development storage VM; scratch source/restore ext4 filesystems for archive tests"
+}

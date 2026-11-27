@@ -1,0 +1,790 @@
+{
+  "backup_and_recovery": {
+    "a_workspace_inode_after_b_retry": 15,
+    "b_only_retry": true,
+    "changed_completed_target_rejected": true,
+    "concurrent_admission": {
+      "free_after_bytes": 17817600,
+      "free_before_bytes": 38223872,
+      "published": "a",
+      "refused": "b"
+    },
+    "disposable_clone_parked": true,
+    "interruption": {
+      "a_workspace_inode": 15,
+      "b_hard_bytes_before_retry": 2000000000,
+      "b_write_errno": 28
+    },
+    "killed_b_restore_signal": 9,
+    "legacy_packages_unchanged": true,
+    "near_limit_dense": {
+      "backup_available_unchanged": 140255232,
+      "dense_allocated_bytes": 1971326976,
+      "dense_written_bytes": 1971322880,
+      "old_generation_restores": {
+        "a": {
+          "hard_bytes": 2000000000,
+          "inventory": {
+            "directories": 374,
+            "file_bytes": 17322765,
+            "files": 1339,
+            "tree_sha256": "e96789390725e67fd5509084bb25817b18bcf649d80e4170206c402e6f97c14c"
+          },
+          "uid": 58161656,
+          "verified_manifest_sha256": "9a4b30e2ed2b8631c050bbfce8118a51e2c548b7932c4209c3461fa424fcf62b"
+        },
+        "b": {
+          "hard_bytes": 2000000000,
+          "inventory": {
+            "directories": 301,
+            "file_bytes": 389549,
+            "files": 1037,
+            "tree_sha256": "322b3324207cfc8a0b12410a78a4adaa5d966f17385be1ca1282ff0e6739e242"
+          },
+          "uid": 43620582,
+          "verified_manifest_sha256": "c4d0b6b9c55bf8b7009ac1b2246b3dbeb0e8078078d4b8d294565b67dadfd6b7"
+        }
+      },
+      "refusal": "Insufficient free space in bytes: available=140255232, requested=1991819264, floor=16777216",
+      "uid_hard_bytes": 2000000000,
+      "uid_used_bytes": 1995296768
+    },
+    "physical_dense_bytes": 16777216,
+    "refused_backup": {
+      "available_after": 23068672,
+      "available_before": 23068672,
+      "generation_published": false
+    },
+    "reserve_bytes": 16777216,
+    "retained_legacy_package_sha256": {
+      "a/manifest.json": "4b138e96a3a67e121393c0f6f190bac9d1a6c16053a7c4518120b78511b7409d",
+      "a/workspace.tar": "1b9c52dd4d9834840c9bd3899a492c00cc0a5be721f4d48183867ff09170e9fe",
+      "b/manifest.json": "39112fff6c940665dfa59e367060df16f39feea33f84144a282aa666585335c8",
+      "b/workspace.tar": "68da3cfd1c3a511041a9cad96f52e02735a00b55ae86c8aff0557030b63a98bf"
+    },
+    "retained_raw_images_match_prior_pins": [
+      "m5-a",
+      "m5-b",
+      "m5-backup",
+      "m5-restore-a",
+      "m5-restore-b"
+    ],
+    "standalone_backup_sigkill_retry": {
+      "free_after_kill": 17289216,
+      "free_after_retry": 17293312,
+      "free_before": 20086784,
+      "interrupted_allocated_bytes": 2785280,
+      "manifest_sha256": "c4d0b6b9c55bf8b7009ac1b2246b3dbeb0e8078078d4b8d294565b67dadfd6b7",
+      "reserved_bytes": 16777216,
+      "signal": 9,
+      "tar_bytes": 2785280,
+      "uid": 43620582
+    },
+    "temporary_writable_images_removed": true,
+    "users": {
+      "a": {
+        "already_restored_on_check": true,
+        "backup_capacity": {
+          "archive_bytes": 20398080,
+          "free_before_bytes": 140242944,
+          "free_before_publish_bytes": 119828480,
+          "reserve_bytes": 16777216
+        },
+        "filesystem_uuid": "50b8e987-7da0-4293-b5ea-ba7188725019",
+        "hard_bytes": 2000000000,
+        "inventory": {
+          "directories": 374,
+          "file_bytes": 17322765,
+          "files": 1339,
+          "tree_sha256": "e96789390725e67fd5509084bb25817b18bcf649d80e4170206c402e6f97c14c"
+        },
+        "manifest_sha256": "2c29dfc9bd4854e36e221f64a41bf3fb7b582954997f0f8fbca4bceaf29ad6c0",
+        "uid": 58161656
+      },
+      "b": {
+        "already_restored_on_check": true,
+        "backup_capacity": {
+          "archive_bytes": 2785280,
+          "free_before_bytes": 119828480,
+          "free_before_publish_bytes": 117026816,
+          "reserve_bytes": 16777216
+        },
+        "filesystem_uuid": "61e599d1-7ab6-41a4-8a56-97c73ec6c01f",
+        "hard_bytes": 2000000000,
+        "inventory": {
+          "directories": 301,
+          "file_bytes": 389549,
+          "files": 1037,
+          "tree_sha256": "322b3324207cfc8a0b12410a78a4adaa5d966f17385be1ca1282ff0e6739e242"
+        },
+        "manifest_sha256": "c4d0b6b9c55bf8b7009ac1b2246b3dbeb0e8078078d4b8d294565b67dadfd6b7",
+        "uid": 43620582
+      }
+    }
+  },
+  "cold_operator_recovery": {
+    "a": {
+      "sha256": "e9b76136f64531361d09207c9eaad5c8afc7c797ec06ffbba1d73a0144257f8f",
+      "size": 3145728,
+      "uid": 58161656
+    },
+    "a_deleted": true,
+    "b": {
+      "sha256": "b5c3dc9054bc766923a3843515c676d9b5513414f67fb7e895753cd94e304f40",
+      "size": 29,
+      "uid": 43620582
+    },
+    "foreign": {
+      "rejected": true
+    },
+    "low": 83877888,
+    "recovered": 169869312
+  },
+  "combined_candidate": {
+    "adapters": {
+      "polytao": {
+        "evidence_sha256": "273bc8804971fe835e1b90e8fdebcc62a5d07776a837febb8154c78edc7f6039",
+        "failure": "polytao: b prepare_polytao_generation turn did not finish: {\"user_metadata\":true,\"user_message\":1,\"assistant_replies\":1,\"finish\":[null],\"completed\":[false],\"tool_states\":[],\"session_state\":\"busy\"}",
+        "slowest_completed_read_ms": 12166,
+        "slowest_prompt_read_ms": 8220,
+        "status": "failed"
+      },
+      "retrosynthesis": {
+        "evidence_sha256": "cc23e05fef8aca3cc84287989bb0118dfa9172831820efdf74813010bc54a1ba",
+        "failure": "retrosynthesis: a get_retrosynthesis_draft turn did not finish: {\"user_metadata\":true,\"user_message\":1,\"assistant_replies\":2,\"finish\":[\"tool-calls\",\"stop\"],\"completed\":[true,true],\"tool_states\":[\"completed\"],\"session_state\":\"busy\"}",
+        "slowest_completed_read_ms": 14651,
+        "slowest_prompt_read_ms": 8458,
+        "status": "failed"
+      }
+    },
+    "alerts": [
+      [
+        "normal",
+        "low",
+        "firing"
+      ],
+      [
+        "low",
+        "normal",
+        "resolved"
+      ]
+    ],
+    "dft": {
+      "a": {
+        "files_checked": 3,
+        "foreign_job_listed": false,
+        "foreign_result": 404,
+        "foreign_status": 404,
+        "other_download_status": 404,
+        "own_job_listed": true
+      },
+      "b": {
+        "files_checked": 3,
+        "foreign_job_listed": false,
+        "foreign_result": 404,
+        "foreign_status": 404,
+        "other_download_status": 404,
+        "own_job_listed": true
+      }
+    },
+    "evidence_runs": {
+      "m3": {
+        "component_report": "m3-replay.json",
+        "sha256": "0f2ba9de2a3aaf24f7a6d1f057e5b75dec980087e6d88368382f6473cef5cd2c"
+      },
+      "m4": {
+        "component_report": "m4-latest.json",
+        "sha256": "83926cf90753762375eb985e2fad82aa947aa6c59dbb8dde252a31836503daf0"
+      },
+      "watermark": {
+        "component_report": "browser.json",
+        "sha256": "92cbfbf37fa9dd08eec99457f4b99f4c8d7968dd4af8109973c4b496b63be9d8"
+      }
+    },
+    "gateway_retry_count": 2,
+    "gateway_sync_retries": {
+      "polymerize_monomers": 2,
+      "predict_polymer_properties": 2
+    },
+    "idle_reap_under_low": "disk_recovery",
+    "intermittent_busy_on_combined_stack": {
+      "elapsed_at_least_ms": 300000,
+      "matched_tool_result_read_ms": 7024,
+      "reason": "b get_polytao_draft turn did not finish: {\"user_metadata\":true,\"user_message\":1,\"assistant_replies\":2,\"finish\":[\"tool-calls\",\"stop\"],\"tool_states\":[\"completed\"],\"session_state\":\"busy\"}",
+      "receipt_recovery": "separate browser and database evidence below",
+      "status": "failed"
+    },
+    "kernel_at_low_and_recovery": {
+      "blocked": {
+        "a": {
+          "allocate_existing_errno": 122,
+          "create_errno": 122,
+          "existing_fixture_readable": true,
+          "gid": 58161656,
+          "uid": 58161656
+        },
+        "b": {
+          "allocate_existing_errno": 122,
+          "create_errno": 122,
+          "existing_fixture_readable": true,
+          "gid": 43620582,
+          "uid": 43620582
+        }
+      },
+      "recovered": {
+        "a": {
+          "allocate_existing_errno": 0,
+          "create_errno": 0,
+          "existing_fixture_readable": true,
+          "gid": 58161656,
+          "uid": 58161656
+        },
+        "b": {
+          "allocate_existing_errno": 0,
+          "create_errno": 0,
+          "existing_fixture_readable": true,
+          "gid": 43620582,
+          "uid": 43620582
+        }
+      }
+    },
+    "model_and_knowledge": {
+      "a": {
+        "answer_sha256": "1a43faca80444a9bccf76e3f30c106be0ab3c0f613292e03d3f34f67eb6c7676",
+        "foreign_marker_mcp_hits": 0,
+        "foreign_marker_web_hits": 0,
+        "foreign_model_usage": 0,
+        "own_download_matches": true,
+        "web_mcp_citation_matches": true
+      },
+      "b": {
+        "answer_sha256": "7674ea81da5b4da3095229916cc6080c9ad7ee1fcf0fd85c528642b78c17cffd",
+        "foreign_marker_mcp_hits": 0,
+        "foreign_marker_web_hits": 0,
+        "foreign_model_usage": 0,
+        "own_download_matches": true,
+        "web_mcp_citation_matches": true
+      }
+    },
+    "model_usage": {
+      "a": {
+        "input_tokens": 9343,
+        "output_tokens": 12,
+        "protocol": "chat.completions",
+        "settlements": [
+          "actual"
+        ]
+      },
+      "b": {
+        "input_tokens": 9353,
+        "output_tokens": 12,
+        "protocol": "responses",
+        "settlements": [
+          "actual"
+        ]
+      }
+    },
+    "quota_file_ui": {
+      "combined_editor": true,
+      "independently_deleted": true,
+      "isolated_content": true,
+      "same_name": "quota-2b92cab323624e218d1ff325ad6e88a5.txt"
+    },
+    "services": {
+      "adapter_images": {
+        "polytao": "sha256:72eca12668d3ee9d03969d2711c750067431c26c31f95811eb9ec5c3ec7d862d",
+        "retrosynthesis": "sha256:afc71c6ba92bb8595d177f04c33fb01dcf26ad9d40f9f6c19dc67c536e0fa5ed"
+      },
+      "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+      "model_manifest_sha256": "2cdb0c3afafb408c85ae429636bfb4e19f2f0342fbd8d6fa0491b6db92f8d04a",
+      "quota_files": true
+    },
+    "two_user_web": {
+      "a_recovered": {
+        "baseline_restored_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+        "read": 200,
+        "same_save_retried": true,
+        "save": 200,
+        "save_completed_ms": 1795426151716,
+        "save_ms": 3660,
+        "saved_before_b_exchange_completed": true,
+        "written_sha256": "074a60e1ec110b0258f37b621459589d672944574073dce825e10c445faf25e7"
+      },
+      "b_recovered": {
+        "baseline_restored_sha256": "703ebd319d006315255fb22029f434e34e1bd580ab0ec0a285b2bb9a9fbc5c8a",
+        "cold_start_retried": true,
+        "read": 200,
+        "save": 200,
+        "save_completed_ms": 1795426176515,
+        "save_ms": 3773,
+        "written_sha256": "ea8c617eec438a1ca5770d914490ab19f3168c1a9d329d74da874ebb605dfbfa"
+      },
+      "low_delete": {
+        "absent": true,
+        "existing_read": 200,
+        "file": "m5-watermark-release.txt",
+        "list_status": 200,
+        "save_before_delete": 507,
+        "status": 200
+      },
+      "low_start": {
+        "capacity_refusal_visible": true,
+        "real_login": true,
+        "retry_available": true,
+        "user_id": "10000000-0000-4000-8000-000000000002"
+      },
+      "low_write": {
+        "error": "workspace_disk_low_watermark",
+        "file_save": 507,
+        "new_file": {
+          "error": "workspace_disk_low_watermark",
+          "listing": 200,
+          "present": false,
+          "status": 507
+        },
+        "notebook_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+        "read_before_and_after": 200
+      },
+      "test-user-a": {
+        "notebook_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+        "project_conversation_visible": true,
+        "real_login": true,
+        "user_id": "10000000-0000-4000-8000-000000000001"
+      },
+      "test-user-b": {
+        "notebook_sha256": "703ebd319d006315255fb22029f434e34e1bd580ab0ec0a285b2bb9a9fbc5c8a",
+        "project_conversation_visible": true,
+        "real_login": true,
+        "user_id": "10000000-0000-4000-8000-000000000002"
+      }
+    },
+    "watermark_and_functional_suites": "Watermark uses a separate boot of the same candidate. Six tools, M4 and the intermittent busy result share a candidate stack. Both adapters have separate browser reports from another boot with all the same services enabled.",
+    "workspace_bindings_verified_live": {
+      "a": {
+        "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+        "image": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+        "uid": 58161656,
+        "volume": "nexpoly-m5-b21744274102-src-a",
+        "workspace": "463fc2f89367468bb7fc6e048d522c9e"
+      },
+      "b": {
+        "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+        "image": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+        "uid": 43620582,
+        "volume": "nexpoly-m5-b21744274102-src-b",
+        "workspace": "3c137e9c236d4998bed842786c0f4548"
+      }
+    }
+  },
+  "earlier_polytao_readback_recovery_audit": {
+    "new_billable_events": 0,
+    "new_entitlements": 0,
+    "new_real_model_calls": 0,
+    "new_retro_jobs": 0,
+    "new_usage_events": 0,
+    "original_completed_task": 1,
+    "original_entitlement": 1,
+    "original_events": {
+      "begin_dispatch": 1,
+      "claim_running": 1,
+      "reserve": 1,
+      "settle": 1
+    },
+    "tools": {
+      "get_polytao_draft": 3
+    }
+  },
+  "guest_modules": {
+    "ops/openscience-per-user-dev/quota-guest.py": "b4d6b581ad5f7f5e51b6f5d0b5d330f8b5e751765f6209f3aef5bafb14391190",
+    "ops/openscience-per-user-dev/water_pool.py": "19b564c98d719d4aac05095c254079e50a061a5db98c6cbedd3b2940bf774705",
+    "scripts/ci/openscience_m5_guest_lifecycle.py": "6209ebe9f081f263df78596760a3014dec727a3a76d97ed05bb27a779bc91c59",
+    "scripts/openscience_m5_quota_bundle.py": "2f5ffe45b1aa6b8b21f520150bfa7bd69200777a9131b4e07f9d9b0c54c72930"
+  },
+  "handoff_local_serialized_mock": {
+    "attempts": 2,
+    "gate": "one-time ticket; 30s grants; authorized page only after readiness",
+    "rechecks": 6,
+    "users": [
+      {
+        "elapsed_ms": 33556,
+        "owner": "a",
+        "status": 200
+      },
+      {
+        "elapsed_ms": 67059,
+        "owner": "b",
+        "status": 200
+      }
+    ]
+  },
+  "retention": {
+    "guest_stopped": true,
+    "last_alert_sequence": 14,
+    "original_m1_registry_sha256": "83274cac893edfc08a000af90e1410bb2e4190b4413f5c4a5774d36cc44f4fff",
+    "pool_normal_before_shutdown": true,
+    "raw_disk_sha256": {
+      "m5-a": "d2dce03cd2200971ad461729d1ebceae5bdf87df97dc8c74387ab85046418255",
+      "m5-b": "b34014728e2deb8722b017ae15640eaddcce96ef9b8aa57bef6411868d74e8c5",
+      "m5-backup": "6014640442a913f65006e9cbfbe43aaeabcee06f41e39845298993bebd948f7f",
+      "m5-restore-a": "d0dbe48e97dee470b19ff2197825d273f4d93e83bb16ffabcf46bd9a30f03eb4",
+      "m5-restore-b": "68c30b602c88b03293eb861b62141cf1cf0ed2539d83e2c169862249ece50806"
+    },
+    "relay_closed": true,
+    "retained_volume_holders": {
+      "dst-a": [],
+      "dst-b": [],
+      "src-a": [],
+      "src-b": []
+    },
+    "ssh_closed": true,
+    "status": "parked",
+    "workspace_states": {
+      "test-user-a": {
+        "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+        "hard_bytes": 2000000000,
+        "state": "recycled",
+        "uid": 58161656
+      },
+      "test-user-b": {
+        "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+        "hard_bytes": 2000000000,
+        "state": "recycled",
+        "uid": 43620582
+      }
+    }
+  },
+  "rollback": {
+    "bindings": [
+      [
+        "test-user-a",
+        "463fc2f89367468bb7fc6e048d522c9e",
+        "nexpoly-m5-b21744274102-src-a",
+        58161656,
+        58161656,
+        2000000000,
+        "d6880177-5059-41b4-a39e-4bf4be62ce86"
+      ],
+      [
+        "test-user-b",
+        "3c137e9c236d4998bed842786c0f4548",
+        "nexpoly-m5-b21744274102-src-b",
+        43620582,
+        43620582,
+        2000000000,
+        "ba7a6d37-6612-4eea-a8ef-d380032dc190"
+      ]
+    ],
+    "browser": {
+      "a_full": {
+        "code": "workspace_quota_exceeded",
+        "original_read_after_failed_save": true,
+        "save_status": 507
+      },
+      "a_recovered": {
+        "delete_status": 200,
+        "file": "m5-rb-545cec98141e40a3b62cfdf6819e8ead-edit.txt",
+        "notebook_sha256": "07fdd2e20bf9a0ef5bd89fb153d2b80bacc0513abedf36fd24568a3507c505c2",
+        "removed_in_browser": "m5-rb-545cec98141e40a3b62cfdf6819e8ead-release.txt",
+        "repeat_delete_status": 404,
+        "same_save_retried": true,
+        "save_status": 200
+      },
+      "b_while_a_full": {
+        "a_still_full_status": 507,
+        "file": "m5-rb-545cec98141e40a3b62cfdf6819e8ead-edit.txt",
+        "notebook_sha256": "8f7940b2ab254e4034c0d64c8f487ed93afbd993e15e614c4bdb66660af5866d",
+        "save_status": 200
+      },
+      "concurrent_login_to_frame_ms": {
+        "test-user-a": 46290,
+        "test-user-b": 27171
+      },
+      "file_interface": "real browser login, authenticated native file API",
+      "retained_candidate_turns": {
+        "a": {
+          "completed_tool_history": true,
+          "foreign_sessions": 0,
+          "model_answer_sha256": "1a43faca80444a9bccf76e3f30c106be0ab3c0f613292e03d3f34f67eb6c7676",
+          "own_sessions": 2
+        },
+        "b": {
+          "completed_tool_history": true,
+          "foreign_sessions": 0,
+          "model_answer_sha256": "7674ea81da5b4da3095229916cc6080c9ad7ee1fcf0fd85c528642b78c17cffd",
+          "own_sessions": 2
+        }
+      },
+      "retained_notebooks": {
+        "test-user-a": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+        "test-user-b": "703ebd319d006315255fb22029f434e34e1bd580ab0ec0a285b2bb9a9fbc5c8a"
+      },
+      "test-user-a": {
+        "notebook_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+        "project_conversation_visible": true,
+        "real_login": true,
+        "user_id": "10000000-0000-4000-8000-000000000001"
+      },
+      "test-user-b": {
+        "notebook_sha256": "703ebd319d006315255fb22029f434e34e1bd580ab0ec0a285b2bb9a9fbc5c8a",
+        "project_conversation_visible": true,
+        "real_login": true,
+        "user_id": "10000000-0000-4000-8000-000000000002"
+      }
+    },
+    "kernel_at_a_limit": {
+      "a": {
+        "accounting": true,
+        "enforced": true,
+        "filesystem_type": "ext4",
+        "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+        "hard_bytes": 2000000000,
+        "hard_kib": 1953125,
+        "uid": 58161656,
+        "used_bytes": 1999998976,
+        "volume_label": "m5quota-src-a"
+      },
+      "b": {
+        "accounting": true,
+        "enforced": true,
+        "filesystem_type": "ext4",
+        "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+        "hard_bytes": 2000000000,
+        "hard_kib": 1953125,
+        "uid": 43620582,
+        "used_bytes": 7938048,
+        "volume_label": "m5quota-src-b"
+      }
+    },
+    "native_project_listing": {
+      "acceptance": "Both owners can list their project after cold start, file creation and refresh; listing and readbacks agree.",
+      "earlier_gui_verified_notebook_sha256": {
+        "test-user-a": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+        "test-user-b": "703ebd319d006315255fb22029f434e34e1bd580ab0ec0a285b2bb9a9fbc5c8a"
+      },
+      "failed_owner": "test-user-a",
+      "final_quota_interface": "authenticated Chromium native file content API",
+      "http": {
+        "method": "GET",
+        "path": "/openscience-api/file",
+        "status": 404
+      },
+      "status": "open_intermittent_404"
+    },
+    "per_owner_counts_before_and_after": {
+      "chunks": {
+        "10000000-0000-4000-8000-000000000001": 5,
+        "10000000-0000-4000-8000-000000000002": 5
+      },
+      "collections": {
+        "10000000-0000-4000-8000-000000000001": 5,
+        "10000000-0000-4000-8000-000000000002": 5
+      },
+      "dft_jobs": {
+        "10000000-0000-4000-8000-000000000001": 7,
+        "10000000-0000-4000-8000-000000000002": 7
+      },
+      "documents": {
+        "10000000-0000-4000-8000-000000000001": 5,
+        "10000000-0000-4000-8000-000000000002": 5
+      },
+      "model": {
+        "10000000-0000-4000-8000-000000000001": 26,
+        "10000000-0000-4000-8000-000000000002": 20
+      },
+      "quota_events": {
+        "10000000-0000-4000-8000-000000000001": 116,
+        "10000000-0000-4000-8000-000000000002": 112
+      },
+      "quota_operations": {
+        "10000000-0000-4000-8000-000000000001": 29,
+        "10000000-0000-4000-8000-000000000002": 28
+      },
+      "tool_operations": {
+        "10000000-0000-4000-8000-000000000001": 329,
+        "10000000-0000-4000-8000-000000000002": 205
+      },
+      "usage_attempts": {
+        "10000000-0000-4000-8000-000000000001": 81,
+        "10000000-0000-4000-8000-000000000002": 68
+      },
+      "usage_events": {
+        "10000000-0000-4000-8000-000000000001": 170,
+        "10000000-0000-4000-8000-000000000002": 143
+      }
+    },
+    "release_fixture_removed": true,
+    "unchanged_business_rows_and_adapter_journals": {
+      "attempts": {
+        "a": {
+          "count": 81,
+          "rows_md5": "4c6c7e442c7a7b0db9fc4afdf16170b7"
+        },
+        "b": {
+          "count": 68,
+          "rows_md5": "41b964f2f485d58b7d5de23dad2f6854"
+        }
+      },
+      "charges": {
+        "a": {
+          "count": 116,
+          "rows_md5": "abacca7d3191c7e8081a1f37fd747e0c"
+        },
+        "b": {
+          "count": 112,
+          "rows_md5": "16d2d4885dcef555981a7a0f54c01aab"
+        }
+      },
+      "dft": {
+        "a": {
+          "count": 7,
+          "rows_md5": "bf1bd9d396c7f73e3170998d68066279"
+        },
+        "b": {
+          "count": 7,
+          "rows_md5": "d36a8526ce3411a13d13c9f6399f86fd"
+        }
+      },
+      "entitlements": {
+        "a": {
+          "count": 29,
+          "rows_md5": "81309c6954ecf6f1cdfaa1b99b10ec6c"
+        },
+        "b": {
+          "count": 28,
+          "rows_md5": "a9a3549836dd032cfcbb3887b90263f1"
+        }
+      },
+      "model": {
+        "a": {
+          "count": 26,
+          "rows_md5": "127d4de4a5ae6564e74a66d52eed53d8"
+        },
+        "b": {
+          "count": 20,
+          "rows_md5": "c9fe6334f3ad8dc665b7e25034d9d1e5"
+        }
+      },
+      "polytao_journals": {
+        "a": {
+          "bindings_sha256": "3c637104fc3d811e8a6b0f4e9839e9818ac275eb21638a7d8f769ef41c93ebaf",
+          "drafts": 24,
+          "jobs": 5
+        },
+        "b": {
+          "bindings_sha256": "14645c23d4cf92a0128c9afb571302985c63c65cc62a601084a7ba738affa614",
+          "drafts": 14,
+          "jobs": 4
+        }
+      },
+      "retrosynthesis": {
+        "a": {
+          "count": 3,
+          "rows_md5": "2c4ab4c5df3cddc811261b069406943b"
+        },
+        "b": {
+          "count": 3,
+          "rows_md5": "0cfc075b153361755470e4f9c7c0b90f"
+        }
+      },
+      "retrosynthesis_journals": {
+        "a": {
+          "bindings_sha256": "014e0f29e6cc51801977fed4a453aa0c7d09973a553161f3901ab10321c9b9ea",
+          "drafts": 8,
+          "jobs": 3
+        },
+        "b": {
+          "bindings_sha256": "b128be36353b776ad4f8237b6c3be0e3c2c522639d7fb5c634edf3c50ec6b0a0",
+          "drafts": 4,
+          "jobs": 3
+        }
+      },
+      "usage": {
+        "a": {
+          "count": 170,
+          "rows_md5": "7a1ac1376314892307c53f35b8fcdcda"
+        },
+        "b": {
+          "count": 143,
+          "rows_md5": "3e28761af4ced0333cbc60d6fe46d3ef"
+        }
+      }
+    }
+  },
+  "scope": "dev-m1 on dedicated test storage",
+  "status": "hold_before_m6",
+  "storage_profile": {
+    "filesystem_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+    "kind": "waterpool",
+    "layout_sha256": "404914b4c0edf6049c093f2559ca3af61315d2b839b2e4642fbacd5b5ce4950b"
+  },
+  "test_counts": {
+    "completed_at": "2026-11-23T18:03:20+08:00",
+    "node_version": "22.23.2",
+    "python_version": "3.12.3",
+    "scope": "Local OpenScience regression suites. Python discovery covers scripts/tests/test_openscience*.py. Backend integration suites that require a database are outside this offline run.",
+    "status": "passed",
+    "suites": {
+      "adapter_suite_reporting": {
+        "command": "node --test scripts/tests/openscience_m3_adapter_suites.test.mjs",
+        "cwd": ".",
+        "failed": 0,
+        "passed": 3,
+        "skipped": 0
+      },
+      "frontend": {
+        "command": "node ./node_modules/vitest/vitest.mjs run --config vite.config.ts --reporter=verbose src/components/PrivateAgentFrame.test.tsx src/components/AgentWorkspaceHomePage.general-review.test.tsx src/lib/openScienceGeneralSessionBridge.test.ts src/lib/openScienceProjectBridge.test.ts",
+        "cwd": "frontend",
+        "failed": 0,
+        "files": {
+          "src/components/AgentWorkspaceHomePage.general-review.test.tsx": 9,
+          "src/components/PrivateAgentFrame.test.tsx": 5,
+          "src/lib/openScienceGeneralSessionBridge.test.ts": 5,
+          "src/lib/openScienceProjectBridge.test.ts": 6
+        },
+        "passed": 25,
+        "skipped": 0
+      },
+      "node_router": {
+        "command": "node --test ops/openscience-per-user-dev/activity.test.mjs ops/openscience-per-user-dev/m2-router.test.mjs",
+        "cwd": ".",
+        "failed": 0,
+        "passed": 9,
+        "skipped": 0
+      },
+      "polytao": {
+        "command": "node --test ops/openscience-mcp-dev/results-polytao-draft.test.mjs",
+        "cwd": ".",
+        "failed": 0,
+        "passed": 13,
+        "skipped": 0
+      },
+      "python": {
+        "command": "python3 -m unittest discover -s scripts/tests -p 'test_openscience*.py'",
+        "cwd": ".",
+        "failed": 0,
+        "passed": 179,
+        "skipped": 0
+      },
+      "retrosynthesis": {
+        "command": "node --test ops/openscience-mcp-dev/results-retrosynthesis.test.mjs",
+        "cwd": ".",
+        "failed": 0,
+        "passed": 9,
+        "skipped": 0
+      }
+    },
+    "total_passed": 238
+  },
+  "tested_boundaries": {
+    "cold_self_service": "operator recovery in this phase",
+    "load_and_storage": "overlapping acceptance runs observed about 128s between one user metadata write and text part; target concurrency and 30s P95 remain open",
+    "new_executable_image_or_format": "requires a separately reviewed release and rollback drill",
+    "test_accounts": 2
+  },
+  "workspace_images": {
+    "compatible_candidate": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+    "difference": "build label only (identical executable filesystem and runtime configuration)",
+    "original": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+    "rollback": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859"
+  }
+}

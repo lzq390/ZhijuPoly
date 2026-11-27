@@ -2371,5 +2371,41 @@ class ExactBTransitionPolicyTests(unittest.TestCase):
         )
 
 
+class OpenScienceAuthorityIntegrationPolicyTests(unittest.TestCase):
+    STEP = policy.OPENSCIENCE_AUTHORITY_STEP + "\n"
+    SCRIPT = policy.OPENSCIENCE_AUTHORITY_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    def failures(self, ci_text: str = CI_TEXT, script_text: str | None = None) -> list[str]:
+        failures: list[str] = []
+        policy.validate_openscience_authority_integration(
+            ci_text, self.SCRIPT if script_text is None else script_text, failures
+        )
+        return failures
+
+    def test_reviewed_step_and_script_pass(self) -> None:
+        self.assertEqual(self.failures(), [])
+        self.assertEqual(CI_TEXT.count(self.STEP), 1)
+
+    def test_removed_or_weakened_step_is_rejected(self) -> None:
+        for replacement in (
+            "",
+            self.STEP.replace("        if: matrix.shard == 0\n", ""),
+            self.STEP.replace("        timeout-minutes: 10\n", "        continue-on-error: true\n"),
+            self.STEP.replace(".sh", ".sh || true"),
+            self.STEP + self.STEP,
+        ):
+            with self.subTest(replacement=replacement):
+                failures = self.failures(CI_TEXT.replace(self.STEP, replacement, 1))
+                self.assertTrue(any("M2/M3 authority integration" in f for f in failures), failures)
+
+    def test_script_must_run_both_suites_and_reject_skips(self) -> None:
+        for marker in policy.OPENSCIENCE_AUTHORITY_SCRIPT_MARKERS:
+            with self.subTest(marker=marker):
+                failures = self.failures(script_text=self.SCRIPT.replace(marker, "", 1))
+                self.assertTrue(any(marker in f for f in failures), failures)
+        failures = self.failures(script_text=self.SCRIPT + "\nfalse || true\n")
+        self.assertTrue(any("cannot ignore" in f for f in failures), failures)
+
+
 if __name__ == "__main__":
     unittest.main()

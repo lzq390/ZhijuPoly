@@ -476,6 +476,7 @@ jobs:
       APP_POSTGRES_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/nexpoly_ci
       ISOLATION_TEST_ADMIN_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/nexpoly_ci
       NEXPOLY_ISOLATION_TEST_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/nexpoly_ci
+      OPENSCIENCE_M4_MODEL_TEST_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/m4_model_test
       NEXPOLY_MULTIUSER_REQUIRED: "1"
       PYTEST_PLUGINS: multiuser_pytest_gate
       PI_POSTGRES_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/nexpoly_ci
@@ -501,6 +502,8 @@ jobs:
       - name: Install PostgreSQL 16 backup and restore client
         timeout-minutes: 9
         run: scripts/ci/ensure_postgresql_16_client.sh
+      - name: Create the isolated model accounting test database
+        run: psql "$APP_POSTGRES_DSN" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE m4_model_test'
       - name: Run shard
         env:
           SHARD: ${{ matrix.shard }}
@@ -511,6 +514,11 @@ jobs:
           if [[ "$SHARD" == "0" ]]; then
             python -m pytest scripts/tests/test_user_isolation_release_contract.py scripts/tests/test_monomer_usage_hooks.py scripts/tests/test_production_worker_cohort.py --assert=plain --tb=short
           fi
+
+      - name: Run OpenScience M2/M3 authority integration
+        if: matrix.shard == 0
+        timeout-minutes: 10
+        run: scripts/ci/test_openscience_m2m3_authority.sh
 
       - name: Run native retrosynthesis HTTP and MCP SDK contract
         if: matrix.shard == 0
@@ -917,6 +925,10 @@ jobs:
         run: npm ci --ignore-scripts --prefix ops/openscience-ui-overlay
       - name: Run deterministic overlay patch tests
         run: node --test ops/openscience-ui-overlay/test_patch.mjs
+      - name: Run private workspace router, draft and model relay regressions
+        run: >-
+          node --test ops/openscience-per-user-dev/*.test.mjs
+          ops/openscience-m3-dev/*.test.mjs ops/openscience-m4-dev/services.test.mjs
       - name: Run development MCP overlay tests in Chromium
         run: |
           ops/openscience-ui-overlay/node_modules/.bin/playwright install --with-deps chromium

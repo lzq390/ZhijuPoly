@@ -1,0 +1,246 @@
+{
+  "status": "passed_dev_m1_operator_rehearsal",
+  "local_date": "2026-11-24",
+  "time_zone": "Asia/Shanghai",
+  "environment": "dev-m1",
+  "m5_baseline_commit": "d9a323e4532c9a58c0e7011773fb20856d536f81",
+  "scope": {
+    "operator": "test-user-a",
+    "ordinary_member": "test-user-b",
+    "workspace_hard_bytes_per_uid": 2000000000,
+    "workspace_data": "retained M5 quota clones",
+    "production_9011_used": false,
+    "original_m1_volumes_mounted": false,
+    "web_origins": [
+      "https://app.m2.test:18760",
+      "https://agent.m2.test:18761"
+    ],
+    "formal_operator_observation_started": false,
+    "internal_member_rollout_started": false
+  },
+  "images": {
+    "candidate": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+    "gateway": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+    "rollback": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859"
+  },
+  "phases": {
+    "candidate": {
+      "browser": {
+        "environment": "dev-m1",
+        "finished": "2026-11-24T02:41:25.411Z",
+        "image": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+        "phase": "candidate",
+        "shared_or_external_requests": 0,
+        "stages": {
+          "kill_switch": {
+            "after": {
+              "model_usage": 401,
+              "notebook": 401,
+              "private_knowledge": 401
+            },
+            "before": {
+              "model_usage": 200,
+              "notebook": 200,
+              "private_knowledge": 200
+            },
+            "closed_ticket_http": {
+              "a": 403,
+              "b": 403
+            },
+            "fresh_operator_data_matches": true,
+            "old_context_after_reopen": "denied",
+            "old_document_invalid_ms": 633,
+            "old_ticket_during_close": "denied",
+            "private_page_denied_ms": 575,
+            "private_sidebar_cleared_ms": 645,
+            "server_closed_sse_ms": 581,
+            "stream_reconnect_status": 401,
+            "unused_ticket_after_reopen": "denied_before_expiry",
+            "unused_ticket_age_upper_bound_ms": 2605
+          },
+          "operator": {
+            "foreign_sessions": 0,
+            "notebook_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+            "retained_project_attachment": true,
+            "session_refs": {
+              "general": "3fb9393244f481d004eea3dec327471ee86d495945c3121ab99e69876577e6f2",
+              "project": "e454f41821d5bec1786b3412cd0e739723bde7c5de4b732e6b8feb1552b401b1"
+            },
+            "uid": 58161656
+          },
+          "ordinary_member": {
+            "new_ticket": 403,
+            "no_private_sidebar": true,
+            "platform_login": 200
+          }
+        },
+        "started": "2026-11-24T02:40:30.548Z",
+        "status": "passed"
+      },
+      "final_gate": false,
+      "initial_gate": true,
+      "inspected_operator_image": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+      "ledger_buckets_checked": [
+        "chunks",
+        "collections",
+        "dft_jobs",
+        "documents",
+        "model",
+        "quota_events",
+        "quota_operations",
+        "tool_operations",
+        "usage_attempts",
+        "usage_events"
+      ],
+      "ordinary_member_state": "recycled",
+      "owner_ledger_counts_match": true
+    },
+    "rollback": {
+      "browser": {
+        "environment": "dev-m1",
+        "finished": "2026-11-24T02:43:07.184Z",
+        "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+        "phase": "rollback",
+        "shared_or_external_requests": 0,
+        "stages": {
+          "operator": {
+            "foreign_sessions": 0,
+            "notebook_sha256": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+            "retained_project_attachment": true,
+            "session_refs": {
+              "general": "3fb9393244f481d004eea3dec327471ee86d495945c3121ab99e69876577e6f2",
+              "project": "e454f41821d5bec1786b3412cd0e739723bde7c5de4b732e6b8feb1552b401b1"
+            },
+            "uid": 58161656
+          },
+          "ordinary_member": {
+            "new_ticket": 403,
+            "no_private_sidebar": true,
+            "platform_login": 200
+          },
+          "rollback": {
+            "operator_ticket_before_reopen": 403,
+            "ordinary_member_after_reopen": 403,
+            "private_data_matches": true
+          }
+        },
+        "started": "2026-11-24T02:42:29.300Z",
+        "status": "passed"
+      },
+      "final_gate": true,
+      "initial_gate": false,
+      "inspected_operator_image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+      "ledger_buckets_checked": [
+        "chunks",
+        "collections",
+        "dft_jobs",
+        "documents",
+        "model",
+        "quota_events",
+        "quota_operations",
+        "tool_operations",
+        "usage_attempts",
+        "usage_events"
+      ],
+      "ordinary_member_state": "recycled",
+      "owner_ledger_counts_match": true
+    }
+  },
+  "offline_notebooks": {
+    "test-user-a": "0dd69cdf359448050462abeaab389b095e7699e8583c81cf9f76c88e2ee121a5",
+    "test-user-b": "703ebd319d006315255fb22029f434e34e1bd580ab0ec0a285b2bb9a9fbc5c8a"
+  },
+  "authority_regression": {
+    "fixture": "disposable local PostgreSQL, real login and authority, test native handler",
+    "credential_ttl_unexpired_at_denial": true,
+    "hops": [
+      "issue_tool_operation",
+      "exchange_operation",
+      "native_use"
+    ],
+    "ordinary_member_after_operator_restriction_http": [
+      403,
+      403,
+      403
+    ],
+    "operator_after_global_close_http": [
+      401,
+      401,
+      401
+    ],
+    "old_operator_grants_after_reopen_http": [
+      401,
+      401,
+      401
+    ]
+  },
+  "legacy_archive_fixture": {
+    "existing_file_write": "EROFS",
+    "filesystem": "squashfs",
+    "image_sha256": "6bcb7125ca7c9bc5e988b7599fc621c29f4fe2737a5f601c78546c2445a89736",
+    "new_file_write": "EROFS",
+    "restored_sha256": "f451b9903a4266861dba378f2fc45a04fd8d3ad898f922bb5ad14d02009f1a5f",
+    "scope": "synthetic unassigned history",
+    "status": "passed",
+    "unmounted": true
+  },
+  "final": {
+    "status": "parked",
+    "checked_at": "2026-11-24T02:45:20.285640+00:00",
+    "original_private_registry_sha256": "83274cac893edfc08a000af90e1410bb2e4190b4413f5c4a5774d36cc44f4fff",
+    "registered_image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+    "workspace_states": {
+      "test-user-a": {
+        "state": "recycled",
+        "uid": 58161656,
+        "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+        "hard_bytes": 2000000000
+      },
+      "test-user-b": {
+        "state": "recycled",
+        "uid": 43620582,
+        "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+        "hard_bytes": 2000000000
+      }
+    },
+    "raw_disk_sha256": {
+      "m5-a": "d2dce03cd2200971ad461729d1ebceae5bdf87df97dc8c74387ab85046418255",
+      "m5-b": "b34014728e2deb8722b017ae15640eaddcce96ef9b8aa57bef6411868d74e8c5",
+      "m5-backup": "6014640442a913f65006e9cbfbe43aaeabcee06f41e39845298993bebd948f7f",
+      "m5-restore-a": "d0dbe48e97dee470b19ff2197825d273f4d93e83bb16ffabcf46bd9a30f03eb4",
+      "m5-restore-b": "68c30b602c88b03293eb861b62141cf1cf0ed2539d83e2c169862249ece50806"
+    },
+    "guest_stopped": true,
+    "test_relay_closed": true,
+    "test_ssh_closed": true,
+    "volume_holders": {
+      "dst-a": [],
+      "dst-b": [],
+      "src-a": [],
+      "src-b": []
+    }
+  },
+  "regression": {
+    "python_workspace_tests": 184,
+    "node_router_and_adapter_reporting_tests": 12,
+    "frontend_home_tests": 25,
+    "native_authority_tests_including_disposable_gate": 2,
+    "vite_node_typecheck": "passed"
+  },
+  "private_evidence_sha256": {
+    "operator_browser": "431e49ccba4a0823e0cdcf667cfe9ffa6ffb9f835e0ad32b9523503a6bc58f4d",
+    "rollback_browser": "784f5ec401064fc2fb771117ebec2e7f5e814817ce4e01d84cf553b0c0585660",
+    "operator_drill": "b396a74a00a9f9108f86c40cf5ec2ceca86ac13be9776d843ab718ef2e77f731",
+    "private_archive_drill": "317a441e8ec03f7742f4a7c4a3ef76e34370692932236f7254f74552ba237e29",
+    "storage_shutdown": "82e21af01eaafac5821ed5f1ddca6276e72c3d4b7f7970bac9b20d2ff0e1ece7"
+  },
+  "outside_this_run": [
+    "formal target storage quota and paging delivery",
+    "cross-host restore",
+    "separate environment identities and controls (AC-22)",
+    "cold-owner self-service cleanup before internal rollout",
+    "concurrency capacity and cold-start P95",
+    "formal observation windows and internal rollout",
+    "rollback across a changed executable or data format"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "pool/main/libt/libtirpc/libtirpc3t64_1.3.4+ds-1.1build1_amd64.deb": "3a3cd37160399ab235fdf2f13159fd288940abb9660e0ed1afb418b44c73d43a",
+  "pool/main/libu/liburcu/liburcu8t64_0.14.0-3.1build1_amd64.deb": "1e0545f27be0dd31bf017f277b13cac9a7857efef7324ca83527e3213e717181",
+  "pool/main/n/nfs-ganesha/nfs-ganesha_4.3-8ubuntu1_amd64.deb": "de301de558537431a3f00c76583febcf988bb326f6cb416f5adda3ae1ab1461f",
+  "pool/main/n/nfs-utils/libnfsidmap1_2.6.4-3ubuntu5.1_amd64.deb": "947a27066f6dd49bccb1f80ef6db8dabb9de6671b5cb2ec2a8e5648a78133117",
+  "pool/main/n/ntirpc/libntirpc4.3t64_4.3-3.1build2_amd64.deb": "fc3a9bff828a2668fc4dc1baa142030e9ef7565aa12b0d6b84f2f8c250795704",
+  "pool/main/s/samba/libwbclient0_4.19.5+dfsg-4ubuntu9.8_amd64.deb": "3dd1634973ae87c38cf4989572042cec0f8cdbd5aab5b995aaf051079b9d1508",
+  "pool/universe/n/nfs-ganesha/nfs-ganesha-vfs_4.3-8ubuntu1_amd64.deb": "c15239defd77d7490e7a5e694706aa6c2a808523b1fd1f13b4038aebb455911c"
+}

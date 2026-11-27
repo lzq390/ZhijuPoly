@@ -1,0 +1,722 @@
+{
+  "status": "passed_ac22_two_candidates",
+  "local_date": "2026-11-24",
+  "timezone": "Asia/Shanghai",
+  "baseline_commit": "0b4cffa4c8bbb42d0ff6308b914d992525804cdb",
+  "project": "ac22-cf6f0043-262",
+  "scope": {
+    "same_canonical_a_b_in_both_databases": true,
+    "single_browser_profile_per_member_for_both_sites": true,
+    "separate_host_only_logins": true,
+    "distinct_authority_volumes_and_router_keys": true,
+    "same_reviewed_november_workspace_image": true,
+    "full_operator_gray_window_started": false,
+    "production_9011_used": false,
+    "original_m1_private_volumes_mounted": false,
+    "second_environment_storage": "dedicated local private Docker volumes",
+    "chat_model": "offline development fixture"
+  },
+  "profiles": {
+    "dev-m1": {
+      "parent": "https://app.m2.test:18760",
+      "agent": "https://agent.m2.test:18761",
+      "authority_port": 18762,
+      "frontend_port": 18763
+    },
+    "dev-m6": {
+      "parent": "https://app.m6.test:18780",
+      "agent": "https://agent.m6.test:18781",
+      "authority_port": 18782,
+      "frontend_port": 18783
+    }
+  },
+  "project_data": {
+    "dev-m1-test-user-a": {
+      "foreign_detail_http": [
+        404,
+        404,
+        404
+      ],
+      "foreign_file_reads_matching_missing_file": 3,
+      "foreign_marker_files_listed": 0,
+      "notebook_sha256": "f50c8db6318fc595a4fff353a0e9873c541439fa6e366ac7210bb84228033cdc",
+      "own_prompt_reply_attachment": true,
+      "project_session_sha256": "e75580cd4a60c35e764b391215899d7816abe9cf07e3f76818b9c0a0fab2148d"
+    },
+    "dev-m1-test-user-b": {
+      "foreign_detail_http": [
+        404,
+        404,
+        404
+      ],
+      "foreign_file_reads_matching_missing_file": 3,
+      "foreign_marker_files_listed": 0,
+      "notebook_sha256": "a5eaa30944dc161c9ff59256542bae01a3d1f6b1240bc4c915f9290c789fec11",
+      "own_prompt_reply_attachment": true,
+      "project_session_sha256": "51f67047d54c6fee70117f9cee49772ffdeeb85afa9347685a10aafb57dee38b"
+    },
+    "dev-m6-test-user-a": {
+      "foreign_detail_http": [
+        404,
+        404,
+        404
+      ],
+      "foreign_file_reads_matching_missing_file": 3,
+      "foreign_marker_files_listed": 0,
+      "notebook_sha256": "ce4229bdbc68b4b2f8d506ae36b9447837b5215787ed85ce9a6eea5694e71280",
+      "own_prompt_reply_attachment": true,
+      "project_session_sha256": "dd8b2d39d0ee52e7bd295b602c60639029ba9060561a517394829bde61c4d5ed"
+    },
+    "dev-m6-test-user-b": {
+      "foreign_detail_http": [
+        404,
+        404,
+        404
+      ],
+      "foreign_file_reads_matching_missing_file": 3,
+      "foreign_marker_files_listed": 0,
+      "notebook_sha256": "f58c20379edac053caee3bca8e7c8cbc2e9dceabcc27bef91e84022a65c40bd6",
+      "own_prompt_reply_attachment": true,
+      "project_session_sha256": "c4f6eb96bd2f76473ed577193580d9f7dc302d0634c4c69847f9989251fa4d87"
+    }
+  },
+  "runtime": {
+    "dev-m1": {
+      "test-user-a": {
+        "container_id": "ff02be0b0a80d61c62384c24d49896d10973fa9be03ea1d60679b7bc4b9d9745",
+        "environment": "dev-m1",
+        "generation": 53,
+        "gid": 58161656,
+        "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+        "started_at": "2026-11-24T03:37:29.974329827Z",
+        "uid": 58161656,
+        "user_id": "test-user-a",
+        "volume": "nexpoly-m5-b21744274102-src-a",
+        "volume_root_mode": "0700",
+        "workspace": "463fc2f89367468bb7fc6e048d522c9e"
+      },
+      "test-user-b": {
+        "container_id": "d167ffe8d200435170f74a20effa2be969c52bbd1e820f840f388debda4eebdd",
+        "environment": "dev-m1",
+        "generation": 47,
+        "gid": 43620582,
+        "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+        "started_at": "2026-11-24T03:37:48.697333497Z",
+        "uid": 43620582,
+        "user_id": "test-user-b",
+        "volume": "nexpoly-m5-b21744274102-src-b",
+        "volume_root_mode": "0700",
+        "workspace": "3c137e9c236d4998bed842786c0f4548"
+      }
+    },
+    "dev-m6": {
+      "test-user-a": {
+        "container_id": "70d87e55ccd2aedef800881f6f708bfafb0e4311cea72f2995e85775b94c5d69",
+        "environment": "dev-m6",
+        "generation": 3,
+        "gid": 20050659,
+        "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+        "started_at": "2026-11-24T03:37:25.443114445Z",
+        "uid": 20050659,
+        "user_id": "test-user-a",
+        "volume": "nexpoly-m1-1baca0b5b957-1db5efe5f6f34ff689cb5e7ee9fd67db-data",
+        "volume_root_mode": "0700",
+        "workspace": "1db5efe5f6f34ff689cb5e7ee9fd67db"
+      },
+      "test-user-b": {
+        "container_id": "ac728308e1afbe1f0edeb647f71914f19dff73bc372365425a88296542106ec1",
+        "environment": "dev-m6",
+        "generation": 3,
+        "gid": 81721856,
+        "image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+        "started_at": "2026-11-24T03:37:32.543021444Z",
+        "uid": 81721856,
+        "user_id": "test-user-b",
+        "volume": "nexpoly-m1-1baca0b5b957-8846706fa2064f0aa085ed23a7d62265-data",
+        "volume_root_mode": "0700",
+        "workspace": "8846706fa2064f0aa085ed23a7d62265"
+      }
+    }
+  },
+  "workspace_deployments": {
+    "dev-m1": "5f8f23b8357b4b6da217f0fae5f9a62f",
+    "dev-m6": "1baca0b5b95741e5a203f9513cada1e3"
+  },
+  "database_volumes": {
+    "dev-m1": "nexpoly-m2-auth-c360f288b4df4cdf884517f3598845b5",
+    "dev-m6": "nexpoly-m2-auth-d126855addd046e8917632684f36be80"
+  },
+  "rounds": [
+    {
+      "started_utc": "2026-11-24T03:37:11.124Z",
+      "finished_utc": "2026-11-24T03:40:48.258Z",
+      "tickets": [
+        {
+          "age_upper_bound_ms": 8336,
+          "from": "dev-m1",
+          "issuing_site": "accepted_same_ticket",
+          "receiving_authority": "denied",
+          "to": "dev-m6",
+          "user": "test-user-a"
+        },
+        {
+          "age_upper_bound_ms": 2230,
+          "from": "dev-m6",
+          "issuing_site": "accepted_same_ticket",
+          "receiving_authority": "denied",
+          "to": "dev-m1",
+          "user": "test-user-a"
+        },
+        {
+          "age_upper_bound_ms": 7980,
+          "from": "dev-m1",
+          "issuing_site": "accepted_same_ticket",
+          "receiving_authority": "denied",
+          "to": "dev-m6",
+          "user": "test-user-b"
+        },
+        {
+          "age_upper_bound_ms": 2450,
+          "from": "dev-m6",
+          "issuing_site": "accepted_same_ticket",
+          "receiving_authority": "denied",
+          "to": "dev-m1",
+          "user": "test-user-b"
+        }
+      ],
+      "controls": [
+        {
+          "environment": "dev-m1",
+          "action": "remove-a",
+          "revoked": {
+            "dev-m1-test-user-a": {
+              "old_document_invalid_ms": 1269,
+              "private_page_denied_ms": 1054,
+              "private_sidebar_cleared_ms": 1314,
+              "server_closed_sse_ms": 1058,
+              "stream_reconnect_status": 401
+            }
+          },
+          "unaffected": {
+            "dev-m1-test-user-b": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            },
+            "dev-m6-test-user-a": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            },
+            "dev-m6-test-user-b": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            }
+          },
+          "old_context_denied_after_restore": true,
+          "fresh_handoff_recovered_data": true
+        },
+        {
+          "environment": "dev-m6",
+          "action": "remove-a",
+          "revoked": {
+            "dev-m6-test-user-a": {
+              "old_document_invalid_ms": 5033,
+              "private_page_denied_ms": 1977,
+              "private_sidebar_cleared_ms": 5084,
+              "server_closed_sse_ms": 1978,
+              "stream_reconnect_status": 401
+            }
+          },
+          "unaffected": {
+            "dev-m1-test-user-a": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            },
+            "dev-m1-test-user-b": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            },
+            "dev-m6-test-user-b": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            }
+          },
+          "old_context_denied_after_restore": true,
+          "fresh_handoff_recovered_data": true
+        },
+        {
+          "environment": "dev-m1",
+          "action": "close",
+          "revoked": {
+            "dev-m1-test-user-a": {
+              "old_document_invalid_ms": 4867,
+              "private_page_denied_ms": 1809,
+              "private_sidebar_cleared_ms": 4852,
+              "server_closed_sse_ms": 1807,
+              "stream_reconnect_status": 401
+            },
+            "dev-m1-test-user-b": {
+              "old_document_invalid_ms": 4766,
+              "private_page_denied_ms": 1803,
+              "private_sidebar_cleared_ms": 4818,
+              "server_closed_sse_ms": 1805,
+              "stream_reconnect_status": 401
+            }
+          },
+          "unaffected": {
+            "dev-m6-test-user-a": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            },
+            "dev-m6-test-user-b": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            }
+          },
+          "old_context_denied_after_restore": true,
+          "fresh_handoff_recovered_data": true
+        },
+        {
+          "environment": "dev-m6",
+          "action": "close",
+          "revoked": {
+            "dev-m6-test-user-a": {
+              "old_document_invalid_ms": 3362,
+              "private_page_denied_ms": 1357,
+              "private_sidebar_cleared_ms": 3273,
+              "server_closed_sse_ms": 1359,
+              "stream_reconnect_status": 401
+            },
+            "dev-m6-test-user-b": {
+              "old_document_invalid_ms": 3663,
+              "private_page_denied_ms": 593,
+              "private_sidebar_cleared_ms": 3685,
+              "server_closed_sse_ms": 596,
+              "stream_reconnect_status": 401
+            }
+          },
+          "unaffected": {
+            "dev-m1-test-user-a": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            },
+            "dev-m1-test-user-b": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            }
+          },
+          "old_context_denied_after_restore": true,
+          "fresh_handoff_recovered_data": true
+        }
+      ],
+      "observed_http_origins": [
+        "https://agent.m2.test:18761",
+        "https://agent.m6.test:18781",
+        "https://app.m2.test:18760",
+        "https://app.m6.test:18780"
+      ]
+    },
+    {
+      "started_utc": "2026-11-24T03:41:12.700Z",
+      "finished_utc": "2026-11-24T03:44:05.432Z",
+      "tickets": [
+        {
+          "age_upper_bound_ms": 9093,
+          "from": "dev-m1",
+          "issuing_site": "accepted_same_ticket",
+          "receiving_authority": "denied",
+          "to": "dev-m6",
+          "user": "test-user-a"
+        },
+        {
+          "age_upper_bound_ms": 2422,
+          "from": "dev-m6",
+          "issuing_site": "accepted_same_ticket",
+          "receiving_authority": "denied",
+          "to": "dev-m1",
+          "user": "test-user-a"
+        },
+        {
+          "age_upper_bound_ms": 7010,
+          "from": "dev-m1",
+          "issuing_site": "accepted_same_ticket",
+          "receiving_authority": "denied",
+          "to": "dev-m6",
+          "user": "test-user-b"
+        },
+        {
+          "age_upper_bound_ms": 2386,
+          "from": "dev-m6",
+          "issuing_site": "accepted_same_ticket",
+          "receiving_authority": "denied",
+          "to": "dev-m1",
+          "user": "test-user-b"
+        }
+      ],
+      "controls": [
+        {
+          "environment": "dev-m1",
+          "action": "remove-a",
+          "revoked": {
+            "dev-m1-test-user-a": {
+              "old_document_invalid_ms": 3342,
+              "private_page_denied_ms": 1770,
+              "private_sidebar_cleared_ms": 3364,
+              "server_closed_sse_ms": 1772,
+              "stream_reconnect_status": 401
+            }
+          },
+          "unaffected": {
+            "dev-m1-test-user-b": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            },
+            "dev-m6-test-user-a": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            },
+            "dev-m6-test-user-b": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            }
+          },
+          "old_context_denied_after_restore": true,
+          "fresh_handoff_recovered_data": true
+        },
+        {
+          "environment": "dev-m6",
+          "action": "remove-a",
+          "revoked": {
+            "dev-m6-test-user-a": {
+              "old_document_invalid_ms": 1322,
+              "private_page_denied_ms": 568,
+              "private_sidebar_cleared_ms": 1285,
+              "server_closed_sse_ms": 570,
+              "stream_reconnect_status": 401
+            }
+          },
+          "unaffected": {
+            "dev-m1-test-user-a": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            },
+            "dev-m1-test-user-b": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            },
+            "dev-m6-test-user-b": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            }
+          },
+          "old_context_denied_after_restore": true,
+          "fresh_handoff_recovered_data": true
+        },
+        {
+          "environment": "dev-m1",
+          "action": "close",
+          "revoked": {
+            "dev-m1-test-user-a": {
+              "old_document_invalid_ms": 4750,
+              "private_page_denied_ms": 2016,
+              "private_sidebar_cleared_ms": 4796,
+              "server_closed_sse_ms": 2015,
+              "stream_reconnect_status": 401
+            },
+            "dev-m1-test-user-b": {
+              "old_document_invalid_ms": 2747,
+              "private_page_denied_ms": 2011,
+              "private_sidebar_cleared_ms": 2732,
+              "server_closed_sse_ms": 2013,
+              "stream_reconnect_status": 401
+            }
+          },
+          "unaffected": {
+            "dev-m6-test-user-a": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            },
+            "dev-m6-test-user-b": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            }
+          },
+          "old_context_denied_after_restore": true,
+          "fresh_handoff_recovered_data": true
+        },
+        {
+          "environment": "dev-m6",
+          "action": "close",
+          "revoked": {
+            "dev-m6-test-user-a": {
+              "old_document_invalid_ms": 3543,
+              "private_page_denied_ms": 1675,
+              "private_sidebar_cleared_ms": 3550,
+              "server_closed_sse_ms": 1673,
+              "stream_reconnect_status": 401
+            },
+            "dev-m6-test-user-b": {
+              "old_document_invalid_ms": 2039,
+              "private_page_denied_ms": 1669,
+              "private_sidebar_cleared_ms": 2105,
+              "server_closed_sse_ms": 1671,
+              "stream_reconnect_status": 401
+            }
+          },
+          "unaffected": {
+            "dev-m1-test-user-a": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            },
+            "dev-m1-test-user-b": {
+              "new_ticket": 200,
+              "original_page": 200,
+              "original_stream_delivered": true,
+              "private_file_read_write": true
+            }
+          },
+          "old_context_denied_after_restore": true,
+          "fresh_handoff_recovered_data": true
+        }
+      ],
+      "observed_http_origins": [
+        "https://agent.m2.test:18761",
+        "https://agent.m6.test:18781",
+        "https://app.m2.test:18760",
+        "https://app.m6.test:18780"
+      ]
+    }
+  ],
+  "peak_by_scenario_ms": [
+    {
+      "environment": "dev-m1",
+      "action": "remove-a",
+      "per_round_affected": 1,
+      "per_round_unaffected": 3,
+      "server_closed_sse_ms": 1772,
+      "private_page_denied_ms": 1770,
+      "old_document_invalid_ms": 3342,
+      "private_sidebar_cleared_ms": 3364
+    },
+    {
+      "environment": "dev-m6",
+      "action": "remove-a",
+      "per_round_affected": 1,
+      "per_round_unaffected": 3,
+      "server_closed_sse_ms": 1978,
+      "private_page_denied_ms": 1977,
+      "old_document_invalid_ms": 5033,
+      "private_sidebar_cleared_ms": 5084
+    },
+    {
+      "environment": "dev-m1",
+      "action": "close",
+      "per_round_affected": 2,
+      "per_round_unaffected": 2,
+      "server_closed_sse_ms": 2015,
+      "private_page_denied_ms": 2016,
+      "old_document_invalid_ms": 4867,
+      "private_sidebar_cleared_ms": 4852
+    },
+    {
+      "environment": "dev-m6",
+      "action": "close",
+      "per_round_affected": 2,
+      "per_round_unaffected": 2,
+      "server_closed_sse_ms": 1673,
+      "private_page_denied_ms": 1675,
+      "old_document_invalid_ms": 3663,
+      "private_sidebar_cleared_ms": 3685
+    }
+  ],
+  "final_policies": {
+    "dev-m1": {
+      "enabled": true,
+      "members": {
+        "test-user-a": true,
+        "test-user-b": true
+      }
+    },
+    "dev-m6": {
+      "enabled": true,
+      "members": {
+        "test-user-a": true,
+        "test-user-b": true
+      }
+    }
+  },
+  "parked": {
+    "verified_at": "2026-11-24T03:46:51.383417+00:00",
+    "retained_workspaces": {
+      "dev-m1": {
+        "test-user-a": {
+          "uid": 58161656,
+          "workspace": "463fc2f89367468bb7fc6e048d522c9e",
+          "volume": "nexpoly-m5-b21744274102-src-a",
+          "generation": 53,
+          "state": "recycled"
+        },
+        "test-user-b": {
+          "uid": 43620582,
+          "workspace": "3c137e9c236d4998bed842786c0f4548",
+          "volume": "nexpoly-m5-b21744274102-src-b",
+          "generation": 47,
+          "state": "recycled"
+        }
+      },
+      "dev-m6": {
+        "test-user-a": {
+          "uid": 20050659,
+          "workspace": "1db5efe5f6f34ff689cb5e7ee9fd67db",
+          "volume": "nexpoly-m1-1baca0b5b957-1db5efe5f6f34ff689cb5e7ee9fd67db-data",
+          "generation": 3,
+          "state": "recycled"
+        },
+        "test-user-b": {
+          "uid": 81721856,
+          "workspace": "8846706fa2064f0aa085ed23a7d62265",
+          "volume": "nexpoly-m1-1baca0b5b957-8846706fa2064f0aa085ed23a7d62265-data",
+          "generation": 3,
+          "state": "recycled"
+        }
+      }
+    },
+    "original_m1_registry_sha256": "83274cac893edfc08a000af90e1410bb2e4190b4413f5c4a5774d36cc44f4fff",
+    "original_private_volume_holders": {
+      "test-user-a": [],
+      "test-user-b": []
+    },
+    "archived_qa_disk_sha256": {
+      "m5-a": "d2dce03cd2200971ad461729d1ebceae5bdf87df97dc8c74387ab85046418255",
+      "m5-b": "b34014728e2deb8722b017ae15640eaddcce96ef9b8aa57bef6411868d74e8c5",
+      "m5-backup": "6014640442a913f65006e9cbfbe43aaeabcee06f41e39845298993bebd948f7f",
+      "m5-restore-a": "d0dbe48e97dee470b19ff2197825d273f4d93e83bb16ffabcf46bd9a30f03eb4",
+      "m5-restore-b": "68c30b602c88b03293eb861b62141cf1cf0ed2539d83e2c169862249ece50806"
+    },
+    "m5_source_and_restore_holders": {
+      "dst-a": [],
+      "dst-b": [],
+      "src-a": [],
+      "src-b": []
+    },
+    "all_candidate_listeners_closed": [
+      18760,
+      18761,
+      18762,
+      18763,
+      18780,
+      18781,
+      18782,
+      18783
+    ],
+    "quota_vm_stopped": true,
+    "nfs_relay_closed": true,
+    "quota_unchanged": {
+      "test-user-a": {
+        "state": "recycled",
+        "uid": 58161656,
+        "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+        "hard_bytes": 2000000000
+      },
+      "test-user-b": {
+        "state": "recycled",
+        "uid": 43620582,
+        "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+        "hard_bytes": 2000000000
+      }
+    },
+    "before_restart": {
+      "dev-m1": {
+        "test-user-a": {
+          "state": "recycled",
+          "workspace": "463fc2f89367468bb7fc6e048d522c9e",
+          "uid": 58161656,
+          "generation": 52,
+          "volume": "nexpoly-m5-b21744274102-src-a"
+        },
+        "test-user-b": {
+          "state": "recycled",
+          "workspace": "3c137e9c236d4998bed842786c0f4548",
+          "uid": 43620582,
+          "generation": 46,
+          "volume": "nexpoly-m5-b21744274102-src-b"
+        }
+      },
+      "dev-m6": {
+        "test-user-a": {
+          "state": "recycled",
+          "workspace": "1db5efe5f6f34ff689cb5e7ee9fd67db",
+          "uid": 20050659,
+          "generation": 2,
+          "volume": "nexpoly-m1-1baca0b5b957-1db5efe5f6f34ff689cb5e7ee9fd67db-data"
+        },
+        "test-user-b": {
+          "state": "recycled",
+          "workspace": "8846706fa2064f0aa085ed23a7d62265",
+          "uid": 81721856,
+          "generation": 2,
+          "volume": "nexpoly-m1-1baca0b5b957-8846706fa2064f0aa085ed23a7d62265-data"
+        }
+      }
+    }
+  },
+  "regressions": {
+    "workspace_python": 184,
+    "router_activity_adapters_node": 13,
+    "frontend_home": 25,
+    "isolated_database_delegation": 2,
+    "authority_origin_and_transport": 2,
+    "vite_configuration_typecheck": "passed"
+  },
+  "private_evidence_sha256": {
+    "created_fixture": "5a0efacc656c9b4ca7f6e87e64c010cd8e233d07822818aab44b93d416e54cea",
+    "first_complete": "dd3a3e7f8b7e70cbed07a7c9da17aaa3cc98f638b6bb4c2157ec4041af8d11ce",
+    "second_complete": "28f504769737440e5e215c626cbdee53e66f3658be7a0d66f9edc4745e7f6f21",
+    "between_sites_restart": "a58b6a1ef2811966e7eef87d797b6f18c10a3790de258d3ad6378666d167bf52",
+    "parked": "195772441281ac46ea0c0d14336e1fd9bfc7ff8ae7b612198574e3f902d3942a"
+  },
+  "pending_formal_gates": [
+    "target storage and alert delivery",
+    "cross-host restore",
+    "cold owner web self-service cleanup before internal pilot",
+    "capacity and cold-start P95",
+    "formal operator observation"
+  ]
+}

@@ -392,6 +392,10 @@ class MCPRuntime:
             raise MCPFailure("PERMISSION_DENIED", "This MCP client lacks permission for this tool.")
         owner_id = registry.owner_for(client_id)
         session = await self.session()
+        return await self.execute_for_owner(name, args, owner_id, session)
+
+    async def execute_for_owner(self, name: str, args: Any, owner_id: str, session: BackendSession) -> Any:
+        """Execute after the request transport has established its native owner."""
         if name in {"prepare_monomer_retrosynthesis", "get_retrosynthesis_draft", "update_retrosynthesis_draft", "confirm_monomer_retrosynthesis", "cancel_retrosynthesis_draft"}:
             return await self.execute_draft(name, args, owner_id, session)
         if name == "resolve_retrosynthesis_target":

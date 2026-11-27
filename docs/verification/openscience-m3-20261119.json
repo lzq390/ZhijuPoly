@@ -1,0 +1,338 @@
+{
+  "environment": "dev-m1",
+  "start": "2026-11-19T09:22:41.621Z",
+  "browser": "153.0.8010.12",
+  "gateway_base": "sha256:fb7fdd70e46d7544d0816f042bd0a4324cd7a6c1e86a4a4606031f5108199df0",
+  "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+  "users": {
+    "a": {
+      "workspace_session": "ses_e0ce2151dffe6qQVWdAILjEMti",
+      "job_id": "e2ed52af-9fdc-49c0-bd01-18489ee477f1",
+      "predicted_tg_c": 70.4328,
+      "polymer_candidates": 1,
+      "status": "completed",
+      "own_job_listed": true,
+      "foreign_job_listed": false,
+      "foreign_status": 404,
+      "foreign_result": 404,
+      "files": [
+        {
+          "name": "final_structure.xyz",
+          "bytes": 504,
+          "sha256": "c75f99372fea7661df440777b68be83b356a02a7818303124b30193d16e6d1ea",
+          "other_http": 404
+        },
+        {
+          "name": "initial_structure.xyz",
+          "bytes": 488,
+          "sha256": "7d89054b033454f12c10c568e8fa14d204f4359581918896a25b0405ea61b783",
+          "other_http": 404
+        },
+        {
+          "name": "scientific_result.json",
+          "bytes": 4033,
+          "sha256": "01397d59f4f7ff8d11c7c0256f682b7789cb72c073c68e59c4c5b17fce81b685",
+          "other_http": 404
+        }
+      ],
+      "bundle": {
+        "status": 200,
+        "size": 2444,
+        "sha256": "15a8bd7063ad1e75f8d1e0df8bed1d4b239b95d1aab88d633d82a37ef73aedac",
+        "other_http": 404
+      }
+    },
+    "b": {
+      "workspace_session": "ses_e0ce1fc13ffetTUXtFJVPvdgPb",
+      "job_id": "aab54c12-1e27-4746-a099-49bac1bc5bf8",
+      "predicted_tg_c": 74.6038,
+      "polymer_candidates": 1,
+      "status": "completed",
+      "own_job_listed": true,
+      "foreign_job_listed": false,
+      "foreign_status": 404,
+      "foreign_result": 404,
+      "files": [
+        {
+          "name": "final_structure.xyz",
+          "bytes": 192,
+          "sha256": "b0ff9f3fce1edba171b330a4c13ecc92f66a8dde72db332a41a0ca2be7d88770",
+          "other_http": 404
+        },
+        {
+          "name": "initial_structure.xyz",
+          "bytes": 174,
+          "sha256": "e656b047fb9ac2e5082314e4f926b913a5a3876f41d55005805ec80e76134f3c",
+          "other_http": 404
+        },
+        {
+          "name": "scientific_result.json",
+          "bytes": 2733,
+          "sha256": "fb2b194dd673ddb75f24225a9d605ff1474f1f3b96eb9d5c5b5fcd45217d52c7",
+          "other_http": 404
+        }
+      ],
+      "bundle": {
+        "status": 200,
+        "size": 1794,
+        "sha256": "3c56f5936b3412572e22fb6bfbad80d0fce408ffd7111f880344e9be45b92f69",
+        "other_http": 404
+      }
+    }
+  },
+  "status": "passed",
+  "wrong_device_confirmation_status": 403,
+  "same_owner_second_login": true,
+  "replayed_writes": {
+    "job_ids": [
+      "e2ed52af-9fdc-49c0-bd01-18489ee477f1",
+      "aab54c12-1e27-4746-a099-49bac1bc5bf8"
+    ],
+    "retries": 2,
+    "sync_retries": {
+      "predict_polymer_properties": 2,
+      "polymerize_monomers": 2
+    }
+  },
+  "ledger": {
+    "users": {
+      "a": {
+        "workspace": "test-user-a",
+        "job_ref": "98c5e0faf243a6cf",
+        "dft_authorized_attempts": 1,
+        "dft_completed_usage_attempts": 1,
+        "available_artifacts": 3,
+        "native_results_match_browser": {
+          "tg_c": true,
+          "ordered_polymer_smiles": true,
+          "dft_fixture_energy": true
+        },
+        "native_dft_list": {
+          "ordered_ids_match": true,
+          "page_size": 4,
+          "total": 4
+        },
+        "qualified_native_operations": {
+          "predict": 1,
+          "polymerization": 1,
+          "monomer_dft": 1
+        },
+        "tool_calls": [
+          {
+            "tool": "dft_job_list",
+            "operation_ref": "3108e9a8be74255f",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_result",
+            "operation_ref": "57a5cde524d8cdea",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_result",
+            "operation_ref": "9057458197816edd",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_result",
+            "operation_ref": "be65524f5931e05f",
+            "foreign_job": true,
+            "native_statuses": [
+              404
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_status",
+            "operation_ref": "afeaaf90cb402e2e",
+            "foreign_job": true,
+            "native_statuses": [
+              404
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_status",
+            "operation_ref": "deea57033c971f93",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_submit",
+            "operation_ref": "10c8ff9a890f3053",
+            "foreign_job": false,
+            "native_statuses": [
+              202,
+              202
+            ],
+            "new_quota_charges": 1,
+            "quota_ref": "23bf0f273d26f928",
+            "native_request_ref": "341534ec1d183934"
+          },
+          {
+            "tool": "polymerize_monomers",
+            "operation_ref": "186ae0c1d198705c",
+            "foreign_job": false,
+            "native_statuses": [
+              200,
+              200
+            ],
+            "new_quota_charges": 1,
+            "quota_ref": "3d1577a5a0d9c46a",
+            "native_request_ref": "779e651a05196513"
+          },
+          {
+            "tool": "predict_polymer_properties",
+            "operation_ref": "693e636bc7960f0c",
+            "foreign_job": false,
+            "native_statuses": [
+              200,
+              200
+            ],
+            "new_quota_charges": 1,
+            "quota_ref": "8d4b4b6ff0f9b61d",
+            "native_request_ref": "2cf12ef8a49a1cfe"
+          }
+        ],
+        "verified_bundle_members": 3
+      },
+      "b": {
+        "workspace": "test-user-b",
+        "job_ref": "64c6a7fe286d3f3b",
+        "dft_authorized_attempts": 1,
+        "dft_completed_usage_attempts": 1,
+        "available_artifacts": 3,
+        "native_results_match_browser": {
+          "tg_c": true,
+          "ordered_polymer_smiles": true,
+          "dft_fixture_energy": true
+        },
+        "native_dft_list": {
+          "ordered_ids_match": true,
+          "page_size": 4,
+          "total": 4
+        },
+        "qualified_native_operations": {
+          "predict": 1,
+          "polymerization": 1,
+          "monomer_dft": 1
+        },
+        "tool_calls": [
+          {
+            "tool": "dft_job_list",
+            "operation_ref": "0684a1a40a82d88a",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_result",
+            "operation_ref": "2195e5085bf1d788",
+            "foreign_job": true,
+            "native_statuses": [
+              404
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_result",
+            "operation_ref": "e9e046e297986b97",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_status",
+            "operation_ref": "6e7553d88f2eae9f",
+            "foreign_job": true,
+            "native_statuses": [
+              404
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_status",
+            "operation_ref": "ad6217131c088e2e",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_submit",
+            "operation_ref": "f683e09b072f0882",
+            "foreign_job": false,
+            "native_statuses": [
+              202,
+              202
+            ],
+            "new_quota_charges": 1,
+            "quota_ref": "bceb2699758139f7",
+            "native_request_ref": "8d268475648b3b14"
+          },
+          {
+            "tool": "polymerize_monomers",
+            "operation_ref": "031d4fb8ecf6d734",
+            "foreign_job": false,
+            "native_statuses": [
+              200,
+              200
+            ],
+            "new_quota_charges": 1,
+            "quota_ref": "aa885ec3f9ff73ed",
+            "native_request_ref": "f75fdb5a5aab94a4"
+          },
+          {
+            "tool": "predict_polymer_properties",
+            "operation_ref": "58ceee8bafa80669",
+            "foreign_job": false,
+            "native_statuses": [
+              200,
+              200
+            ],
+            "new_quota_charges": 1,
+            "quota_ref": "19d2a66505a4f660",
+            "native_request_ref": "684246a39ebc372e"
+          }
+        ],
+        "verified_bundle_members": 3
+      }
+    },
+    "other_owners_delta": {
+      "logins": 0,
+      "tool_operations": 0,
+      "dft_jobs": 0,
+      "quota_operations": 0,
+      "quota_events": 0,
+      "request_observations": 0,
+      "usage_events": 0,
+      "usage_attempts": 0
+    }
+  },
+  "distinct_browser_results": {
+    "predicted_tg": true,
+    "polymer_smiles": true,
+    "dft_fixture_energy": true
+  },
+  "end": "2026-11-19T09:23:40.009Z"
+}

@@ -1,0 +1,93 @@
+{
+  "guest": {
+    "attempts": [
+      "e8675492-adff-45de-a07f-e06615e80020:1",
+      "e8675492-adff-45de-a07f-e06615e80020:1",
+      "e8675492-adff-45de-a07f-e06615e80020:2"
+    ],
+    "cursor": {
+      "at": "2026-11-25T01:27:41.958539+00:00",
+      "id": "e8675492-adff-45de-a07f-e06615e80020:2",
+      "sequence": 2
+    },
+    "events": [
+      {
+        "at": "2026-11-25T01:27:29.508500+00:00",
+        "available_bytes": 67104768,
+        "filesystem_uuid": "e8675492-adff-45de-a07f-e06615e80020",
+        "id": "e8675492-adff-45de-a07f-e06615e80020:1",
+        "low_bytes": 100663296,
+        "notification": "firing",
+        "previous": "normal",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 1,
+        "state": "low"
+      },
+      {
+        "at": "2026-11-25T01:27:33.198349+00:00",
+        "available_bytes": 620425216,
+        "filesystem_uuid": "e8675492-adff-45de-a07f-e06615e80020",
+        "id": "e8675492-adff-45de-a07f-e06615e80020:2",
+        "low_bytes": 100663296,
+        "notification": "resolved",
+        "previous": "low",
+        "reason": null,
+        "recover_bytes": 167772160,
+        "sequence": 2,
+        "state": "normal"
+      }
+    ],
+    "filesystem_uuid": "e8675492-adff-45de-a07f-e06615e80020",
+    "first_ack_lost_after_receiver_commit": true,
+    "initial_available_bytes": 620429312,
+    "kernel_group_gates": {
+      "firing": "both blocked",
+      "resolved": "both open"
+    },
+    "pool_bytes": 805306368,
+    "receiver": "guest-local independent SQLite inbox",
+    "receiver_absent_on_firing": true,
+    "receiver_restarted": true,
+    "recovered_while_receiver_down": true,
+    "relay_restarts": 2,
+    "relay_service": "m5-disk-alert-relay.service",
+    "source_service": "m5-global-disk.service",
+    "status": "passed",
+    "workspaces": {
+      "a": {
+        "filesystem_uuid": "628ae7bb-6af5-45b5-9f99-91ae7d7728ad",
+        "uid": 58161656,
+        "workspace": "463fc2f89367468bb7fc6e048d522c9e"
+      },
+      "b": {
+        "filesystem_uuid": "662eb52a-bb57-47b0-ab29-07da8d17b72a",
+        "uid": 43620582,
+        "workspace": "3c137e9c236d4998bed842786c0f4548"
+      }
+    }
+  },
+  "vm": {
+    "image_sha256": "04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94",
+    "image_version": "24.04-20261017",
+    "linux_release": "6.8.0-147-generic",
+    "ubuntu_modules_extra_package_sha256": "b3f16d16b54796497884b27810b0942243bdc6ef26da1ce821e948ece39a9492",
+    "guest_quota_modules_sha256": {
+      "quota_tree.ko.zst": "6d5206a8ae384b03ec41b11e3be5a4a13ff30cbaefe4a6d2ce62bf6fc062b216",
+      "quota_v2.ko.zst": "a54b39dc4719e7a2dd407acfa0ff913da311b374761ef5e25eff0c8f607436bd"
+    },
+    "accelerator": "tcg",
+    "guest_memory_mib": 1536,
+    "virtual_cpus": 2,
+    "network_adapters": 0,
+    "host_directory_shares": 0,
+    "data_disks_bytes": {
+      "m5-waterpool": 805306368
+    },
+    "backup_device_bytes": 268435456,
+    "elapsed_seconds": 269.29
+  },
+  "started": "2026-11-25T01:23:55.384921+00:00",
+  "finished": "2026-11-25T01:28:25.835048+00:00",
+  "temporary_disks_removed": true
+}

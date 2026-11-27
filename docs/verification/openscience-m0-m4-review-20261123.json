@@ -1,0 +1,1156 @@
+{
+  "review_date": "2026-11-23",
+  "timezone": "Asia/Shanghai",
+  "reviewed_base_commit": "387cf542110ed700ddce46f106a15d9638273419",
+  "working_tree_fixes_included": true,
+  "environment_scope": "isolated development stack with synthetic A/B users",
+  "comparison": {
+    "prior_evidence_date": "2026-11-19",
+    "prior_evidence": "M0 resource samples and earlier M1–M4 acceptance reports.",
+    "current_evidence": "M0 offline rebuild and fixture hash verification, independent M1 replay, M2 browser reruns and manager takeover, M3 native gateway and adapter reruns, M4 model and knowledge replay.",
+    "previous_acceptance_reports": {
+      "m1": {
+        "source": {
+          "path": "docs/verification/openscience-m1-20261119.json",
+          "sha256": "cabe10b1b2eecf324ac0d9d3226dd0c99a871f1378eb06ddc39da2126fee8e6a"
+        },
+        "start": "2026-11-19T08:05:24.862533+00:00",
+        "end": "2026-11-19T08:08:44.985999+00:00",
+        "status": "passed"
+      },
+      "m2": {
+        "source": {
+          "path": "docs/verification/openscience-m2-20261119.json",
+          "sha256": "b9c81cd71b161e58de4ef794d32eaa5db864b8c106463cbf000f6be38dbdbd18"
+        },
+        "start": "2026-11-19T08:53:17.091Z",
+        "end": "2026-11-19T08:54:56.168Z",
+        "status": "passed"
+      },
+      "m3": {
+        "source": {
+          "path": "docs/verification/openscience-m3-20261119.json",
+          "sha256": "f9d950e4dc8c9be18ef2987121c3dc9c31b5549990add81d735e297f1ac87053"
+        },
+        "start": "2026-11-19T09:22:41.621Z",
+        "end": "2026-11-19T09:23:40.009Z",
+        "status": "passed"
+      },
+      "m3-adapters": {
+        "source": {
+          "path": "docs/verification/openscience-m3-adapters-20261119.json",
+          "sha256": "8eea6822c7096931f44202a97a567409099eb24e7ccd93d6863c1699388a0b02"
+        },
+        "start": "2026-11-19T09:50:30.100Z",
+        "end": "2026-11-19T09:51:48.533Z",
+        "status": "passed"
+      },
+      "m4": {
+        "source": {
+          "path": "docs/verification/openscience-m4-20261119.json",
+          "sha256": "8345d4943777303f9b11b5f9a1f3c59247e45a8ee566575d014e9041dcab3db5"
+        },
+        "start": "2026-11-19T10:17:44.070Z",
+        "end": "2026-11-19T10:22:40.784Z",
+        "status": "passed"
+      }
+    }
+  },
+  "m0": {
+    "historical_baseline": {
+      "source": {
+        "path": "docs/verification/openscience-m0-20261119.json",
+        "sha256": "cda0a8523152d7402094b41d1f610cfe57fcce365d1d0a8660cdc415583ddb3f"
+      },
+      "measured_on": "2026-11-19",
+      "profiles": {
+        "base": {
+          "start": "2026-11-19T15:50:13+08:00",
+          "end": "2026-11-19T15:51:12+08:00",
+          "status": "passed",
+          "image": "sha256:a828b3723cdf0ebe067339b88bad1ef9384ad596f50f1d448b7dfa45f28ec853",
+          "synthetic_mcp_endpoints": 0,
+          "pair_runs": 3,
+          "starts": 6,
+          "replies_read_back": 8,
+          "max_pair_working_mib_by_baseline_run": [
+            461.1,
+            456.68,
+            452.73
+          ],
+          "max_pair_working_mib_during_chat": [
+            543.6
+          ]
+        },
+        "mcp": {
+          "start": "2026-11-19T15:51:12+08:00",
+          "end": "2026-11-19T15:52:10+08:00",
+          "status": "passed",
+          "image": "sha256:a828b3723cdf0ebe067339b88bad1ef9384ad596f50f1d448b7dfa45f28ec853",
+          "synthetic_mcp_endpoints": 2,
+          "pair_runs": 3,
+          "starts": 6,
+          "replies_read_back": 8,
+          "max_pair_working_mib_by_baseline_run": [
+            445.7,
+            451.41,
+            461.97
+          ],
+          "max_pair_working_mib_during_chat": [
+            559.3
+          ]
+        },
+        "candidate": {
+          "start": "2026-11-19T15:49:14+08:00",
+          "end": "2026-11-19T15:50:13+08:00",
+          "status": "passed",
+          "image": "sha256:f7c104629c94530285aa8b283a48de0c9c79ff52aa8c2b3123df6a6c1900144c",
+          "synthetic_mcp_endpoints": 2,
+          "pair_runs": 3,
+          "starts": 6,
+          "replies_read_back": 8,
+          "max_pair_working_mib_by_baseline_run": [
+            448.54,
+            461.54,
+            456.21
+          ],
+          "max_pair_working_mib_during_chat": [
+            570.62
+          ]
+        }
+      },
+      "starts": 18,
+      "replies_read_back": 24
+    },
+    "review_run": {
+      "source": {
+        "path": ".runtime/openscience-review-20261123/m0-rebuild.log",
+        "sha256": "0dfcc6ade0155c947562ff77cd04d5f56c86344baee02ed760ce23161fd2d6f2"
+      },
+      "log_last_modified_utc": "2026-11-23T01:23:21+00:00",
+      "offline_rebuild": "passed",
+      "candidate_image_id": "sha256:a4a0731914a6314d2a1c165f61ee8d5ec2f48426c3f76b2661c46a8c8f1ab797",
+      "base_image_id": "sha256:a828b3723cdf0ebe067339b88bad1ef9384ad596f50f1d448b7dfa45f28ec853",
+      "fixture_sha256_verified_against_baseline": {
+        "build-candidate.py": "f1f49db1a5d74808b45ca802cb99e49c2b171aa488c3b7217ba429395eae2a34",
+        "config-mcp.json": "e45d8b9e9645eb15ec3722173de924e78483c5a9ea81b1d7af8f42afe45fc993",
+        "config.json": "8cb573057c482ecbc2b7c9efb189c7f084aaf90d810fc2bdefc737e256bd5554",
+        "fixture.py": "3bd6deddf2429e0e9ec0b176157e856bf55da8043beab4bc383fa3eff454c6f1",
+        "run.py": "ae3534cc4e255936b1e4aaf80372e3c17b24c9838352ba7db91202a9cc9e19f3"
+      },
+      "resource_benchmark_rerun": false
+    }
+  },
+  "m1": {
+    "source": {
+      "path": ".runtime/openscience-review-20261123/m1.json",
+      "sha256": "0624f3b300bc924751dd109d9e970d05794358acf9a1c7905038f79ad00d631a"
+    },
+    "status": "passed",
+    "start": "2026-11-23T01:21:28.679581+00:00",
+    "end": "2026-11-23T01:24:58.469925+00:00",
+    "environment": "dev-m1-12bebaacfa33",
+    "concurrent_ensure_idempotent": true,
+    "third_active_rejected": true,
+    "distinct_private_volume": true,
+    "distinct_uid": true,
+    "owners": {
+      "a": {
+        "created": {
+          "uid": 92210260,
+          "generation": 1,
+          "volume_root_mode": "0700",
+          "foreign_markers": 0,
+          "other_project_session_status": 404,
+          "file_sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+          "transcript_sha256": {
+            "general": "95f4daabc04cdffc9fd92e9202fbb5a553a631cdb56dc42dac2d11acaa7ada16",
+            "project": "24d6dfe56fb1f8e8e98dc0f1b578309fb797e67c8ca6311ca4f34dd9917d9a0f"
+          },
+          "same_sessions_as_created": true,
+          "same_private_volume_as_created": true
+        },
+        "restarted": {
+          "uid": 92210260,
+          "generation": 1,
+          "volume_root_mode": "0700",
+          "foreign_markers": 0,
+          "other_project_session_status": 404,
+          "file_sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+          "transcript_sha256": {
+            "general": "95f4daabc04cdffc9fd92e9202fbb5a553a631cdb56dc42dac2d11acaa7ada16",
+            "project": "24d6dfe56fb1f8e8e98dc0f1b578309fb797e67c8ca6311ca4f34dd9917d9a0f"
+          },
+          "same_sessions_as_created": true,
+          "same_private_volume_as_created": true
+        },
+        "recreated": {
+          "uid": 92210260,
+          "generation": 2,
+          "volume_root_mode": "0700",
+          "foreign_markers": 0,
+          "other_project_session_status": 404,
+          "file_sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+          "transcript_sha256": {
+            "general": "95f4daabc04cdffc9fd92e9202fbb5a553a631cdb56dc42dac2d11acaa7ada16",
+            "project": "6da8c874d84adda8d1bc10f473f35f6b929da52013a1ddf0b560dbd2aad1e0b7"
+          },
+          "same_sessions_as_created": true,
+          "same_private_volume_as_created": true
+        },
+        "process_failure_recovery": {
+          "uid": 92210260,
+          "generation": 3,
+          "volume_root_mode": "0700",
+          "foreign_markers": 0,
+          "other_project_session_status": 404,
+          "file_sha256": "637b9349597f9d37bef73a20b41ae6dfc4003d6ff60115444d0625b6733eff81",
+          "transcript_sha256": {
+            "general": "95f4daabc04cdffc9fd92e9202fbb5a553a631cdb56dc42dac2d11acaa7ada16",
+            "project": "6da8c874d84adda8d1bc10f473f35f6b929da52013a1ddf0b560dbd2aad1e0b7"
+          },
+          "same_sessions_as_created": true,
+          "same_private_volume_as_created": true
+        }
+      },
+      "b": {
+        "created": {
+          "uid": 75352527,
+          "generation": 1,
+          "volume_root_mode": "0700",
+          "foreign_markers": 0,
+          "other_project_session_status": 404,
+          "file_sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+          "transcript_sha256": {
+            "general": "f203ae271c4944a9c8068f67ecae80bcae9b15fc805ad14fb27ccc357ab227ba",
+            "project": "beb995b492bd48baefb5089364b4f24505f5df78d7ee23cdf05583f711ead85a"
+          },
+          "same_sessions_as_created": true,
+          "same_private_volume_as_created": true
+        },
+        "restarted": {
+          "uid": 75352527,
+          "generation": 1,
+          "volume_root_mode": "0700",
+          "foreign_markers": 0,
+          "other_project_session_status": 404,
+          "file_sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+          "transcript_sha256": {
+            "general": "f203ae271c4944a9c8068f67ecae80bcae9b15fc805ad14fb27ccc357ab227ba",
+            "project": "beb995b492bd48baefb5089364b4f24505f5df78d7ee23cdf05583f711ead85a"
+          },
+          "same_sessions_as_created": true,
+          "same_private_volume_as_created": true
+        },
+        "recreated": {
+          "uid": 75352527,
+          "generation": 2,
+          "volume_root_mode": "0700",
+          "foreign_markers": 0,
+          "other_project_session_status": 404,
+          "file_sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+          "transcript_sha256": {
+            "general": "f203ae271c4944a9c8068f67ecae80bcae9b15fc805ad14fb27ccc357ab227ba",
+            "project": "beb995b492bd48baefb5089364b4f24505f5df78d7ee23cdf05583f711ead85a"
+          },
+          "same_sessions_as_created": true,
+          "same_private_volume_as_created": true
+        },
+        "process_failure_recovery": {
+          "uid": 75352527,
+          "generation": 2,
+          "volume_root_mode": "0700",
+          "foreign_markers": 0,
+          "other_project_session_status": 404,
+          "file_sha256": "ed14f2517c25508af0b8e9a2c15b02fe768f9f20a6a52f097dc4fb6563a5ebcc",
+          "transcript_sha256": {
+            "general": "f203ae271c4944a9c8068f67ecae80bcae9b15fc805ad14fb27ccc357ab227ba",
+            "project": "5fabad11801aa257903d2fb2c24015171e093cb681c37c3fed4a9502bdd1eb6b"
+          },
+          "same_sessions_as_created": true,
+          "same_private_volume_as_created": true
+        }
+      }
+    },
+    "busy_project_before_recycle": {
+      "general_idle": true,
+      "project_status": "busy",
+      "manager_reason": "active_session",
+      "completed_project_replies": 2,
+      "transcript_sha256": "6da8c874d84adda8d1bc10f473f35f6b929da52013a1ddf0b560dbd2aad1e0b7"
+    },
+    "recycled": {
+      "remaining_containers": 0,
+      "private_volumes_preserved": 2,
+      "active_lease_retained": true,
+      "idle_passive_sse_reaped": true
+    },
+    "second_environment": {
+      "projects": 0,
+      "general_sessions": 0,
+      "distinct_environment": true
+    },
+    "template_change": {
+      "initial_image": "sha256:239dac5b836ca018de3b4e728f4c909d97c01fbac9be845d7c0b11c597edfdf8",
+      "restored_image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+      "denied_with_active_instances": true
+    },
+    "busy_project_after_recreate": {
+      "general_idle": true,
+      "project_status": "busy",
+      "manager_reason": "active_session",
+      "completed_project_replies": 2,
+      "transcript_sha256": "5fabad11801aa257903d2fb2c24015171e093cb681c37c3fed4a9502bdd1eb6b"
+    },
+    "other_user_read_during_failure": true,
+    "final_container_count": 0,
+    "final_volume_count": 0
+  },
+  "m2": {
+    "manager_takeover": {
+      "source": {
+        "path": ".runtime/openscience-review-20261123/m2-takeover.log",
+        "sha256": "ec3e467767b462b8cf2d6d1af9af90784c2eade4fb9a3b83be2224872be64e34"
+      },
+      "log_last_modified_utc": "2026-11-23T01:30:23+00:00",
+      "status": "passed",
+      "retained_busy_a": true,
+      "recycled_idle_b": true,
+      "same_generation_uid_and_volume_after_takeover": true,
+      "original_lease_released": true,
+      "both_recycled": true
+    },
+    "earlier_review_run": {
+      "source": {
+        "path": ".runtime/openscience-review-20261123/m2-review.json",
+        "sha256": "779fa52f260999df297dcd878484e3a9a1a5aab16a14840bb6d429565cee4738"
+      },
+      "status": "passed",
+      "start": "2026-11-23T01:22:08.317Z",
+      "end": "2026-11-23T01:23:47.384Z",
+      "scope": "2026-11-23 early browser run; latest rerun is reported under final_browser_run."
+    },
+    "final_browser_run": {
+      "source": {
+        "path": ".runtime/openscience-review-20261123/m2-final.json",
+        "sha256": "05200e20a1382a0b24185e986f0a3a10d48f08c42b5a403a69e00b7864259a0e"
+      },
+      "status": "passed",
+      "start": "2026-11-23T01:35:42.424Z",
+      "end": "2026-11-23T01:37:23.340Z",
+      "environment": "dev-m1",
+      "browser": "153.0.8010.12",
+      "stages": {
+        "initial": {
+          "real_ui": true,
+          "host_scoped_httponly_cookies": true,
+          "ticket_replay_refused": true,
+          "owner": {
+            "same_project": true,
+            "own_sessions": 2,
+            "attachment": true,
+            "own_file": true,
+            "foreign_markers": 0
+          },
+          "visible": {
+            "parent_general_session": true,
+            "parent_project": true,
+            "general_prompt": true,
+            "project_prompt": true,
+            "attachment_file_contents": true,
+            "foreign_visible": false,
+            "project_attachment_present": true
+          }
+        },
+        "page_reload": {
+          "old_cookie_removed": true,
+          "old_context_status": 401,
+          "sibling_context_status": 200,
+          "replacement_context_status": 200
+        },
+        "device_logout": {
+          "server_closed_sse_ms": 264,
+          "private_page_denied_ms": 376,
+          "old_document_invalid_ms": 354,
+          "private_sidebar_cleared_ms": 454,
+          "stream_reconnect_status": 401,
+          "other_device_still_reads": true
+        },
+        "account_switch": {
+          "owner": {
+            "same_project": true,
+            "own_sessions": 2,
+            "attachment": true,
+            "own_file": true,
+            "foreign_markers": 0
+          },
+          "foreign_session_status": [
+            404,
+            404
+          ],
+          "old_page_still_denied": true,
+          "visible": {
+            "parent_general_session": true,
+            "parent_project": true,
+            "general_prompt": true,
+            "project_prompt": true,
+            "attachment_file_contents": true,
+            "foreign_visible": false,
+            "project_attachment_present": true
+          },
+          "embedded_refresh_restored_bridge": true,
+          "refresh_restored_own": true
+        },
+        "event_visibility": {
+          "a_received_own": true,
+          "b_received_own": true,
+          "foreign_markers": 0,
+          "temporary_sessions_removed": 2
+        },
+        "pilot_revocation": {
+          "server_closed_sse_ms": 785,
+          "private_page_denied_ms": 783,
+          "old_document_invalid_ms": 2919,
+          "private_sidebar_cleared_ms": 2914,
+          "stream_reconnect_status": 401,
+          "parent_snapshot_cleared": true,
+          "other_user_still_reads": true,
+          "old_context_denied_after_reenable": true
+        },
+        "authority_unavailable": {
+          "server_closed_sse_ms": 23887,
+          "private_page_denied_ms": 2966,
+          "old_document_invalid_ms": 20143,
+          "private_sidebar_cleared_ms": 20052,
+          "stream_reconnect_status": 401
+        },
+        "ticket_expiration": {
+          "ttl_seconds": 60,
+          "unused_expired_ticket_refused": true,
+          "same_login_fresh_ticket_accepted": true
+        }
+      },
+      "owners": {
+        "a": {
+          "browser_stage": "initial",
+          "retained_volume_present": true,
+          "own_sessions": 2,
+          "own_file": true,
+          "foreign_markers": 0,
+          "foreign_visible": false,
+          "own_sse_event_received": true
+        },
+        "b": {
+          "browser_stage": "account_switch",
+          "retained_volume_present": true,
+          "own_sessions": 2,
+          "own_file": true,
+          "foreign_markers": 0,
+          "foreign_visible": false,
+          "own_sse_event_received": true
+        }
+      },
+      "distinct_retained_volumes": true
+    }
+  },
+  "m3": {
+    "first_gateway_run": {
+      "source": {
+        "path": ".runtime/openscience-review-20261123/m3-tools.json",
+        "sha256": "c0a2b8fa9aa01a60740a3092a0f81216b364192aee575dd816e8e65b173b70bb"
+      },
+      "status": "failed",
+      "start": "2026-11-23T01:24:31.695Z",
+      "end": "2026-11-23T01:24:59.189Z",
+      "error_log": {
+        "path": ".runtime/openscience-review-20261123/m3-tools.log",
+        "sha256": "1893f4ec01d839296217168ec9904a51c8039733459747a88c76081b75e60598"
+      },
+      "tool": "predict_polymer_properties",
+      "native_http": 429
+    },
+    "corrected_gateway_run": {
+      "source": {
+        "path": ".runtime/openscience-review-20261123/m3-tools-reviewed.json",
+        "sha256": "ba77088c124cbf7e0037b5f4f3548a18d2d9f6122c3b4b9253820d4eeb20ab00"
+      },
+      "status": "passed",
+      "start": "2026-11-23T01:25:56.637Z",
+      "end": "2026-11-23T01:26:55.527Z",
+      "environment": "dev-m1",
+      "browser": "153.0.8010.12",
+      "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+      "wrong_device_confirmation_status": 403,
+      "same_owner_second_login": true,
+      "distinct_browser_results": {
+        "predicted_tg": true,
+        "polymer_smiles": true,
+        "dft_fixture_energy": true
+      },
+      "retries": {
+        "retries": 2,
+        "sync_retries": {
+          "predict_polymer_properties": 2,
+          "polymerize_monomers": 2
+        }
+      },
+      "other_owners_delta": {
+        "logins": 0,
+        "tool_operations": 0,
+        "dft_jobs": 0,
+        "quota_operations": 0,
+        "quota_events": 0,
+        "request_observations": 0,
+        "usage_events": 0,
+        "usage_attempts": 0
+      },
+      "owners": {
+        "a": {
+          "status": "completed",
+          "own_job_listed": true,
+          "foreign_job_listed": false,
+          "foreign_status": 404,
+          "foreign_result": 404,
+          "polymer_candidates": 1,
+          "files": [
+            {
+              "bytes": 504,
+              "sha256": "c75f99372fea7661df440777b68be83b356a02a7818303124b30193d16e6d1ea",
+              "other_http": 404
+            },
+            {
+              "bytes": 488,
+              "sha256": "7d89054b033454f12c10c568e8fa14d204f4359581918896a25b0405ea61b783",
+              "other_http": 404
+            },
+            {
+              "bytes": 4034,
+              "sha256": "e2bcda7b71517e11ff33bd5a2699f2af1d60a0272c09d99789d77a96b47625dc",
+              "other_http": 404
+            }
+          ],
+          "bundle": {
+            "status": 200,
+            "size": 2445,
+            "sha256": "bb50781e3dadbad53811830ee97b8b36764dc13781e2f3734134066a21623975",
+            "other_http": 404
+          },
+          "ledger": {
+            "dft_authorized_attempts": 1,
+            "dft_completed_usage_attempts": 1,
+            "available_artifacts": 3,
+            "native_results_match_browser": {
+              "tg_c": true,
+              "ordered_polymer_smiles": true,
+              "dft_fixture_energy": true
+            },
+            "native_dft_list": {
+              "ordered_ids_match": true,
+              "page_size": 5,
+              "total": 5
+            },
+            "qualified_native_operations": {
+              "predict": 1,
+              "polymerization": 1,
+              "monomer_dft": 1
+            },
+            "verified_bundle_members": 3,
+            "tool_calls": [
+              {
+                "tool": "dft_job_list",
+                "foreign_job": false,
+                "native_statuses": [
+                  200
+                ],
+                "new_quota_charges": 0
+              },
+              {
+                "tool": "dft_job_result",
+                "foreign_job": false,
+                "native_statuses": [
+                  200
+                ],
+                "new_quota_charges": 0
+              },
+              {
+                "tool": "dft_job_result",
+                "foreign_job": false,
+                "native_statuses": [
+                  200
+                ],
+                "new_quota_charges": 0
+              },
+              {
+                "tool": "dft_job_result",
+                "foreign_job": true,
+                "native_statuses": [
+                  404
+                ],
+                "new_quota_charges": 0
+              },
+              {
+                "tool": "dft_job_status",
+                "foreign_job": true,
+                "native_statuses": [
+                  404
+                ],
+                "new_quota_charges": 0
+              },
+              {
+                "tool": "dft_job_status",
+                "foreign_job": false,
+                "native_statuses": [
+                  200
+                ],
+                "new_quota_charges": 0
+              },
+              {
+                "tool": "dft_job_submit",
+                "foreign_job": false,
+                "native_statuses": [
+                  202,
+                  202
+                ],
+                "new_quota_charges": 1
+              },
+              {
+                "tool": "polymerize_monomers",
+                "foreign_job": false,
+                "native_statuses": [
+                  200,
+                  200
+                ],
+                "new_quota_charges": 1
+              },
+              {
+                "tool": "predict_polymer_properties",
+                "foreign_job": false,
+                "native_statuses": [
+                  200,
+                  200
+                ],
+                "new_quota_charges": 1
+              }
+            ]
+          }
+        },
+        "b": {
+          "status": "completed",
+          "own_job_listed": true,
+          "foreign_job_listed": false,
+          "foreign_status": 404,
+          "foreign_result": 404,
+          "polymer_candidates": 1,
+          "files": [
+            {
+              "bytes": 192,
+              "sha256": "b0ff9f3fce1edba171b330a4c13ecc92f66a8dde72db332a41a0ca2be7d88770",
+              "other_http": 404
+            },
+            {
+              "bytes": 174,
+              "sha256": "e656b047fb9ac2e5082314e4f926b913a5a3876f41d55005805ec80e76134f3c",
+              "other_http": 404
+            },
+            {
+              "bytes": 2735,
+              "sha256": "a283c90ce2559006c308baad08427958b10387c6dd74acd68faf92cc4ac3457c",
+              "other_http": 404
+            }
+          ],
+          "bundle": {
+            "status": 200,
+            "size": 1796,
+            "sha256": "0dffd16a5c2447f71d8574cf4c93fed3e21cfdaa3c6342ef5685245f3e767f99",
+            "other_http": 404
+          },
+          "ledger": {
+            "dft_authorized_attempts": 1,
+            "dft_completed_usage_attempts": 1,
+            "available_artifacts": 3,
+            "native_results_match_browser": {
+              "tg_c": true,
+              "ordered_polymer_smiles": true,
+              "dft_fixture_energy": true
+            },
+            "native_dft_list": {
+              "ordered_ids_match": true,
+              "page_size": 5,
+              "total": 5
+            },
+            "qualified_native_operations": {
+              "predict": 1,
+              "polymerization": 1,
+              "monomer_dft": 1
+            },
+            "verified_bundle_members": 3,
+            "tool_calls": [
+              {
+                "tool": "dft_job_list",
+                "foreign_job": false,
+                "native_statuses": [
+                  200
+                ],
+                "new_quota_charges": 0
+              },
+              {
+                "tool": "dft_job_result",
+                "foreign_job": true,
+                "native_statuses": [
+                  404
+                ],
+                "new_quota_charges": 0
+              },
+              {
+                "tool": "dft_job_result",
+                "foreign_job": false,
+                "native_statuses": [
+                  200
+                ],
+                "new_quota_charges": 0
+              },
+              {
+                "tool": "dft_job_status",
+                "foreign_job": false,
+                "native_statuses": [
+                  200
+                ],
+                "new_quota_charges": 0
+              },
+              {
+                "tool": "dft_job_status",
+                "foreign_job": true,
+                "native_statuses": [
+                  404
+                ],
+                "new_quota_charges": 0
+              },
+              {
+                "tool": "dft_job_submit",
+                "foreign_job": false,
+                "native_statuses": [
+                  202,
+                  202
+                ],
+                "new_quota_charges": 1
+              },
+              {
+                "tool": "polymerize_monomers",
+                "foreign_job": false,
+                "native_statuses": [
+                  200,
+                  200
+                ],
+                "new_quota_charges": 1
+              },
+              {
+                "tool": "predict_polymer_properties",
+                "foreign_job": false,
+                "native_statuses": [
+                  200,
+                  200
+                ],
+                "new_quota_charges": 1
+              }
+            ]
+          }
+        }
+      }
+    },
+    "confirmation_adapters": {
+      "source": {
+        "path": ".runtime/openscience-review-20261123/m3-adapters.json",
+        "sha256": "0c7a3a2e3df7c0ecf8ecca691b95f47dba54984bfa0334a1727d0b1fe5c5c3df"
+      },
+      "status": "passed",
+      "start": "2026-11-23T01:27:43.436Z",
+      "end": "2026-11-23T01:29:03.374Z",
+      "environment": "dev-m1",
+      "browser": "153.0.8010.12",
+      "adapter_images": {
+        "polytao": "sha256:72eca12668d3ee9d03969d2711c750067431c26c31f95811eb9ec5c3ec7d862d",
+        "retrosynthesis": "sha256:afc71c6ba92bb8595d177f04c33fb01dcf26ad9d40f9f6c19dc67c536e0fa5ed"
+      },
+      "model_manifest_sha256": "ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2",
+      "workspace_image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+      "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+      "other_owners_delta": {
+        "logins": 0,
+        "dft_jobs": 0,
+        "quota_events": 0,
+        "usage_events": 0,
+        "usage_attempts": 0,
+        "tool_operations": 0,
+        "quota_operations": 0,
+        "request_observations": 0
+      },
+      "new_native_operations": 4,
+      "adapters": {
+        "polytao": {
+          "model_only_confirmation_created_job": false,
+          "wrong_login_confirmation": 403,
+          "limits": {
+            "a_second_login": 429,
+            "a_extra_job": null,
+            "b_accepted": true,
+            "a_still_limited_after_b": 429,
+            "elapsed_ms": 10610
+          },
+          "wrong_login_after_accept": 403,
+          "owners": {
+            "a": {
+              "edits": {
+                "from": 1,
+                "to": 2,
+                "stale_confirmation": 409,
+                "other_revision": 1,
+                "other_parameters_unchanged": true
+              },
+              "private_draft": {
+                "foreign_form_status": 403,
+                "foreign_edit_status": 403,
+                "foreign_confirm_status": 403,
+                "foreign_tool": "DRAFT_NOT_FOUND"
+              },
+              "confirmation": {
+                "lost_reply_http": 503,
+                "replayed": true,
+                "receipts": 1,
+                "clicked_card": true
+              },
+              "job": {
+                "native_owner": 200,
+                "native_other": 404,
+                "foreign_tool": "JOB_NOT_FOUND",
+                "result_status": "completed",
+                "candidates": 1,
+                "result_sha256": "c57ce34c6ac0f95ca5b1823eaa546dfb3de618451bc41ff438aff9eddf64fb9d",
+                "own_usage_records": 1,
+                "own_usage_attempts": 1,
+                "foreign_usage_records": 0
+              },
+              "ledger": {
+                "draft_revision": 3,
+                "original_login_confirmed": true,
+                "native_result_matches": true,
+                "quota_pool": "generation",
+                "native_submissions": 1,
+                "successful_receipt_lookups": 1,
+                "authorized_starts": 1,
+                "settled_charges": 1,
+                "completed_usage_attempts": 1,
+                "accepted_journal_receipts": 1,
+                "limited_draft_has_no_submission": true
+              },
+              "lost_native_receipt_verified_for_owner_job": true
+            },
+            "b": {
+              "edits": {
+                "from": 1,
+                "to": 2,
+                "stale_confirmation": 409,
+                "other_revision": 2,
+                "other_parameters_unchanged": true
+              },
+              "private_draft": {
+                "foreign_form_status": 403,
+                "foreign_edit_status": 403,
+                "foreign_confirm_status": 403,
+                "foreign_tool": "DRAFT_NOT_FOUND"
+              },
+              "confirmation": {
+                "lost_reply_http": 503,
+                "replayed": true,
+                "receipts": 1,
+                "clicked_card": true
+              },
+              "job": {
+                "native_owner": 200,
+                "native_other": 404,
+                "foreign_tool": "JOB_NOT_FOUND",
+                "result_status": "completed",
+                "candidates": 1,
+                "result_sha256": "1897781d0f2bb5bb6f58723d11ba339982cdf20caa42c823d9281545d99d6fe3",
+                "own_usage_records": 1,
+                "own_usage_attempts": 1,
+                "foreign_usage_records": 0
+              },
+              "ledger": {
+                "draft_revision": 3,
+                "original_login_confirmed": true,
+                "native_result_matches": true,
+                "quota_pool": "generation",
+                "native_submissions": 1,
+                "successful_receipt_lookups": 1,
+                "authorized_starts": 1,
+                "settled_charges": 1,
+                "completed_usage_attempts": 1,
+                "accepted_journal_receipts": 1
+              },
+              "lost_native_receipt_verified_for_owner_job": true
+            }
+          }
+        },
+        "retrosynthesis": {
+          "model_only_confirmation_created_job": false,
+          "wrong_login_confirmation": 403,
+          "limits": {
+            "a_second_login": 429,
+            "a_extra_job": null,
+            "b_accepted": true,
+            "a_still_limited_after_b": 429,
+            "elapsed_ms": 6377
+          },
+          "wrong_login_after_accept": 403,
+          "owners": {
+            "a": {
+              "edits": {
+                "from": 1,
+                "to": 2,
+                "stale_confirmation": 409,
+                "other_revision": 1,
+                "other_parameters_unchanged": true
+              },
+              "private_draft": {
+                "foreign_form_status": 403,
+                "foreign_edit_status": 403,
+                "foreign_confirm_status": 403,
+                "foreign_tool": "DRAFT_NOT_FOUND"
+              },
+              "confirmation": {
+                "lost_reply_http": 503,
+                "replayed": true,
+                "receipts": 1,
+                "clicked_card": true
+              },
+              "job": {
+                "native_owner": 200,
+                "native_other": 404,
+                "foreign_tool": "JOB_NOT_FOUND",
+                "result_status": "completed",
+                "candidates": 1,
+                "result_sha256": "145bad8b6d301d6f1e9c6af5ec64fb6f6d6f28144dda7c69e182a0650bf32871",
+                "own_usage_records": 1,
+                "own_usage_attempts": 1,
+                "foreign_usage_records": 0
+              },
+              "ledger": {
+                "draft_revision": 2,
+                "original_login_confirmed": true,
+                "native_result_matches": true,
+                "quota_pool": "chemistry_small",
+                "native_submissions": 1,
+                "successful_receipt_lookups": 1,
+                "authorized_starts": 1,
+                "settled_charges": 1,
+                "completed_usage_attempts": 1,
+                "accepted_journal_receipts": 1,
+                "limited_draft_has_no_submission": true
+              },
+              "lost_native_receipt_verified_for_owner_job": true
+            },
+            "b": {
+              "edits": {
+                "from": 1,
+                "to": 2,
+                "stale_confirmation": 409,
+                "other_revision": 2,
+                "other_parameters_unchanged": true
+              },
+              "private_draft": {
+                "foreign_form_status": 403,
+                "foreign_edit_status": 403,
+                "foreign_confirm_status": 403,
+                "foreign_tool": "DRAFT_NOT_FOUND"
+              },
+              "confirmation": {
+                "lost_reply_http": 503,
+                "replayed": true,
+                "receipts": 1,
+                "clicked_card": true
+              },
+              "job": {
+                "native_owner": 200,
+                "native_other": 404,
+                "foreign_tool": "JOB_NOT_FOUND",
+                "result_status": "completed",
+                "candidates": 1,
+                "result_sha256": "4fdd1098833c3111f666efccd502018ea87c8987aca4d46e1e23a91925d79831",
+                "own_usage_records": 1,
+                "own_usage_attempts": 1,
+                "foreign_usage_records": 0
+              },
+              "ledger": {
+                "draft_revision": 2,
+                "original_login_confirmed": true,
+                "native_result_matches": true,
+                "quota_pool": "chemistry_small",
+                "native_submissions": 1,
+                "successful_receipt_lookups": 1,
+                "authorized_starts": 1,
+                "settled_charges": 1,
+                "completed_usage_attempts": 1,
+                "accepted_journal_receipts": 1
+              },
+              "lost_native_receipt_verified_for_owner_job": true
+            }
+          }
+        }
+      }
+    }
+  },
+  "m4": {
+    "source": {
+      "path": ".runtime/openscience-review-20261123/m4-review.json",
+      "sha256": "b2eb869ba4e55b8ec571cef5d0391b020a8da15889a515cacf229827931621c7"
+    },
+    "status": "passed",
+    "start": "2026-11-23T01:30:02.009Z",
+    "end": "2026-11-23T01:35:05.717Z",
+    "environment": "dev-m1",
+    "browser": "153.0.8010.12",
+    "workspace_image": "sha256:91c29f44773ef3e82ba7cdbd1a457cc5c0d7065975d4918ae47e21a3e6332859",
+    "model_image": "sha256:886fc49f0ad7a4a4922e9f820886a9b0f7e76829f6dfbc84a41b02fbd9a68961",
+    "model_manifest_sha256": "2cdb0c3afafb408c85ae429636bfb4e19f2f0342fbd8d6fa0491b6db92f8d04a",
+    "owners": {
+      "a": {
+        "model": {
+          "model": "qwen2.5-7b",
+          "provider": "m4local",
+          "protocol": "chat.completions",
+          "answer_sha256": "1a43faca80444a9bccf76e3f30c106be0ab3c0f613292e03d3f34f67eb6c7676",
+          "answer_characters": 43,
+          "foreign_usage": 0,
+          "requests": [
+            {
+              "protocol": "chat.completions",
+              "input_tokens": 9343,
+              "output_tokens": 12,
+              "settlement": "actual"
+            },
+            {
+              "protocol": "chat.completions",
+              "input_tokens": 828,
+              "output_tokens": 12,
+              "settlement": "actual"
+            }
+          ]
+        },
+        "knowledge": {
+          "visible_search_panel": {
+            "common_term_visible_hits": 1,
+            "source_opened": true,
+            "source_text_matches": true,
+            "other_term_visible_hits": 0
+          },
+          "upload_sha256": "0038222722a2bc351f35cadf290e460a0b1de47854ad0b7f0e6e3e738c0ba5f0",
+          "citation_text_sha256": "524eb532925d5648b95d1ea2c29465b21a6b6b48c3ea7ca3bd16090f591e051c",
+          "own_download_matches": true,
+          "private_collection_list": true,
+          "search_web_hits": 1,
+          "search_mcp_hits": 1,
+          "foreign_marker_web_hits": 0,
+          "foreign_marker_mcp_hits": 0,
+          "web_mcp_citation_matches": true,
+          "mixed_collections_web": 403,
+          "mixed_collections_mcp": "forbidden_kb",
+          "other_login_http": {
+            "list_documents": 404,
+            "document": 404,
+            "download": 404,
+            "citation": 404
+          },
+          "other_login_mcp_citation": "not_found"
+        },
+        "ledger": {
+          "new_rows": {
+            "collections": 1,
+            "documents": 1,
+            "chunks": 1,
+            "model": 2
+          },
+          "upload_and_citation_match": true,
+          "original_workspace_and_login": true,
+          "matching_provider_receipts": 2,
+          "actual_input_tokens": 10171,
+          "actual_output_tokens": 24
+        }
+      },
+      "b": {
+        "model": {
+          "model": "qwen2.5-7b",
+          "provider": "m4local-responses",
+          "protocol": "responses",
+          "answer_sha256": "7674ea81da5b4da3095229916cc6080c9ad7ee1fcf0fd85c528642b78c17cffd",
+          "answer_characters": 46,
+          "foreign_usage": 0,
+          "requests": [
+            {
+              "protocol": "responses",
+              "input_tokens": 9353,
+              "output_tokens": 12,
+              "settlement": "actual"
+            },
+            {
+              "protocol": "chat.completions",
+              "input_tokens": 836,
+              "output_tokens": 12,
+              "settlement": "actual"
+            }
+          ]
+        },
+        "knowledge": {
+          "visible_search_panel": {
+            "common_term_visible_hits": 1,
+            "source_opened": true,
+            "source_text_matches": true,
+            "other_term_visible_hits": 0
+          },
+          "upload_sha256": "35b3d62ece1094240c6a2102430df2a3f7f9d854d79af5aeafa2a93b00f307cc",
+          "citation_text_sha256": "535350411b258fd96106a8aad904bea271319339768c765a70336e95f7000172",
+          "own_download_matches": true,
+          "private_collection_list": true,
+          "search_web_hits": 1,
+          "search_mcp_hits": 1,
+          "foreign_marker_web_hits": 0,
+          "foreign_marker_mcp_hits": 0,
+          "web_mcp_citation_matches": true,
+          "mixed_collections_web": 403,
+          "mixed_collections_mcp": "forbidden_kb",
+          "other_login_http": {
+            "list_documents": 404,
+            "document": 404,
+            "download": 404,
+            "citation": 404
+          },
+          "other_login_mcp_citation": "not_found"
+        },
+        "ledger": {
+          "new_rows": {
+            "collections": 1,
+            "documents": 1,
+            "chunks": 1,
+            "model": 2
+          },
+          "upload_and_citation_match": true,
+          "original_workspace_and_login": true,
+          "matching_provider_receipts": 2,
+          "actual_input_tokens": 10189,
+          "actual_output_tokens": 24
+        }
+      }
+    },
+    "forced_rls": [
+      "chunks",
+      "collections",
+      "documents"
+    ],
+    "other_account_deltas": {
+      "collections": 0,
+      "documents": 0,
+      "chunks": 0,
+      "model": 0
+    },
+    "same_document_display_name": true
+  }
+}

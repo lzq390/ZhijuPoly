@@ -1034,7 +1034,9 @@ export function renderPolytaoDraft(document, model, actions) {
   confirmButton.addEventListener("click", () => run(async () => {
     const input = readInputs(true)
     if (input.errors.length || input.missing.length) return
-    const next = await save()
+    // Confirm the displayed saved revision directly. Only new edits require
+    // another durable write and acknowledgement before the human confirmation.
+    const next = dirty ? await save() : draft
     if (!next.ready || !next.editable || next.status !== "editing") return
     await perform("confirm")
     noticeText = draft.job_id ? "生成任务已提交，正在当前对话中继续查询。" : "确认状态已保存，请查看任务状态。"

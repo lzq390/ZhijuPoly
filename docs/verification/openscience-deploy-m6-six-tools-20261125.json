@@ -1,0 +1,334 @@
+{
+  "environment": "deploy-m6",
+  "workspace_image": "sha256:aabb8d140841c94fcfa410179eab943e5476a24923fbb6be4f932ae243199b2b",
+  "workspace_bindings": {
+    "ba404642-b217-433b-b9fd-197a19052ebd": {
+      "workspace_id": "9fab349023044d6cad03bfa7e6da1d1a",
+      "uid": 21920475,
+      "volume": "nexpoly-m5-c4e5734f0b8d-src-a"
+    },
+    "9a523765-6bee-4dd3-af85-c2da61cfc778": {
+      "workspace_id": "88dbb1094ce543779c99a061bb7b9cf8",
+      "uid": 11718917,
+      "volume": "nexpoly-m5-c4e5734f0b8d-src-b"
+    }
+  },
+  "start": "2026-11-25T02:48:47.598Z",
+  "browser": "153.0.8010.12",
+  "gateway_base": "sha256:fb7fdd70e46d7544d0816f042bd0a4324cd7a6c1e86a4a4606031f5108199df0",
+  "gateway_image": "sha256:6b6257257ed4c31a879ad2f525c288fc423121aeef55340da0825174a2338d1f",
+  "users": {
+    "a": {
+      "workspace_session": "ses_def6404dfffeiI9IRJniibYkZT",
+      "job_id": "1d133dcb-0ef3-4358-b45c-e3fd28777a46",
+      "predicted_tg_c": 70.4328,
+      "polymer_candidates": 1,
+      "status": "completed",
+      "own_job_listed": true,
+      "foreign_job_listed": false,
+      "foreign_status": 404,
+      "foreign_result": 404,
+      "files": [
+        {
+          "name": "final_structure.xyz",
+          "bytes": 504,
+          "sha256": "c75f99372fea7661df440777b68be83b356a02a7818303124b30193d16e6d1ea",
+          "other_http": 404
+        },
+        {
+          "name": "initial_structure.xyz",
+          "bytes": 488,
+          "sha256": "7d89054b033454f12c10c568e8fa14d204f4359581918896a25b0405ea61b783",
+          "other_http": 404
+        },
+        {
+          "name": "scientific_result.json",
+          "bytes": 4033,
+          "sha256": "ea961627cd51086c6c847a9f4be29d93e9bb2c1dc698a8d29e261e397a177558",
+          "other_http": 404
+        }
+      ],
+      "bundle": {
+        "status": 200,
+        "size": 2441,
+        "sha256": "5779eec15ee89dcd32ef5523f32e6d312890c466f65b80ecc017bd5412a4e4f3",
+        "other_http": 404
+      }
+    },
+    "b": {
+      "workspace_session": "ses_def6373a3ffeMaI0FycEp0IyIU",
+      "job_id": "0d56eb18-fa4e-4d7e-804d-d3b23e494eb8",
+      "predicted_tg_c": 74.6038,
+      "polymer_candidates": 1,
+      "status": "completed",
+      "own_job_listed": true,
+      "foreign_job_listed": false,
+      "foreign_status": 404,
+      "foreign_result": 404,
+      "files": [
+        {
+          "name": "final_structure.xyz",
+          "bytes": 192,
+          "sha256": "b0ff9f3fce1edba171b330a4c13ecc92f66a8dde72db332a41a0ca2be7d88770",
+          "other_http": 404
+        },
+        {
+          "name": "initial_structure.xyz",
+          "bytes": 174,
+          "sha256": "e656b047fb9ac2e5082314e4f926b913a5a3876f41d55005805ec80e76134f3c",
+          "other_http": 404
+        },
+        {
+          "name": "scientific_result.json",
+          "bytes": 2744,
+          "sha256": "59955bf9f95a392a5ca188d1269cf2b4af54d6f6eabeef11bbb1bf4e73d5f7c0",
+          "other_http": 404
+        }
+      ],
+      "bundle": {
+        "status": 200,
+        "size": 1799,
+        "sha256": "421aade08de197519b9377d067dcb4b60fcda2f558ddb09403b6fdaa1484760c",
+        "other_http": 404
+      }
+    }
+  },
+  "status": "passed",
+  "wrong_device_confirmation_status": 403,
+  "same_owner_second_login": true,
+  "ledger": {
+    "users": {
+      "a": {
+        "workspace": "ba404642-b217-433b-b9fd-197a19052ebd",
+        "job_ref": "3eeb11bab27a5dc9",
+        "dft_authorized_attempts": 1,
+        "dft_completed_usage_attempts": 1,
+        "available_artifacts": 3,
+        "native_results_match_browser": {
+          "tg_c": true,
+          "ordered_polymer_smiles": true,
+          "dft_fixture_energy": true
+        },
+        "native_dft_list": {
+          "ordered_ids_match": true,
+          "page_size": 1,
+          "total": 1
+        },
+        "qualified_native_operations": {
+          "predict": 1,
+          "polymerization": 1,
+          "monomer_dft": 1
+        },
+        "tool_calls": [
+          {
+            "tool": "dft_job_list",
+            "operation_ref": "401ecd3c7ab1fc09",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_result",
+            "operation_ref": "8a1d1f291406aa6b",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_result",
+            "operation_ref": "9b290144eccdb8c1",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_result",
+            "operation_ref": "be710f2b0140ab7d",
+            "foreign_job": true,
+            "native_statuses": [
+              404
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_status",
+            "operation_ref": "c1c3f7b70a26adc5",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_status",
+            "operation_ref": "e17145b0f9345216",
+            "foreign_job": true,
+            "native_statuses": [
+              404
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_submit",
+            "operation_ref": "8f2e9c49ff31a22d",
+            "foreign_job": false,
+            "native_statuses": [
+              202
+            ],
+            "new_quota_charges": 1,
+            "quota_ref": "ead44c7f9c5aa2bb",
+            "native_request_ref": "3f577049edaf9f16"
+          },
+          {
+            "tool": "polymerize_monomers",
+            "operation_ref": "48e244cf2d48b5c0",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 1,
+            "quota_ref": "8143453f1293c2d9",
+            "native_request_ref": "a0dec9c34be8052c"
+          },
+          {
+            "tool": "predict_polymer_properties",
+            "operation_ref": "af73a3dd82598f6a",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 1,
+            "quota_ref": "d363a88c08382e7a",
+            "native_request_ref": "910202a6673b98b6"
+          }
+        ],
+        "verified_bundle_members": 3
+      },
+      "b": {
+        "workspace": "9a523765-6bee-4dd3-af85-c2da61cfc778",
+        "job_ref": "53b07d39de44ed67",
+        "dft_authorized_attempts": 1,
+        "dft_completed_usage_attempts": 1,
+        "available_artifacts": 3,
+        "native_results_match_browser": {
+          "tg_c": true,
+          "ordered_polymer_smiles": true,
+          "dft_fixture_energy": true
+        },
+        "native_dft_list": {
+          "ordered_ids_match": true,
+          "page_size": 1,
+          "total": 1
+        },
+        "qualified_native_operations": {
+          "predict": 1,
+          "polymerization": 1,
+          "monomer_dft": 1
+        },
+        "tool_calls": [
+          {
+            "tool": "dft_job_list",
+            "operation_ref": "2f7d8d55aee65a55",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_result",
+            "operation_ref": "128a6ff9181295d8",
+            "foreign_job": true,
+            "native_statuses": [
+              404
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_result",
+            "operation_ref": "adc92e530a6e4a07",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_status",
+            "operation_ref": "8dba2af5cdfa89fe",
+            "foreign_job": true,
+            "native_statuses": [
+              404
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_status",
+            "operation_ref": "b78d5a1e2f759d38",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 0
+          },
+          {
+            "tool": "dft_job_submit",
+            "operation_ref": "0b373552f2917a92",
+            "foreign_job": false,
+            "native_statuses": [
+              202
+            ],
+            "new_quota_charges": 1,
+            "quota_ref": "6b5e1296f2521255",
+            "native_request_ref": "58dd70e15537f242"
+          },
+          {
+            "tool": "polymerize_monomers",
+            "operation_ref": "ce22506b41669aa4",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 1,
+            "quota_ref": "c7882d8baa5cec19",
+            "native_request_ref": "75f30baaceff7f61"
+          },
+          {
+            "tool": "predict_polymer_properties",
+            "operation_ref": "2b769d6c55bf1f81",
+            "foreign_job": false,
+            "native_statuses": [
+              200
+            ],
+            "new_quota_charges": 1,
+            "quota_ref": "2bec64399a47d357",
+            "native_request_ref": "f7b65b3fd9f3b616"
+          }
+        ],
+        "verified_bundle_members": 3
+      }
+    },
+    "other_owners_delta": {
+      "logins": 0,
+      "tool_operations": 0,
+      "dft_jobs": 0,
+      "quota_operations": 0,
+      "quota_events": 0,
+      "request_observations": 0,
+      "usage_events": 0,
+      "usage_attempts": 0
+    }
+  },
+  "distinct_browser_results": {
+    "predicted_tg": true,
+    "polymer_smiles": true,
+    "dft_fixture_energy": true
+  },
+  "end": "2026-11-25T02:57:08.487Z"
+}

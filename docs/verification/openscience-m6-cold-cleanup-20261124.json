@@ -1,0 +1,325 @@
+{
+  "status": "passed_dev_m1_recycled_workspace_web_cleanup",
+  "date": "2026-11-24",
+  "baseline_commit": "e637260c39d859b509576275daee536969b66649",
+  "environment": "dev-m1",
+  "browser_origins": [
+    "https://app.m2.test:18760",
+    "https://agent.m2.test:18761"
+  ],
+  "storage": {
+    "pool_uuid": "2b007549-c9a2-4045-85f9-9f8e28c443d8",
+    "raw_bytes": 805306368,
+    "low_bytes": 100663296,
+    "recover_bytes": 167772160
+  },
+  "runs": [
+    {
+      "project": "ac22-cf6f0043-262",
+      "release_file": {
+        "allocated_bytes": 100663296,
+        "sha256": "9a57bec9b912e0278d788c166d93c55e1d01ae13a6624c3425d5d0a0ff452bb1",
+        "size": 100663296
+      },
+      "available_bytes": {
+        "before": 587751424,
+        "low": 83881984,
+        "before_unlink": 83881984,
+        "recovered": 184545280
+      },
+      "operator_pressure_file_before": {
+        "allocated_bytes": 403189760,
+        "inode": 14,
+        "size_bytes": 403185664
+      },
+      "operator_pressure_file_after": {
+        "allocated_bytes": 403189760,
+        "inode": 14,
+        "size_bytes": 403185664
+      },
+      "alerts": [
+        {
+          "state": "low",
+          "sequence": 15,
+          "notification": "firing",
+          "at": "2026-11-24T07:24:18.104752+00:00",
+          "available_bytes": 83881984
+        },
+        {
+          "state": "normal",
+          "sequence": 16,
+          "notification": "resolved",
+          "at": "2026-11-24T07:26:57.228902+00:00",
+          "available_bytes": 184545280
+        }
+      ],
+      "owner_bindings": {
+        "test-user-a": {
+          "uid": 58161656,
+          "workspace": "463fc2f89367468bb7fc6e048d522c9e",
+          "volume": "nexpoly-m5-b21744274102-src-a",
+          "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+          "hard_bytes": 2000000000,
+          "recycled_generation": 54,
+          "restart_generation": 55,
+          "holders_before_and_after_unlink": [
+            0,
+            0
+          ],
+          "after_test": "recycled"
+        },
+        "test-user-b": {
+          "uid": 43620582,
+          "workspace": "3c137e9c236d4998bed842786c0f4548",
+          "volume": "nexpoly-m5-b21744274102-src-b",
+          "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+          "hard_bytes": 2000000000,
+          "recycled_generation": 48,
+          "restart_generation": 49,
+          "holders_before_and_after_unlink": [
+            0,
+            0
+          ],
+          "after_test": "recycled"
+        }
+      },
+      "browser": {
+        "a_second_page_byte_offset": 16384,
+        "a_size": 100663296,
+        "b_both_files_unchanged": true,
+        "b_same_name_sha256": "d2aaf6199d5a313f37af4163b4f7b29326563bee16df9364efffcad487b94890",
+        "b_unique_sha256": "4f6d4e57d5106a61136f02bf288c17921449ea55dfc4b5f358eb89aa54ea825a",
+        "confirmed_delete_http": 200,
+        "foreign_delete": 404,
+        "foreign_listed": false,
+        "foreign_read": 404,
+        "native_api_from_cleanup": 403,
+        "native_editor_save": 200,
+        "new_file_sha256": "063e727ac7fd1d54a43059c5558782de51ca74518dc84c407c63cb92977fbbdb",
+        "same_path_foreign_version": 409
+      },
+      "baseline_equals_recovered": true,
+      "retained_conversations_and_files": {
+        "test-user-a": {
+          "attachments": 1,
+          "messages": 2,
+          "messages_sha256": "3a6a3ca908f77504f732d3e142707245e134e5f9439d329c419fc3d09559b1f7",
+          "notebook_sha256": "f50c8db6318fc595a4fff353a0e9873c541439fa6e366ac7210bb84228033cdc",
+          "session_sha256": "e75580cd4a60c35e764b391215899d7816abe9cf07e3f76818b9c0a0fab2148d"
+        },
+        "test-user-b": {
+          "attachments": 1,
+          "messages": 2,
+          "messages_sha256": "7655a25b2bead6fac409ec0543d45b1b8cec2d844d4b549bf30e145f5391dfd0",
+          "notebook_sha256": "a5eaa30944dc161c9ff59256542bae01a3d1f6b1240bc4c915f9290c789fec11",
+          "session_sha256": "51f67047d54c6fee70117f9cee49772ffdeeb85afa9347685a10aafb57dee38b"
+        }
+      }
+    },
+    {
+      "project": "ac22-cf6f0043-262",
+      "release_file": {
+        "allocated_bytes": 100663296,
+        "sha256": "1eb2408202af2be9d4df65bebdd84bf311a0ca8ff2786effabdaac0f8c70de9c",
+        "size": 100663296
+      },
+      "available_bytes": {
+        "before": 587730944,
+        "low": 83881984,
+        "before_unlink": 83881984,
+        "recovered": 184545280
+      },
+      "operator_pressure_file_before": {
+        "allocated_bytes": 403169280,
+        "inode": 14,
+        "size_bytes": 403165184
+      },
+      "operator_pressure_file_after": {
+        "allocated_bytes": 403169280,
+        "inode": 14,
+        "size_bytes": 403165184
+      },
+      "alerts": [
+        {
+          "state": "low",
+          "sequence": 17,
+          "notification": "firing",
+          "at": "2026-11-24T07:32:34.161691+00:00",
+          "available_bytes": 83881984
+        },
+        {
+          "state": "normal",
+          "sequence": 18,
+          "notification": "resolved",
+          "at": "2026-11-24T07:35:19.962466+00:00",
+          "available_bytes": 184545280
+        }
+      ],
+      "owner_bindings": {
+        "test-user-a": {
+          "uid": 58161656,
+          "workspace": "463fc2f89367468bb7fc6e048d522c9e",
+          "volume": "nexpoly-m5-b21744274102-src-a",
+          "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+          "hard_bytes": 2000000000,
+          "recycled_generation": 56,
+          "restart_generation": 57,
+          "holders_before_and_after_unlink": [
+            0,
+            0
+          ],
+          "after_test": "recycled"
+        },
+        "test-user-b": {
+          "uid": 43620582,
+          "workspace": "3c137e9c236d4998bed842786c0f4548",
+          "volume": "nexpoly-m5-b21744274102-src-b",
+          "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+          "hard_bytes": 2000000000,
+          "recycled_generation": 50,
+          "restart_generation": 51,
+          "holders_before_and_after_unlink": [
+            0,
+            0
+          ],
+          "after_test": "recycled"
+        }
+      },
+      "browser": {
+        "a_second_page_byte_offset": 16384,
+        "a_size": 100663296,
+        "b_both_files_unchanged": true,
+        "b_same_name_sha256": "e0701690150f325c1360605f4890b713b79f5d840fc59677ce9475fe04071626",
+        "b_unique_sha256": "bc1104f1490af39107a01283ebc0b493e49fb80ca9319c2bc6eee30b88bb036d",
+        "cleanup_after_recovery": 409,
+        "confirmed_delete_http": 200,
+        "foreign_delete": 404,
+        "foreign_listed": false,
+        "foreign_read": 404,
+        "native_api_from_cleanup": 403,
+        "native_editor_save": 200,
+        "new_file_sha256": "e63f0747750b35060c903e785ab30f425aedab098d4cc98a1d01703fb7a16ffb",
+        "reverse_foreign_version": 409,
+        "same_path_foreign_version": 409
+      },
+      "baseline_equals_recovered": true,
+      "retained_conversations_and_files": {
+        "test-user-a": {
+          "attachments": 1,
+          "messages": 2,
+          "messages_sha256": "3a6a3ca908f77504f732d3e142707245e134e5f9439d329c419fc3d09559b1f7",
+          "notebook_sha256": "f50c8db6318fc595a4fff353a0e9873c541439fa6e366ac7210bb84228033cdc",
+          "original_files": {
+            "continuity.txt": "b2caff7f67e64736ba295d4bc97bf770be4341096771f1b96bcd7561aedfc005",
+            "keep-a939684d6d09.txt": "f26b9cd38621a0f0df97e7926c612020a954ecbe27aca4601a8e10c8a88a03b9",
+            "notebook.txt": "f50c8db6318fc595a4fff353a0e9873c541439fa6e366ac7210bb84228033cdc",
+            "only-dev-m1-test-user-a.txt": "f50c8db6318fc595a4fff353a0e9873c541439fa6e366ac7210bb84228033cdc",
+            "resumed-a939684d6d09.txt": "063e727ac7fd1d54a43059c5558782de51ca74518dc84c407c63cb92977fbbdb"
+          },
+          "session_sha256": "e75580cd4a60c35e764b391215899d7816abe9cf07e3f76818b9c0a0fab2148d"
+        },
+        "test-user-b": {
+          "attachments": 1,
+          "messages": 2,
+          "messages_sha256": "7655a25b2bead6fac409ec0543d45b1b8cec2d844d4b549bf30e145f5391dfd0",
+          "notebook_sha256": "a5eaa30944dc161c9ff59256542bae01a3d1f6b1240bc4c915f9290c789fec11",
+          "original_files": {
+            "continuity.txt": "175896a9ac7673b51088765cd94c324d7bf714402a1eacf254d6acf473996f34",
+            "keep-a939684d6d09.txt": "ecf265ff990f06b166546e3c17fd4d767261922a4656caa07e83cc9e6de31448",
+            "notebook.txt": "a5eaa30944dc161c9ff59256542bae01a3d1f6b1240bc4c915f9290c789fec11",
+            "only-b-a939684d6d09.txt": "4f6d4e57d5106a61136f02bf288c17921449ea55dfc4b5f358eb89aa54ea825a",
+            "only-dev-m1-test-user-b.txt": "a5eaa30944dc161c9ff59256542bae01a3d1f6b1240bc4c915f9290c789fec11",
+            "release-a939684d6d09.txt": "d2aaf6199d5a313f37af4163b4f7b29326563bee16df9364efffcad487b94890"
+          },
+          "session_sha256": "51f67047d54c6fee70117f9cee49772ffdeeb85afa9347685a10aafb57dee38b"
+        }
+      }
+    }
+  ],
+  "parked": {
+    "verified_at_utc": "2026-11-24T07:39:34.112407+00:00",
+    "quota_workspaces": {
+      "test-user-a": {
+        "state": "recycled",
+        "uid": 58161656,
+        "filesystem_uuid": "d6880177-5059-41b4-a39e-4bf4be62ce86",
+        "hard_bytes": 2000000000
+      },
+      "test-user-b": {
+        "state": "recycled",
+        "uid": 43620582,
+        "filesystem_uuid": "ba7a6d37-6612-4eea-a8ef-d380032dc190",
+        "hard_bytes": 2000000000
+      }
+    },
+    "global_disk_state": "normal",
+    "available_bytes": 587710464,
+    "archived_qa_disk_sha256": {
+      "m5-a": "d2dce03cd2200971ad461729d1ebceae5bdf87df97dc8c74387ab85046418255",
+      "m5-b": "b34014728e2deb8722b017ae15640eaddcce96ef9b8aa57bef6411868d74e8c5",
+      "m5-backup": "6014640442a913f65006e9cbfbe43aaeabcee06f41e39845298993bebd948f7f",
+      "m5-restore-a": "d0dbe48e97dee470b19ff2197825d273f4d93e83bb16ffabcf46bd9a30f03eb4",
+      "m5-restore-b": "68c30b602c88b03293eb861b62141cf1cf0ed2539d83e2c169862249ece50806"
+    },
+    "original_m1_registry_sha256": "83274cac893edfc08a000af90e1410bb2e4190b4413f5c4a5774d36cc44f4fff",
+    "original_m1_workspaces": {
+      "test-user-a": {
+        "workspace": "463fc2f89367468bb7fc6e048d522c9e",
+        "uid": 58161656,
+        "generation": 24,
+        "volume": "nexpoly-m1-67e4414ac390-463fc2f89367468bb7fc6e048d522c9e-data",
+        "created_at": "2026-11-19T16:10:25+08:00",
+        "state": "recycled"
+      },
+      "test-user-b": {
+        "workspace": "3c137e9c236d4998bed842786c0f4548",
+        "uid": 43620582,
+        "generation": 24,
+        "volume": "nexpoly-m1-67e4414ac390-3c137e9c236d4998bed842786c0f4548-data",
+        "created_at": "2026-11-19T16:10:17+08:00",
+        "state": "recycled"
+      }
+    },
+    "dev_m6_registry_sha256": "d64dc50c9b059732c3773ff4a2415654484fd64f953a996e84810fd5d7f0191a",
+    "dev_m6_private_volumes": {
+      "nexpoly-m1-1baca0b5b957-1db5efe5f6f34ff689cb5e7ee9fd67db-data": "2026-11-24T11:23:52+08:00",
+      "nexpoly-m1-1baca0b5b957-8846706fa2064f0aa085ed23a7d62265-data": "2026-11-24T11:24:12+08:00"
+    },
+    "dev_m6_database_volume": "nexpoly-m2-auth-d126855addd046e8917632684f36be80",
+    "retained_volume_holders": {
+      "nexpoly-m1-67e4414ac390-463fc2f89367468bb7fc6e048d522c9e-data": [],
+      "nexpoly-m1-67e4414ac390-3c137e9c236d4998bed842786c0f4548-data": [],
+      "nexpoly-m1-1baca0b5b957-1db5efe5f6f34ff689cb5e7ee9fd67db-data": [],
+      "nexpoly-m1-1baca0b5b957-8846706fa2064f0aa085ed23a7d62265-data": [],
+      "nexpoly-m2-auth-d126855addd046e8917632684f36be80": []
+    },
+    "quota_volume_holders": {
+      "dst-a": [],
+      "dst-b": [],
+      "src-a": [],
+      "src-b": []
+    },
+    "all_candidate_listeners_closed": [
+      18760,
+      18761,
+      18762,
+      18763,
+      18780,
+      18781,
+      18782,
+      18783
+    ],
+    "quota_vm_parked": true
+  },
+  "regressions": {
+    "workspace_python": 187,
+    "router_activity_adapters_node": 14,
+    "frontend": 31,
+    "frontend_typescript_no_emit": "passed"
+  },
+  "evidence_sha256": {
+    "first": "1a5497a0b541930166757499b11f54f1e46b877231f85dd17a8f4fcbd64c071e",
+    "second": "5e23e5b6afa9d0064d6e8c1bc6a569499cd04e27c2e1e77ac63327612a963812",
+    "parked": "b4984118742b6e95ee19aca10f67633b1c1779e20a25e3a25877f906c8f3d891"
+  }
+}

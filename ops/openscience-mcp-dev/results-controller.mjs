@@ -31,7 +31,7 @@ export function retrosynthesisDraftBridgeBody(sessionId, directory, action, inpu
 }
 
 export function sessionFromPath(pathname) {
-  const match = /^\/chat\/(ses_[A-Za-z0-9_-]+)\/?$/.exec(pathname)
+  const match = /^\/(?:chat|[A-Za-z0-9_-]+\/session)\/(ses_[A-Za-z0-9_-]+)\/?$/.exec(pathname)
   return match?.[1] ?? null
 }
 
@@ -52,7 +52,7 @@ export function sessionRequest(input, init, origin) {
     const method = String(init?.method ?? input?.method ?? "GET").toUpperCase()
     const directory = address.searchParams.has("directory")
       ? address.searchParams.get("directory") : headers.get("x-openscience-directory")
-    return { sessionId: match?.[1] ?? null, directory: managedDirectory(directory),
+    return { sessionId: match?.[1] ?? null, directory: managedDirectory(directory), limit: Number(address.searchParams.get("limit")),
       messages: method === "GET" && Boolean(match) && address.pathname === `${API_PREFIX}session/${match[1]}/message` }
   } catch { return null }
 }
@@ -88,16 +88,29 @@ export function startResultsUi(win = window, doc = document) {
 
   const contextKey = (sessionId, directory) => `${directory}\0${sessionId}`
 
-  function remember(sessionId, directory, messages, issued) {
+  function remember(sessionId, directory, messages, issued, limit) {
     const key = contextKey(sessionId, directory)
     if (!SESSION_ID.test(sessionId) || !managedDirectory(directory) || !Array.isArray(messages)
         || directories.get(sessionId) !== directory || latestIssued.get(key) !== issued) return
     try {
-      records.delete(key)
-      records.set(key, { messages, models: [...extractFilterTurns(messages), ...extractPolytaoTurns(messages),
+      const models = [...extractFilterTurns(messages), ...extractPolytaoTurns(messages),
         ...extractPolytaoDrafts(messages).filter(model => model.draft.conversation_id === sessionId),
         ...extractRetrosynthesisTurns(messages),
-        ...extractRetrosynthesisDrafts(messages).filter(model => model.draft.conversation_id === sessionId)], updatedAt: Date.now() })
+        ...extractRetrosynthesisDrafts(messages).filter(model => model.draft.conversation_id === sessionId)]
+      // A background tail read must not unmount an open draft from an older
+      // turn the native UI has already loaded in this same conversation.
+      if (limit > 0 && messages.length === limit && currentContext === key) {
+        const received = new Set(messages.map(message => message.info?.id))
+        const visible = new Set([...doc.querySelectorAll("[data-message-id]")].map(node => node.dataset.messageId))
+        for (const old of records.get(key)?.models ?? []) {
+          if (!old.draft || received.has(old.turnId) || !visible.has(old.turnId)) continue
+          const update = models.find(model => model.key === old.key)
+          if (update) update.turnId = old.turnId
+          else models.push(old)
+        }
+      }
+      records.delete(key)
+      records.set(key, { messages, models, updatedAt: Date.now() })
       while (records.size > 5) records.delete(records.keys().next().value)
       scheduleMount()
     } catch { /* An unavailable panel must not break the normal conversation. */ }
@@ -120,7 +133,7 @@ export function startResultsUi(win = window, doc = document) {
       nativePending.set(key, { startedAt: Date.now(), pending })
       pending.then(async response => {
         if (response.ok && response.headers.get("content-type")?.includes("application/json")) {
-          remember(request.sessionId, request.directory, await response.clone().json(), issued)
+          remember(request.sessionId, request.directory, await response.clone().json(), issued, request.limit)
         }
       }).catch(() => {}).finally(() => {
         if (nativePending.get(key)?.pending === pending) nativePending.delete(key)
@@ -282,7 +295,7 @@ export function startResultsUi(win = window, doc = document) {
       const response = await nativeFetch(address.href, { method: "GET", credentials: "same-origin",
         headers: { "x-openscience-directory": directory }, signal: controller.signal })
       if (response.ok && key === currentContext && sessionId === sessionFromPath(win.location.pathname)
-          && directories.get(sessionId) === directory) remember(sessionId, directory, await response.json(), issued)
+          && directories.get(sessionId) === directory) remember(sessionId, directory, await response.json(), issued, 400)
     } catch { /* Preserve current results during a transient read failure. */ }
     finally {
       win.clearTimeout(timeout)
